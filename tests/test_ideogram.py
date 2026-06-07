@@ -93,3 +93,26 @@ def test_ideogram_pretty_valid():
 
 def test_ideogram_pretty_invalid_returns_none():
     assert prompts.ideogram_pretty("not json") is None
+
+
+def test_get_ideogram_prompt_person_skips_identity():
+    p = prompts.get_ideogram_prompt("person")
+    low = p.lower()
+    assert "json" in low
+    assert "high_level_description" in p
+    assert "style_description" in p
+    assert "compositional_deconstruction" in p
+    assert "identity" in low or "tożsam" in low or "likeness" in low
+
+
+def test_get_ideogram_prompt_generic_default():
+    p = prompts.get_ideogram_prompt("nonexistent-mode")
+    assert "json" in p.lower()
+
+
+def test_build_ideogram_studio_system_actions():
+    expand = prompts.build_ideogram_studio_system("expand", "auto")
+    refine = prompts.build_ideogram_studio_system("refine", "person")
+    assert "json" in expand.lower() and "json" in refine.lower()
+    assert "high_level_description" in expand
+    assert "refine" in refine.lower() or "existing" in refine.lower() or "tag" in refine.lower()

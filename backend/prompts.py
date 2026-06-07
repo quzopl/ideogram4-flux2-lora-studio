@@ -322,3 +322,77 @@ def ideogram_pretty(json_str: str) -> str | None:
     if not isinstance(obj, dict):
         return None
     return json.dumps(obj, indent=2, ensure_ascii=False)
+
+
+# --- Instrukcja: opis obrazu jako JSON Ideogram 4 -------------------------- #
+_IDEOGRAM_SCHEMA = (
+    " Return ONLY one JSON object, nothing else, with exactly these top-level "
+    "keys in this order: \"high_level_description\" (one or two sentences), "
+    "\"style_description\" (an object with keys in this order: \"aesthetics\", "
+    "\"lighting\", then exactly one of \"photo\" or \"art_style\" — use \"photo\" "
+    "for photographs — then \"medium\"), and \"compositional_deconstruction\" "
+    "(an object with \"background\" describing the setting and \"elements\", a "
+    "list where each item is either {\"type\":\"obj\",\"description\":\"...\"} for "
+    "an object or {\"type\":\"text\",\"content\":\"...\"} for visible text). Do not "
+    "add any other keys, comments or prose outside the JSON."
+)
+
+_IDEOGRAM_FOCUS = {
+    "person": (
+        "Describe this image of a person as an Ideogram structured caption for "
+        "training a LoRA of a specific person. Describe ONLY what varies between "
+        "photos — pose, action, facial expression, gaze, all clothing and "
+        "accessories, shot type, camera angle, background and lighting — and refer "
+        "to the subject generically as \"the person\". Do NOT describe the person's "
+        "permanent identity or likeness: skip facial features, face shape, eye and "
+        "hair color, skin tone, body build and age, so the trigger word can absorb them."
+    ),
+    "architecture": (
+        "Describe this building or structure as an Ideogram structured caption: the "
+        "building type and architectural style, main materials and colors, notable "
+        "features, surroundings, time of day, viewpoint and lighting."
+    ),
+    "landscape": (
+        "Describe this landscape as an Ideogram structured caption: the type of "
+        "scenery, terrain and landforms, vegetation and water, sky and weather, time "
+        "of day and season, dominant colors and lighting."
+    ),
+    "generic": (
+        "Describe this image as an Ideogram structured caption: the main subject and "
+        "its key attributes, important secondary objects, colors and setting, framing, "
+        "camera angle and lighting."
+    ),
+}
+
+
+def get_ideogram_prompt(mode: str) -> str:
+    focus = _IDEOGRAM_FOCUS.get(mode, _IDEOGRAM_FOCUS["generic"])
+    return focus + _IDEOGRAM_SCHEMA
+
+
+# --- Instrukcja: Generator promptów w trybie Ideogram (text-only) ---------- #
+_IDEOGRAM_STUDIO_BASE = (
+    "You are a prompt engineer for the Ideogram 4 text-to-image model, which was "
+    "trained on structured JSON captions. You turn the user's input into one valid "
+    "Ideogram JSON prompt."
+)
+
+_IDEOGRAM_STUDIO_ACTION = {
+    "expand": (
+        " The user gives a short idea. Expand it into a complete Ideogram JSON "
+        "prompt, inventing plausible concrete details (setting, composition, "
+        "lighting, medium) that fit the idea while staying faithful to it."
+    ),
+    "refine": (
+        " The user gives an existing prompt that may be messy, tag-based, or written "
+        "for another model. Rewrite it as a valid Ideogram JSON prompt: preserve "
+        "their intent and key elements, and fill the schema fields. Do not introduce "
+        "major new subjects."
+    ),
+}
+
+
+def build_ideogram_studio_system(action: str = "expand", subject: str = "auto") -> str:
+    act = _IDEOGRAM_STUDIO_ACTION.get(action, _IDEOGRAM_STUDIO_ACTION["expand"])
+    subj = _STUDIO_SUBJECT.get(subject, "")
+    return _IDEOGRAM_STUDIO_BASE + act + subj + _IDEOGRAM_SCHEMA
