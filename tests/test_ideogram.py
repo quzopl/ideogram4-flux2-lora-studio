@@ -137,3 +137,12 @@ def test_normalize_text_content_null_becomes_empty():
            '{"background":"bg","elements":[{"type":"text","content":null}]}}')
     el = _loads(prompts.normalize_ideogram(raw))["compositional_deconstruction"]["elements"][0]
     assert el == {"type": "text", "content": ""}
+
+
+def test_person_detail_mode_covers_marks():
+    # FLUX i Ideogram: tryb "person_detail" wymienia znaki szczególne
+    for p in (prompts.get_prompt("person_detail"),
+              prompts.get_ideogram_prompt("person_detail")):
+        low = p.lower()
+        assert "scar" in low and "mole" in low and "tattoo" in low
+        assert "hair" in low

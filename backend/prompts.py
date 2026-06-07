@@ -53,6 +53,20 @@ _FOCUS = {
         "shape, eye color, hair color or length, skin tone and body build, and do "
         "not estimate age."
     ),
+    "person_detail": (
+        "Caption this image of a person for FLUX LoRA training, describing the "
+        "person in rich physical detail. Cover, only if visible: the approximate age "
+        "and body build; the face (face shape, eyes, eyebrows, nose, lips, "
+        "complexion) and EVERY distinguishing mark — scars, moles, beauty marks, "
+        "freckles, birthmarks, tattoos and piercings — saying roughly where each one "
+        "is (for example \"a small scar above the left eyebrow\", \"a mole on the "
+        "right cheek\"); the hair (length, color, texture and style) and any facial "
+        "hair; visible body hair such as chest hair or arm hair; and the skin tone "
+        "and texture. Then describe the pose and what the person is doing, the facial "
+        "expression and gaze, all clothing (type and color) and accessories, the shot "
+        "type and camera angle, the background and setting, and the lighting. Be "
+        "specific and concrete about the location of each distinguishing feature."
+    ),
     "architecture": (
         "Caption this building or structure for FLUX LoRA training. State the "
         "building type and architectural style, the main materials and their "
@@ -354,6 +368,15 @@ _IDEOGRAM_FOCUS = {
         "to the subject generically as \"the person\". Do NOT describe the person's "
         "permanent identity or likeness: skip facial features, face shape, eye and "
         "hair color, skin tone, body build and age, so the trigger word can absorb them."
+    ),
+    "person_detail": (
+        "Describe this image of a person as an Ideogram structured caption with rich "
+        "physical detail: the approximate age and body build; the face and EVERY "
+        "distinguishing mark — scars, moles, beauty marks, freckles, birthmarks, "
+        "tattoos, piercings — and roughly where each one is; hair length, color, "
+        "texture and style and any facial hair; visible body hair such as chest hair; "
+        "and skin tone. Then the pose and action, facial expression and gaze, all "
+        "clothing and accessories, shot type, camera angle, background and lighting."
     ),
     "architecture": (
         "Describe this building or structure as an Ideogram structured caption: the "
