@@ -292,3 +292,33 @@ def normalize_ideogram(raw: str) -> str:
         "elements": _norm_elements(comp_raw.get("elements")),
     }
     return _compact(result)
+
+
+def inject_trigger_ideogram(json_str: str, trigger: str) -> str:
+    """Wstaw trigger na początek high_level_description (nie przed cały JSON).
+
+    Gdy wejście nie jest poprawnym JSON-em lub trigger pusty — zwróć bez zmian.
+    """
+    trigger = trigger.strip()
+    if not trigger:
+        return json_str
+    try:
+        obj = json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
+        return json_str
+    if not isinstance(obj, dict):
+        return json_str
+    hld = str(obj.get("high_level_description", "")).strip()
+    obj["high_level_description"] = f"{trigger}, {hld}" if hld else trigger
+    return _compact(obj)
+
+
+def ideogram_pretty(json_str: str) -> str | None:
+    """Ładnie sformatowany obiekt JSON do pliku .json. None gdy wejście błędne."""
+    try:
+        obj = json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    return json.dumps(obj, indent=2, ensure_ascii=False)

@@ -65,3 +65,31 @@ def test_normalize_defaults_photo_when_style_incomplete():
     sd = _loads(prompts.normalize_ideogram(raw))["style_description"]
     assert list(sd.keys()) == ["aesthetics", "lighting", "photo", "medium"]
     assert sd["lighting"] == "" and sd["photo"] == "" and sd["medium"] == ""
+
+
+def test_inject_trigger_into_high_level_description():
+    base = prompts.normalize_ideogram('{"high_level_description":"a person stands"}')
+    out = prompts.inject_trigger_ideogram(base, "ohwx person")
+    assert _loads(out)["high_level_description"] == "ohwx person, a person stands"
+    assert out.startswith("{")
+
+
+def test_inject_trigger_noop_on_invalid_json():
+    assert prompts.inject_trigger_ideogram("not json", "ohwx") == "not json"
+
+
+def test_inject_trigger_empty_noop():
+    base = prompts.normalize_ideogram('{"high_level_description":"x"}')
+    assert prompts.inject_trigger_ideogram(base, "") == base
+
+
+def test_ideogram_pretty_valid():
+    base = prompts.normalize_ideogram('{"high_level_description":"x"}')
+    pretty = prompts.ideogram_pretty(base)
+    assert pretty is not None
+    assert "\n" in pretty
+    assert _loads(pretty)["high_level_description"] == "x"
+
+
+def test_ideogram_pretty_invalid_returns_none():
+    assert prompts.ideogram_pretty("not json") is None
