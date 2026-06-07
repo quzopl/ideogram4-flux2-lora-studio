@@ -66,3 +66,25 @@ def test_chat_network_error_raises(monkeypatch):
     monkeypatch.setattr(lmstudio.urllib.request, "urlopen", boom)
     with pytest.raises(lmstudio.LMStudioError):
         lmstudio.generate_text("http://x/v1", "m", "s", "u")
+
+
+from backend import server
+
+
+def test_lmstudio_model_id():
+    assert server._lmstudio_model_id("lmstudio:foo") == "foo"
+    assert server._lmstudio_model_id("Qwen/Qwen2.5-VL-7B-Instruct") is None
+
+
+def test_lmstudio_url_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "LMSTUDIO_CONFIG_PATH", tmp_path / "lm.json")
+    assert server._lmstudio_url() == lmstudio.DEFAULT_URL
+    assert server._set_lmstudio_url("http://host:9/v1") == "http://host:9/v1"
+    assert server._lmstudio_url() == "http://host:9/v1"
+
+
+def test_all_models_includes_lmstudio(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "CUSTOM_MODELS_PATH", tmp_path / "cm.json")
+    monkeypatch.setattr(server.lmstudio, "list_models", lambda url, timeout=3.0: ["vl-7b"])
+    models = server._all_models()
+    assert models["lmstudio:vl-7b"] == "LM Studio: vl-7b"

@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import captioner, comfy_client, comfy_workflows, image_utils, prompts
+from . import captioner, comfy_client, comfy_workflows, image_utils, lmstudio, prompts
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -37,6 +37,7 @@ COMFY_MAPPINGS_PATH = WORK / "comfy_mappings.json"
 COMFY_PROMPTS_PATH = WORK / "comfy_prompts.json"
 COMFY_WORKFLOWS_PATH = WORK / "comfy_workflows.json"
 CUSTOM_MODELS_PATH = WORK / "custom_models.json"
+LMSTUDIO_CONFIG_PATH = WORK / "lmstudio.json"
 COMFY_GALLERY_DIR = WORK / "comfy_gallery"
 COMFY_GALLERY_DIR.mkdir(exist_ok=True)
 
@@ -222,7 +223,8 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
     ext = "jpg" if req.fmt == "jpg" else "png"
 
     try:
-        if req.do_caption:
+        lm_id = _lmstudio_model_id(req.model)
+        if req.do_caption and lm_id is None:
             job["state"] = "loading_model"
             job["current"] = "Ładowanie modelu VLM (pierwsze uruchomienie pobiera wagi)…"
             quant = req.quant if req.quant in ("4bit", "none") else "4bit"
@@ -246,10 +248,17 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
 
                 caption = ""
                 if req.do_caption:
-                    caption = captioner.caption_image(
-                        img, req.mode, req.style, req.max_tokens,
-                        fmt=req.caption_format,
-                    )
+                    if lm_id is not None:
+                        instruction = prompts.caption_instruction(
+                            req.mode, req.style, req.caption_format)
+                        raw = lmstudio.caption_image(
+                            _lmstudio_url(), lm_id, img, instruction, req.max_tokens)
+                        caption = prompts.postprocess_caption(raw, req.caption_format)
+                    else:
+                        caption = captioner.caption_image(
+                            img, req.mode, req.style, req.max_tokens,
+                            fmt=req.caption_format,
+                        )
 
                 job["results"].append({
                     "idx": i,
@@ -318,9 +327,29 @@ def _model_dir_info(path: Path) -> dict:
             "label": ""}
 
 
+def _lmstudio_url() -> str:
+    data = _load_named(LMSTUDIO_CONFIG_PATH)
+    return data.get("url") or lmstudio.DEFAULT_URL
+
+
+def _set_lmstudio_url(url: str) -> str:
+    url = url.strip() or lmstudio.DEFAULT_URL
+    _save_named(LMSTUDIO_CONFIG_PATH, {"url": url})
+    return url
+
+
+def _lmstudio_model_id(model: str) -> str | None:
+    """Zwróć id modelu LM Studio (część po 'lmstudio:'), inaczej None."""
+    prefix = "lmstudio:"
+    return model[len(prefix):] if model.startswith(prefix) else None
+
+
 def _all_models() -> dict:
-    """Wbudowane modele + zapamiętane własne (własne nadpisują przy kolizji)."""
-    return {**captioner.AVAILABLE_MODELS, **_load_named(CUSTOM_MODELS_PATH)}
+    """Wbudowane + własne + (jeśli dostępne) modele z LM Studio."""
+    models = {**captioner.AVAILABLE_MODELS, **_load_named(CUSTOM_MODELS_PATH)}
+    for mid in lmstudio.list_models(_lmstudio_url()):
+        models[f"lmstudio:{mid}"] = f"LM Studio: {mid}"
+    return models
 
 
 def _add_custom_model(path: str) -> dict:
@@ -406,6 +435,20 @@ def api_fs_pick():
     if proc.returncode != 0 or not path:
         return {"cancelled": True}  # użytkownik anulował
     return {"path": path}
+
+
+class LmStudioConfig(BaseModel):
+    url: str = ""
+
+
+@app.get("/api/lmstudio")
+def api_lmstudio_get():
+    return {"url": _lmstudio_url()}
+
+
+@app.post("/api/lmstudio")
+def api_lmstudio_set(req: LmStudioConfig):
+    return {"url": _set_lmstudio_url(req.url)}
 
 
 @app.post("/api/scan")
@@ -1272,15 +1315,21 @@ def api_prompt(req: PromptRequest):
 
     quant = req.quant if req.quant in ("4bit", "none") else "4bit"
     try:
-        captioner.ensure_loaded(req.model, quant)
         if req.caption_format in ("ideogram", "aitoolkit"):
             system = prompts.build_ideogram_studio_system(req.action, req.subject)
         else:
             system = prompts.build_studio_system(req.action, req.subject)
-        raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
+        lm_id = _lmstudio_model_id(req.model)
+        if lm_id is not None:
+            raw = lmstudio.generate_text(_lmstudio_url(), lm_id, system, text, req.max_tokens)
+        else:
+            captioner.ensure_loaded(req.model, quant)
+            raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
         if req.caption_format in ("ideogram", "aitoolkit"):
             return {"prompt": prompts.normalize_ideogram(raw)}
         return {"prompt": prompts.clean_prompt(raw)}
+    except lmstudio.LMStudioError as e:
+        raise HTTPException(502, f"LM Studio: {e}")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"Błąd generowania: {e}")
 
