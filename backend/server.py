@@ -123,6 +123,7 @@ class ProcessRequest(BaseModel):
     quant: str = "4bit"  # "4bit" | "none"
     max_tokens: int = 256
     do_caption: bool = True
+    caption_format: str = "flux"  # "flux" | "ideogram"
 
 
 class ExportRequest(BaseModel):
@@ -141,6 +142,7 @@ class PromptRequest(BaseModel):
     model: str = captioner.DEFAULT_MODEL
     quant: str = "4bit"      # "4bit" | "none"
     max_tokens: int = 320
+    caption_format: str = "flux"  # "flux" | "ideogram"
 
 
 # --------------------------------------------------------------------------- #
@@ -162,8 +164,23 @@ def _final_caption(req: ExportRequest, result: dict) -> str:
     caption = req.captions.get(str(result["idx"]), result["caption"]).strip()
     trigger = req.trigger.strip()
     if req.prepend_trigger and trigger:
+        if result.get("format") == "ideogram":
+            return prompts.inject_trigger_ideogram(caption, trigger)
         caption = f"{trigger}, {caption}" if caption else trigger
     return caption
+
+
+def _caption_output_files(base_name: str, caption: str, fmt: str) -> list[tuple[str, str]]:
+    """Zwróć listę (nazwa_pliku, treść) do zapisania dla danego opisu.
+
+    Zawsze .txt; dla poprawnego JSON Ideogram dodatkowo ładny .json.
+    """
+    files: list[tuple[str, str]] = [(f"{base_name}.txt", caption + "\n")]
+    if fmt == "ideogram":
+        pretty = prompts.ideogram_pretty(caption)
+        if pretty is not None:
+            files.append((f"{base_name}.json", pretty + "\n"))
+    return files
 
 
 def _job_public(job: dict) -> dict:
@@ -229,7 +246,8 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
                 caption = ""
                 if req.do_caption:
                     caption = captioner.caption_image(
-                        img, req.mode, req.style, req.max_tokens
+                        img, req.mode, req.style, req.max_tokens,
+                        fmt=req.caption_format,
                     )
 
                 job["results"].append({
@@ -239,6 +257,7 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
                     "width": w,
                     "height": h,
                     "caption": caption,
+                    "format": req.caption_format,
                 })
             except Exception as e:  # noqa: BLE001 - record per-file failures, keep going
                 job["results"].append({
@@ -355,8 +374,9 @@ def api_export(req: ExportRequest):
         shutil.copy2(src_img, out_dir / r["out_name"])
 
         caption = _final_caption(req, r)
-        txt_name = Path(r["out_name"]).with_suffix(".txt").name
-        (out_dir / txt_name).write_text(caption + "\n", encoding="utf-8")
+        base = Path(r["out_name"]).stem
+        for fname, content in _caption_output_files(base, caption, r.get("format", "flux")):
+            (out_dir / fname).write_text(content, encoding="utf-8")
         written += 1
 
     return {"output_folder": str(out_dir), "written": written}
@@ -1130,8 +1150,13 @@ def api_prompt(req: PromptRequest):
     quant = req.quant if req.quant in ("4bit", "none") else "4bit"
     try:
         captioner.ensure_loaded(req.model, quant)
-        system = prompts.build_studio_system(req.action, req.subject)
+        if req.caption_format == "ideogram":
+            system = prompts.build_ideogram_studio_system(req.action, req.subject)
+        else:
+            system = prompts.build_studio_system(req.action, req.subject)
         raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
+        if req.caption_format == "ideogram":
+            return {"prompt": prompts.normalize_ideogram(raw)}
         return {"prompt": prompts.clean_prompt(raw)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"Błąd generowania: {e}")
@@ -1160,8 +1185,9 @@ def api_zip(req: ExportRequest):
                 continue
             zf.write(str(src_img), r["out_name"])
             caption = _final_caption(req, r)
-            txt_name = Path(r["out_name"]).with_suffix(".txt").name
-            zf.writestr(txt_name, caption + "\n")
+            base = Path(r["out_name"]).stem
+            for fname, content in _caption_output_files(base, caption, r.get("format", "flux")):
+                zf.writestr(fname, content)
             written += 1
 
     if written == 0:
