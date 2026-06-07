@@ -117,9 +117,16 @@ def gpu_status() -> dict:
 
 
 def caption_image(
-    image: Image.Image, mode: str, style: str = "concise", max_new_tokens: int = 256
+    image: Image.Image,
+    mode: str,
+    style: str = "concise",
+    max_new_tokens: int = 256,
+    fmt: str = "flux",
 ) -> str:
-    """Generate a cleaned caption for a single PIL image."""
+    """Generate a cleaned caption for a single PIL image.
+
+    fmt="flux" -> natural-language caption; fmt="ideogram" -> compact JSON caption.
+    """
     import torch
 
     model = _state["model"]
@@ -127,7 +134,10 @@ def caption_image(
     if model is None or processor is None:
         raise RuntimeError("Model nie jest załadowany — wywołaj ensure_loaded() najpierw.")
 
-    instruction = prompts.get_prompt(mode, style)
+    if fmt == "ideogram":
+        instruction = prompts.get_ideogram_prompt(mode)
+    else:
+        instruction = prompts.get_prompt(mode, style)
     messages = [
         {
             "role": "user",
@@ -157,6 +167,8 @@ def caption_image(
     decoded = processor.batch_decode(
         trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
+    if fmt == "ideogram":
+        return prompts.normalize_ideogram(decoded)
     return prompts.clean_caption(decoded)
 
 
