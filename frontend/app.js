@@ -45,6 +45,8 @@ function populateModels(models, def, selectKey) {
   try {
     const { models, default: def } = await api("/api/models");
     populateModels(models, def);
+    const cfg = await api("/api/lmstudio");
+    if ($("lmstudioUrl")) $("lmstudioUrl").value = cfg.url;
   } catch (e) {
     console.error(e);
   }
@@ -1677,6 +1679,18 @@ async function removeCustomModel(selId) {
 }
 
 if ($("addModelBtn")) $("addModelBtn").onclick = pickModelFolder;
+
+async function refreshModels() {
+  try {
+    if ($("lmstudioUrl")) await api("/api/lmstudio", { url: $("lmstudioUrl").value.trim() });
+    const { models, default: def } = await api("/api/models");
+    populateModels(models, def);
+    alert("Odświeżono listę modeli.");
+  } catch (e) {
+    alert("Błąd odświeżania: " + e.message);
+  }
+}
+if ($("refreshModelsBtn")) $("refreshModelsBtn").onclick = refreshModels;
 if ($("pAddModelBtn")) $("pAddModelBtn").onclick = pickModelFolder;
 if ($("removeModelBtn")) $("removeModelBtn").onclick = () => removeCustomModel("model");
 if ($("pRemoveModelBtn")) $("pRemoveModelBtn").onclick = () => removeCustomModel("pModel");
