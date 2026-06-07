@@ -36,6 +36,7 @@ COMFY_CONFIG_PATH = WORK / "comfy_config.json"
 COMFY_MAPPINGS_PATH = WORK / "comfy_mappings.json"
 COMFY_PROMPTS_PATH = WORK / "comfy_prompts.json"
 COMFY_WORKFLOWS_PATH = WORK / "comfy_workflows.json"
+CUSTOM_MODELS_PATH = WORK / "custom_models.json"
 COMFY_GALLERY_DIR = WORK / "comfy_gallery"
 COMFY_GALLERY_DIR.mkdir(exist_ok=True)
 
@@ -280,6 +281,48 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
 # --------------------------------------------------------------------------- #
 # API
 # --------------------------------------------------------------------------- #
+def _list_subdirs(path: Path) -> list[str]:
+    """Posortowane (case-insensitive) nazwy podkatalogów; nieczytelne pomijane."""
+    out: list[str] = []
+    try:
+        for entry in path.iterdir():
+            try:
+                if entry.is_dir():
+                    out.append(entry.name)
+            except OSError:
+                continue
+    except OSError:
+        return []
+    return sorted(out, key=str.lower)
+
+
+def _model_dir_info(path: Path) -> dict:
+    """Czy `path` to folder z modelem Qwen2.5-VL. {ok, reason, label}."""
+    if not path.is_dir():
+        return {"ok": False, "reason": "Folder nie istnieje.", "label": ""}
+    cfg = path / "config.json"
+    if not cfg.is_file():
+        return {"ok": False,
+                "reason": "To nie jest folder modelu (brak config.json).",
+                "label": ""}
+    try:
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+    except Exception:
+        return {"ok": False, "reason": "Nie można odczytać config.json.", "label": ""}
+    model_type = str(data.get("model_type", "")).lower()
+    arch = " ".join(data.get("architectures", []) or [])
+    if "qwen2_5_vl" in model_type or "Qwen2_5_VL" in arch:
+        return {"ok": True, "reason": "", "label": f"{path.name} (własny)"}
+    return {"ok": False,
+            "reason": "Obsługiwane są tylko modele Qwen2.5-VL.",
+            "label": ""}
+
+
+def _all_models() -> dict:
+    """Wbudowane modele + zapamiętane własne (własne nadpisują przy kolizji)."""
+    return {**captioner.AVAILABLE_MODELS, **_load_named(CUSTOM_MODELS_PATH)}
+
+
 @app.get("/api/models")
 def api_models():
     return {"models": captioner.AVAILABLE_MODELS, "default": captioner.DEFAULT_MODEL}
