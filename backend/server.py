@@ -165,7 +165,7 @@ def _final_caption(req: ExportRequest, result: dict) -> str:
     caption = req.captions.get(str(result["idx"]), result["caption"]).strip()
     trigger = req.trigger.strip()
     if req.prepend_trigger and trigger:
-        if result.get("format") == "ideogram":
+        if result.get("format") in ("ideogram", "aitoolkit"):
             return prompts.inject_trigger_ideogram(caption, trigger)
         caption = f"{trigger}, {caption}" if caption else trigger
     return caption
@@ -174,7 +174,7 @@ def _final_caption(req: ExportRequest, result: dict) -> str:
 def _caption_output_files(base_name: str, caption: str, fmt: str) -> list[tuple[str, str]]:
     """Zwróć listę (nazwa_pliku, treść) do zapisania dla danego opisu.
 
-    Zawsze .txt; dla poprawnego JSON Ideogram dodatkowo ładny .json.
+    Zawsze .txt; dla "ideogram" dodatkowo ładny .json. "aitoolkit" = sam .txt.
     """
     files: list[tuple[str, str]] = [(f"{base_name}.txt", caption + "\n")]
     if fmt == "ideogram":
@@ -1248,12 +1248,12 @@ def api_prompt(req: PromptRequest):
     quant = req.quant if req.quant in ("4bit", "none") else "4bit"
     try:
         captioner.ensure_loaded(req.model, quant)
-        if req.caption_format == "ideogram":
+        if req.caption_format in ("ideogram", "aitoolkit"):
             system = prompts.build_ideogram_studio_system(req.action, req.subject)
         else:
             system = prompts.build_studio_system(req.action, req.subject)
         raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
-        if req.caption_format == "ideogram":
+        if req.caption_format in ("ideogram", "aitoolkit"):
             return {"prompt": prompts.normalize_ideogram(raw)}
         return {"prompt": prompts.clean_prompt(raw)}
     except Exception as e:  # noqa: BLE001

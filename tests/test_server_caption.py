@@ -50,3 +50,20 @@ def test_caption_output_files_ideogram_invalid_skips_json():
     files = server._caption_output_files("p", "not json", "ideogram")
     names = [n for n, _ in files]
     assert names == ["p.txt"]
+
+
+def test_caption_output_files_aitoolkit_txt_only():
+    cap = '{"high_level_description":"x"}'
+    files = server._caption_output_files("person_0000", cap, "aitoolkit")
+    names = [n for n, _ in files]
+    assert names == ["person_0000.txt"]          # ai-toolkit = sam .txt, bez .json
+    assert files[0][1] == cap + "\n"
+
+
+def test_final_caption_aitoolkit_injects_into_hld():
+    cap = '{"high_level_description":"a man waves"}'
+    req = _export_req()
+    r = {"idx": 0, "caption": cap, "format": "aitoolkit"}
+    out = server._final_caption(req, r)
+    assert out.startswith("{")
+    assert json.loads(out)["high_level_description"] == "ohwx person, a man waves"

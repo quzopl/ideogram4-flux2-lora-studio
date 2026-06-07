@@ -125,7 +125,7 @@ def caption_image(
 ) -> str:
     """Generate a cleaned caption for a single PIL image.
 
-    fmt="flux" -> natural-language caption; fmt="ideogram" -> compact JSON caption.
+    fmt="flux" -> natural-language caption; fmt="ideogram"/"aitoolkit" -> compact JSON caption.
     """
     import torch
 
@@ -134,7 +134,7 @@ def caption_image(
     if model is None or processor is None:
         raise RuntimeError("Model nie jest załadowany — wywołaj ensure_loaded() najpierw.")
 
-    if fmt == "ideogram":
+    if fmt in ("ideogram", "aitoolkit"):
         instruction = prompts.get_ideogram_prompt(mode)
     else:
         instruction = prompts.get_prompt(mode, style)
@@ -167,7 +167,7 @@ def caption_image(
     decoded = processor.batch_decode(
         trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
-    if fmt == "ideogram":
+    if fmt in ("ideogram", "aitoolkit"):
         return prompts.normalize_ideogram(decoded)
     return prompts.clean_caption(decoded)
 
