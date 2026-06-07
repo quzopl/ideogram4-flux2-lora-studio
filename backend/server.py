@@ -1317,7 +1317,7 @@ def api_prompt(req: PromptRequest):
     quant = req.quant if req.quant in ("4bit", "none") else "4bit"
     try:
         if req.caption_format in ("ideogram", "aitoolkit"):
-            system = prompts.build_ideogram_studio_system(req.action, req.subject)
+            system = prompts.build_ideogram_studio_guide(req.action, req.subject)
         else:
             system = prompts.build_studio_system(req.action, req.subject)
         lm_id = _lmstudio_model_id(req.model)
@@ -1327,7 +1327,7 @@ def api_prompt(req: PromptRequest):
             captioner.ensure_loaded(req.model, quant)
             raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
         if req.caption_format in ("ideogram", "aitoolkit"):
-            return {"prompt": prompts.normalize_ideogram(raw)}
+            return {"prompt": prompts.normalize_ideogram_guide(raw)}
         return {"prompt": prompts.clean_prompt(raw)}
     except lmstudio.LMStudioError as e:
         raise HTTPException(502, f"LM Studio: {e}")
