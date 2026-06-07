@@ -401,24 +401,39 @@ function setExportInfo(msg, cls) {
 // --------------------------------------------------------------------------- //
 let pAction = "expand";
 
-const P_HINTS = {
-  expand: "Wpisz krótki pomysł, a model rozbuduje go w pełny prompt FLUX.2.",
-  refine: "Wklej dłuższy/istniejący prompt — model uporządkuje go i dostosuje do FLUX.2.",
-};
 const P_PLACEHOLDERS = {
   expand: "np. kobieta z rudymi włosami w kawiarni",
   refine: "np. woman, red hair, cafe, masterpiece, best quality, 8k, detailed",
 };
+
+// Etykieta docelowego formatu do podpowiedzi (zależnie od dropdownu).
+function _promptFormatLabel() {
+  const f = $("promptFormat") ? $("promptFormat").value : "flux";
+  if (f === "ideogram") return "Ideogram 4 (JSON)";
+  if (f === "aitoolkit") return "ai-toolkit (JSON)";
+  return "FLUX.2";
+}
+
+// Hint zależny od akcji (expand/refine) i wybranego formatu docelowego.
+function updatePHint() {
+  const fmt = _promptFormatLabel();
+  const hint = pAction === "refine"
+    ? `Wklej dłuższy/istniejący prompt — model uporządkuje go i dostosuje do: ${fmt}.`
+    : `Wpisz krótki pomysł, a model rozbuduje go w pełny prompt: ${fmt}.`;
+  if ($("pHint")) $("pHint").textContent = hint;
+  if ($("pInput")) $("pInput").placeholder = P_PLACEHOLDERS[pAction];
+}
 
 document.querySelectorAll(".ptab").forEach((tab) => {
   tab.addEventListener("click", () => {
     document.querySelectorAll(".ptab").forEach((t) => t.classList.remove("active"));
     tab.classList.add("active");
     pAction = tab.dataset.action;
-    $("pHint").textContent = P_HINTS[pAction];
-    $("pInput").placeholder = P_PLACEHOLDERS[pAction];
+    updatePHint();
   });
 });
+if ($("promptFormat")) $("promptFormat").addEventListener("change", updatePHint);
+updatePHint();
 
 async function generatePrompt() {
   const text = $("pInput").value.trim();
