@@ -1142,7 +1142,7 @@ def api_comfy_editor_generate(req: ComfyEditorGenerate):
 
 @app.post("/api/prompt")
 def api_prompt(req: PromptRequest):
-    """Expand or refine a FLUX.2 generation prompt using the local LLM."""
+    """Expand or refine a generation prompt (FLUX.2 or Ideogram 4 JSON) using the local LLM."""
     text = req.text.strip()
     if not text:
         raise HTTPException(400, "Wpisz prompt do rozbudowania lub poprawy.")

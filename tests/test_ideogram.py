@@ -116,3 +116,24 @@ def test_build_ideogram_studio_system_actions():
     assert "json" in expand.lower() and "json" in refine.lower()
     assert "high_level_description" in expand
     assert "refine" in refine.lower() or "existing" in refine.lower() or "tag" in refine.lower()
+
+
+def test_inject_trigger_when_hld_missing():
+    base = prompts.normalize_ideogram('{"compositional_deconstruction":{"background":"a park"}}')
+    out = prompts.inject_trigger_ideogram(base, "ohwx person")
+    assert _loads(out)["high_level_description"] == "ohwx person"
+
+
+def test_normalize_obj_with_stray_content_key_stays_obj():
+    # explicit type="obj" must win even if a spurious "content" key is present
+    raw = ('{"high_level_description":"s","compositional_deconstruction":'
+           '{"background":"bg","elements":[{"type":"obj","description":"a sign","content":"STOP"}]}}')
+    el = _loads(prompts.normalize_ideogram(raw))["compositional_deconstruction"]["elements"][0]
+    assert el == {"type": "obj", "description": "a sign"}
+
+
+def test_normalize_text_content_null_becomes_empty():
+    raw = ('{"high_level_description":"s","compositional_deconstruction":'
+           '{"background":"bg","elements":[{"type":"text","content":null}]}}')
+    el = _loads(prompts.normalize_ideogram(raw))["compositional_deconstruction"]["elements"][0]
+    assert el == {"type": "text", "content": ""}

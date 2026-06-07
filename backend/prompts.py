@@ -238,10 +238,18 @@ def _norm_elements(raw_elements) -> list[dict]:
     for el in raw_elements:
         if not isinstance(el, dict):
             continue
-        if el.get("type") == "text" or "content" in el:
-            out.append({"type": "text", "content": str(el.get("content", "")).strip()})
+        # An explicit "type" is authoritative; only infer from keys when it's absent.
+        etype = el.get("type")
+        if etype == "obj":
+            is_text = False
+        elif etype == "text":
+            is_text = True
         else:
-            desc = el.get("description", el.get("name", ""))
+            is_text = "content" in el
+        if is_text:
+            out.append({"type": "text", "content": str(el.get("content") or "").strip()})
+        else:
+            desc = el.get("description") or el.get("name") or ""
             out.append({"type": "obj", "description": str(desc).strip()})
     return out
 
@@ -394,5 +402,7 @@ _IDEOGRAM_STUDIO_ACTION = {
 
 def build_ideogram_studio_system(action: str = "expand", subject: str = "auto") -> str:
     act = _IDEOGRAM_STUDIO_ACTION.get(action, _IDEOGRAM_STUDIO_ACTION["expand"])
+    # Reuse the FLUX studio subject hints — they read as general visual guidance
+    # and work fine as extra context for the Ideogram studio system prompt.
     subj = _STUDIO_SUBJECT.get(subject, "")
     return _IDEOGRAM_STUDIO_BASE + act + subj + _IDEOGRAM_SCHEMA
