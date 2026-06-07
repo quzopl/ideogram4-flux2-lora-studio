@@ -134,10 +134,7 @@ def caption_image(
     if model is None or processor is None:
         raise RuntimeError("Model nie jest załadowany — wywołaj ensure_loaded() najpierw.")
 
-    if fmt in ("ideogram", "aitoolkit"):
-        instruction = prompts.get_ideogram_prompt(mode)
-    else:
-        instruction = prompts.get_prompt(mode, style)
+    instruction = prompts.caption_instruction(mode, style, fmt)
     messages = [
         {
             "role": "user",
@@ -167,9 +164,7 @@ def caption_image(
     decoded = processor.batch_decode(
         trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
-    if fmt in ("ideogram", "aitoolkit"):
-        return prompts.normalize_ideogram(decoded)
-    return prompts.clean_caption(decoded)
+    return prompts.postprocess_caption(decoded, fmt)
 
 
 def generate_text(

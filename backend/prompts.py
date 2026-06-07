@@ -429,3 +429,17 @@ def build_ideogram_studio_system(action: str = "expand", subject: str = "auto") 
     # and work fine as extra context for the Ideogram studio system prompt.
     subj = _STUDIO_SUBJECT.get(subject, "")
     return _IDEOGRAM_STUDIO_BASE + act + subj + _IDEOGRAM_SCHEMA
+
+
+def caption_instruction(mode: str, style: str, fmt: str) -> str:
+    """Instrukcja opisu obrazu wspólna dla obu silników (lokalny i LM Studio)."""
+    if fmt in ("ideogram", "aitoolkit"):
+        return get_ideogram_prompt(mode)
+    return get_prompt(mode, style)
+
+
+def postprocess_caption(text: str, fmt: str) -> str:
+    """Post-processing surowego opisu wg formatu (wspólny dla obu silników)."""
+    if fmt in ("ideogram", "aitoolkit"):
+        return normalize_ideogram(text)
+    return clean_caption(text)

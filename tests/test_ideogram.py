@@ -146,3 +146,16 @@ def test_person_detail_mode_covers_marks():
         low = p.lower()
         assert "scar" in low and "mole" in low and "tattoo" in low
         assert "hair" in low
+
+
+def test_caption_instruction_routes_by_fmt():
+    assert prompts.caption_instruction("person", "concise", "flux") == prompts.get_prompt("person", "concise")
+    assert prompts.caption_instruction("person", "concise", "ideogram") == prompts.get_ideogram_prompt("person")
+    assert prompts.caption_instruction("person", "concise", "aitoolkit") == prompts.get_ideogram_prompt("person")
+
+
+def test_postprocess_caption_routes_by_fmt():
+    ideo = prompts.postprocess_caption('{"high_level_description":"x"}', "ideogram")
+    assert _loads(ideo)["high_level_description"] == "x"
+    flux = prompts.postprocess_caption("The image shows a cat.", "flux")
+    assert not flux.lower().startswith("the image shows")
