@@ -6,6 +6,7 @@ websocket-client>=1.7.0
 
 # Image processing
 pillow>=10.2.0
+pillow-heif>=0.16.0
 
 # Vision-language captioning (Qwen2.5-VL)
 # NOTE: on Linux the default PyPI torch wheel is CUDA-enabled (good for the RTX 4070 Ti).
