@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FLUX LoRA — przygotowanie zdjęć</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>FLUX&nbsp;LoRA — studio</h1>
+    <p class="sub">Przygotowanie datasetu (resize, format, nazwy, opisy) oraz generator promptów FLUX.2 — lokalny model.</p>
+    <nav class="topnav">
+      <button class="navtab active" data-view="dataset">📸 Dataset (captions)</button>
+      <button class="navtab" data-view="prompts">✨ Generator promptów</button>
+      <button class="navtab" data-view="comfy">🎨 ComfyUI</button>
+      <div class="gpubar">
+        <span id="gpuStatus" class="info">GPU: …</span>
+        <button id="unloadBtn" title="Zwolnij model z pamięci GPU" disabled>⏏ Zwolnij GPU</button>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <div id="view-dataset">
+    <!-- KROK 1: ŹRÓDŁO -->
+    <section class="card">
+      <h2><span class="num">1</span> Źródło zdjęć</h2>
+      <div class="tabs">
+        <button class="tab active" data-tab="folder">Folder na dysku</button>
+        <button class="tab" data-tab="upload">Prześlij pliki</button>
+      </div>
+
+      <div class="tabpane" id="pane-folder">
+        <label>Ścieżka do folderu z oryginalnymi zdjęciami</label>
+        <div class="row">
+          <input type="text" id="folderPath" placeholder="~/zdjecia/moja-osoba" />
+          <button id="scanBtn">Skanuj</button>
+        </div>
+      </div>
+
+      <div class="tabpane hidden" id="pane-upload">
+        <label>Przeciągnij pliki tutaj lub kliknij, aby wybrać</label>
+        <div id="dropzone" class="dropzone">Upuść zdjęcia…</div>
+        <input type="file" id="fileInput" multiple accept="image/*" hidden />
+      </div>
+
+      <p id="srcInfo" class="info"></p>
+    </section>
+
+    <!-- KROK 2: USTAWIENIA -->
+    <section class="card">
+      <h2><span class="num">2</span> Ustawienia</h2>
+      <div class="grid">
+        <div class="field">
+          <label>Tryb opisu</label>
+          <select id="mode">
+            <option value="person">Osoba (opis postaci)</option>
+            <option value="architecture">Architektura</option>
+            <option value="landscape">Krajobraz</option>
+            <option value="generic">Ogólny</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Styl opisu</label>
+          <select id="style">
+            <option value="concise" selected>Zwięzły (konkretny, ~3-5 zdań)</option>
+            <option value="detailed">Szczegółowy (długi akapit)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Rozdzielczość docelowa</label>
+          <select id="resolution">
+            <option value="768">768</option>
+            <option value="1024" selected>1024</option>
+            <option value="1280">1280</option>
+            <option value="1536">1536</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Krok bucketów (px)</label>
+          <select id="step">
+            <option value="16">16</option>
+            <option value="32">32</option>
+            <option value="64" selected>64</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Kadrowanie</label>
+          <select id="square">
+            <option value="false" selected>Buckety (zachowaj proporcje)</option>
+            <option value="true">Kwadrat (przytnij do 1:1)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Format</label>
+          <select id="fmt">
+            <option value="png" selected>PNG (bezstratny)</option>
+            <option value="jpg">JPG</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Jakość JPG</label>
+          <input type="number" id="jpgQuality" value="95" min="50" max="100" />
+        </div>
+
+        <div class="field">
+          <label>Model VLM</label>
+          <select id="model"></select>
+        </div>
+
+        <div class="field">
+          <label>Kwantyzacja</label>
+          <select id="quant">
+            <option value="4bit" selected>4-bit (oszczędza VRAM)</option>
+            <option value="none">Brak (fp16)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Max długość opisu (tokeny)</label>
+          <input type="number" id="maxTokens" value="256" min="64" max="1024" step="32" />
+        </div>
+
+        <div class="field">
+          <label>Słowo-wyzwalacz (trigger)</label>
+          <input type="text" id="trigger" placeholder="np. ohwx person" />
+        </div>
+
+        <div class="field checkbox">
+          <label><input type="checkbox" id="doCaption" checked /> Generuj opisy (VLM)</label>
+        </div>
+
+        <div class="field checkbox">
+          <label><input type="checkbox" id="prependTrigger" checked /> Dodaj trigger na początku opisu</label>
+        </div>
+      </div>
+
+      <button id="processBtn" class="primary" disabled>Przetwórz zdjęcia</button>
+    </section>
+
+    <!-- KROK 3: POSTĘP / WYNIKI -->
+    <section class="card hidden" id="progressCard">
+      <h2><span class="num">3</span> Przetwarzanie</h2>
+      <div class="progress"><div id="progressBar"></div></div>
+      <p id="progressText" class="info"></p>
+    </section>
+
+    <section class="card hidden" id="resultsCard">
+      <h2><span class="num">4</span> Podgląd i edycja opisów</h2>
+      <div id="results" class="results"></div>
+    </section>
+
+    <!-- KROK 4: EKSPORT -->
+    <section class="card hidden" id="exportCard">
+      <h2><span class="num">5</span> Eksport datasetu</h2>
+      <p class="info" id="exportCount"></p>
+      <label>Zapis do folderu na dysku (zostanie utworzony jeśli nie istnieje)</label>
+      <div class="row">
+        <input type="text" id="outputFolder" placeholder="~/dataset/moja-osoba" />
+        <button id="exportBtn" class="primary">Zapisz do folderu</button>
+      </div>
+      <div class="orline"><span>albo</span></div>
+      <button id="zipBtn" class="primary">⬇ Pobierz paczkę .zip</button>
+      <p id="exportInfo" class="info"></p>
+    </section>
+    </div><!-- /view-dataset -->
+
+    <!-- WIDOK: GENERATOR PROMPTÓW FLUX.2 -->
+    <div id="view-prompts" class="hidden">
+      <section class="card">
+        <h2><span class="num">1</span> Twój prompt</h2>
+        <div class="tabs">
+          <button class="ptab active" data-action="expand">Rozbuduj (z krótkiego)</button>
+          <button class="ptab" data-action="refine">Popraw (dłuższy → FLUX.2)</button>
+        </div>
+        <p class="info" id="pHint">Wpisz krótki pomysł, a model rozbuduje go w pełny prompt FLUX.2.</p>
+        <textarea id="pInput" class="bigtext" placeholder="np. kobieta z rudymi włosami w kawiarni"></textarea>
+
+        <div class="grid">
+          <div class="field">
+            <label>Typ tematu</label>
+            <select id="pSubject">
+              <option value="auto" selected>Auto (wykryj z opisu)</option>
+              <option value="person">Osoba / postać</option>
+              <option value="product">Produkt / przedmiot</option>
+              <option value="landscape">Krajobraz / scena</option>
+              <option value="architecture">Architektura</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Model</label>
+            <select id="pModel"></select>
+          </div>
+          <div class="field">
+            <label>Kwantyzacja</label>
+            <select id="pQuant">
+              <option value="4bit" selected>4-bit (oszczędza VRAM)</option>
+              <option value="none">Brak (fp16)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Max długość (tokeny)</label>
+            <input type="number" id="pMaxTokens" value="320" min="64" max="1024" step="32" />
+          </div>
+        </div>
+
+        <button id="pGenBtn" class="primary">✨ Generuj prompt</button>
+        <p id="pStatus" class="info"></p>
+      </section>
+
+      <section class="card hidden" id="pResultCard">
+        <h2><span class="num">2</span> Wynik (FLUX.2)</h2>
+        <textarea id="pOutput" class="bigtext"></textarea>
+        <div class="row prow">
+          <button id="pCopyBtn">📋 Kopiuj</button>
+          <button id="pRegenBtn">↻ Generuj ponownie</button>
+          <button id="pUseBtn">↑ Użyj jako wejście</button>
+        </div>
+      </section>
+    </div><!-- /view-prompts -->
+
+    <!-- WIDOK: ComfyUI -->
+    <div id="view-comfy" class="hidden">
+      <!-- KONFIGURACJA -->
+      <section class="card">
+        <h2><span class="num">1</span> Konfiguracja ComfyUI</h2>
+
+        <label>Adres ComfyUI (URL serwera)</label>
+        <div class="row">
+          <input type="text" id="cUrl" placeholder="http://127.0.0.1:8188" />
+          <button id="cUrlSave">Zapisz</button>
+          <button id="cTest">Testuj połączenie</button>
+        </div>
+        <p id="cUrlInfo" class="info"></p>
+
+        <div class="orline"><span>workflow</span></div>
+
+        <label>Wgraj workflow (plik <code>.json</code> z ComfyUI — Save „API Format" — albo dowolny obrazek <code>.png</code> wygenerowany w ComfyUI; workflow jest w jego metadanych)</label>
+        <div id="cDropzone" class="dropzone">Upuść tu plik .json lub .png…</div>
+        <input type="file" id="cFileInput" accept=".json,.png,image/png,application/json" hidden />
+        <p id="cWorkflowInfo" class="info"></p>
+
+        <div id="cMappingBox" class="hidden">
+          <h3 class="mapping-h">Biblioteka mapowań <span class="muted">— zapisz aktualne i wczytaj później</span></h3>
+          <div class="row libbar">
+            <select id="cMappingLib"><option value="">— zapisane mapowania —</option></select>
+            <button id="cMappingLibLoad">Wczytaj</button>
+            <button id="cMappingLibDel" class="danger">Usuń</button>
+            <input type="text" id="cMappingLibName" placeholder="nazwa nowego mapowania" />
+            <button id="cMappingLibSave">💾 Zapisz jako</button>
+          </div>
+
+          <h3 class="mapping-h">Wykryte mapowanie węzłów <span class="muted">(możesz nadpisać i zapisać)</span></h3>
+          <textarea id="cMapping" class="bigtext" spellcheck="false"></textarea>
+          <button id="cMappingSave">💾 Zapisz mapowanie (aktywne)</button>
+          <p id="cMappingInfo" class="info"></p>
+        </div>
+      </section>
+
+      <!-- TEST LORA -->
+      <section class="card">
+        <h2><span class="num">2</span> Test LoRA</h2>
+        <p class="info">Wybierz jedną lub więcej LoRA (tyle ile masz węzłów LoRA w workflow), prompt i parametry.</p>
+
+        <label>LoRA <button id="cLoraRefresh" class="mini">↻ odśwież listę z ComfyUI</button> <span class="muted" id="cLoraCount"></span></label>
+        <input type="text" id="cLoraSearch" placeholder="🔎 szukaj LoRA po nazwie…" />
+        <datalist id="cLoraDatalist"></datalist>
+        <div id="cLoraRows" class="lora-rows"></div>
+        <button id="cLoraAdd" class="mini">+ dodaj LoRA</button>
+
+        <div class="grid topgrid">
+          <div class="field"><label>Szerokość</label><input type="number" id="cWidth" value="1024" step="64" /></div>
+          <div class="field"><label>Wysokość</label><input type="number" id="cHeight" value="1024" step="64" /></div>
+          <div class="field"><label>Steps</label><input type="number" id="cSteps" value="20" /></div>
+          <div class="field"><label>CFG / Guidance</label><input type="number" id="cCfg" value="3.5" step="0.1" /></div>
+          <div class="field"><label>Seed (-1 = losowy)</label><input type="number" id="cSeed" value="-1" /></div>
+          <div class="field"><label>Liczba próbek</label><input type="number" id="cBatch" value="2" min="1" max="8" /></div>
+        </div>
+
+        <h3 class="mapping-h">Biblioteka promptów</h3>
+        <div class="row libbar">
+          <select id="cPromptLib"><option value="">— zapisane prompty —</option></select>
+          <button id="cPromptLibLoad">Wczytaj</button>
+          <button id="cPromptLibDel" class="danger">Usuń</button>
+          <input type="text" id="cPromptLibName" placeholder="nazwa nowego promptu" />
+          <button id="cPromptLibSave">💾 Zapisz jako</button>
+        </div>
+
+        <label>Prompt (FLUX.2)</label>
+        <textarea id="cPrompt" class="bigtext" placeholder="np. A photo of ohwx person, standing in a sunlit park…"></textarea>
+
+        <div class="row">
+          <button id="cGenLoraBtn" class="primary">🎨 Generuj próbki</button>
+          <button id="cGenLoraCancel" class="danger hidden">⏹ Przerwij</button>
+        </div>
+
+        <div id="cJobBox" class="hidden">
+          <div class="jobline">
+            <p id="cJobStatus" class="info"></p>
+            <div class="progress"><div id="cJobBar"></div></div>
+          </div>
+          <div id="cPrevWrap" class="hidden">
+            <img id="cPrevImg" alt="podgląd samplera" />
+          </div>
+        </div>
+
+        <p id="cLoraStatus" class="info"></p>
+      </section>
+
+      <!-- ZDJĘCIA REFERENCYJNE (BATCH) -->
+      <section class="card">
+        <h2><span class="num">3</span> Zdjęcia referencyjne (batch)</h2>
+        <p class="info">Lista promptów (jeden na linię) — z każdej linii zostanie wygenerowany jeden obraz, sekwencyjnie.</p>
+
+        <div class="grid">
+          <div class="field"><label>Szerokość</label><input type="number" id="cRefWidth" value="1024" step="64" /></div>
+          <div class="field"><label>Wysokość</label><input type="number" id="cRefHeight" value="1024" step="64" /></div>
+          <div class="field"><label>Steps</label><input type="number" id="cRefSteps" value="20" /></div>
+          <div class="field"><label>CFG / Guidance</label><input type="number" id="cRefCfg" value="3.5" step="0.1" /></div>
+        </div>
+
+        <label>Prompty (jeden na linię)</label>
+        <textarea id="cRefPrompts" class="bigtext" rows="6"
+          placeholder="A photo of a red sports car on a coastal road at sunset.&#10;A photo of a wooden cabin in a snowy forest, morning light.&#10;A close-up of a steaming mug of coffee on a marble table."></textarea>
+
+        <div class="row">
+          <button id="cGenRefBtn" class="primary">🖼️ Generuj batch</button>
+          <button id="cGenRefCancel" class="danger hidden">⏹ Przerwij</button>
+        </div>
+        <p id="cRefStatus" class="info"></p>
+      </section>
+
+      <!-- EDYTOR WORKFLOW (node + parametry) -->
+      <section class="card">
+        <h2><span class="num">4</span> Edytor workflow (nody + parametry)</h2>
+        <p class="info">Wczytaj <code>.json</code> lub <code>.png</code> z workflow ComfyUI, zedytuj parametry dowolnego node'a, wygeneruj. Niezależny od mapowania z sekcji 1.</p>
+
+        <div class="tabs">
+          <button class="etab active" data-etab="list">📄 Lista node'ów</button>
+          <button class="etab" data-etab="hybrid">🕸 Graf + parametry</button>
+        </div>
+
+        <div id="cEdDropzone" class="dropzone">Upuść tu plik .json lub .png…</div>
+        <input type="file" id="cEdFileInput" accept=".json,.png,image/png,application/json" hidden />
+        <p id="cEdInfo" class="info"></p>
+
+        <div id="cEdGraphPane" class="hidden">
+          <p class="info muted">Kliknij węzeł w grafie, żeby przeskoczyć do jego parametrów poniżej.</p>
+          <div id="cEdGraph" class="ed-graph"></div>
+        </div>
+
+        <div id="cEdFilterBar" class="row libbar hidden">
+          <input type="text" id="cEdFilter" placeholder="🔎 filtruj node'y (nazwa/typ/ID)…" />
+          <button id="cEdExpandAll" class="mini">rozwiń wszystkie</button>
+          <button id="cEdCollapseAll" class="mini">zwiń wszystkie</button>
+        </div>
+
+        <div id="cEdNodes" class="ed-nodes"></div>
+
+        <div class="row" id="cEdActions" style="display:none;">
+          <button id="cEdGenBtn" class="primary" title="Wyślij ten workflow do kolejki ComfyUI i wygeneruj">▶ Wyślij do ComfyUI (generuj)</button>
+          <button id="cEdGenCancel" class="danger hidden">⏹ Przerwij</button>
+          <button id="cEdSaveFile" class="mini" title="Pobierz edytowany workflow jako plik .json (format API)">💾 Zapisz .json</button>
+          <button id="cEdReset" class="mini">↺ Wczytaj ponownie z dysku</button>
+          <button id="cEdSchemas" class="mini" title="Pobierz /object_info z ComfyUI — daje dropdowny dla lora/ckpt/sampler">↻ Schemy ComfyUI</button>
+        </div>
+
+        <div class="row libbar" id="cEdLibBar" style="display:none;">
+          <input type="text" id="cEdSaveName" placeholder="nazwa workflow do zapisania…" />
+          <button id="cEdSaveLib" class="mini">💾 Zapisz w bibliotece (SQLite)</button>
+          <button id="cEdImportBtn" class="mini" title="Wczytaj plik .json / .png i zapisz w bibliotece">⬆ Import z JSON</button>
+          <input type="file" id="cEdImportFile" accept=".json,.png,image/png,application/json" hidden />
+          <select id="cEdLibSel"><option value="">— zapisane workflow —</option></select>
+          <button id="cEdLibLoad" class="mini">📂 Wczytaj</button>
+          <button id="cEdLibDel" class="mini danger">🗑</button>
+        </div>
+
+        <div id="cEdJobBox" class="hidden">
+          <div class="jobline">
+            <p id="cEdJobStatus" class="info"></p>
+            <div class="progress"><div id="cEdJobBar"></div></div>
+          </div>
+          <div id="cEdPrevWrap" class="hidden">
+            <img id="cEdPrevImg" alt="podgląd samplera" />
+          </div>
+        </div>
+
+        <p id="cEdStatus" class="info"></p>
+      </section>
+
+      <!-- GALERIA -->
+      <section class="card">
+        <h2><span class="num">5</span> Galeria wygenerowanych obrazów</h2>
+        <p class="info">Wszystkie obrazy z bieżącej i poprzednich sesji. <button id="cGalRefresh" class="mini">↻ odśwież</button></p>
+        <div id="cGallery" class="results"></div>
+      </section>
+    </div><!-- /view-comfy -->
+  </main>
+
+  <!-- Lightbox galerii: pełny obraz + prompt + akcje -->
+  <div id="galModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-box">
+      <button id="galClose" class="modal-x" title="Zamknij (Esc)">✕</button>
+      <div class="modal-img"><img id="galImg" alt="" /></div>
+      <div class="modal-info">
+        <div class="modal-meta">
+          <span id="galSeed" class="tag"></span>
+          <span id="galSource" class="tag"></span>
+          <span id="galFile" class="tag muted"></span>
+        </div>
+        <label class="modal-label">Prompt <button id="galCopy" class="mini">📋 kopiuj</button></label>
+        <textarea id="galPrompt" class="bigtext" rows="6" readonly></textarea>
+        <div id="galLoras" class="modal-loras"></div>
+        <div class="row">
+          <a id="galDownload" class="btn primary" download>⬇ Pobierz obraz</a>
+          <button id="galDelete" class="danger">🗑 Usuń</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

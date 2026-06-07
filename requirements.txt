@@ -1,0 +1,16 @@
+# Web backend
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+websocket-client>=1.7.0
+
+# Image processing
+pillow>=10.2.0
+
+# Vision-language captioning (Qwen2.5-VL)
+# NOTE: on Linux the default PyPI torch wheel is CUDA-enabled (good for the RTX 4070 Ti).
+torch>=2.4.0
+torchvision>=0.19.0
+transformers>=5.0.0
+accelerate>=0.30.0
+bitsandbytes>=0.43.0
