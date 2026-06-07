@@ -45,7 +45,6 @@ function populateModels(models, def, selectKey) {
   try {
     const { models, default: def } = await api("/api/models");
     populateModels(models, def);
-    renderSavedModels(models, def);
   } catch (e) {
     console.error(e);
   }
@@ -1642,74 +1641,42 @@ function startEditorJobPolling(jobId) {
 }
 
 // --------------------------------------------------------------------------- //
-// Własne modele: dodawanie przez systemowe okno wyboru folderu + zarządzanie
+// Własny model: klik "Dodaj" -> OD RAZU systemowe okno wyboru folderu.
 // --------------------------------------------------------------------------- //
-function renderSavedModels(models, def) {
-  const ul = $("fsSaved");
-  if (!ul) return;
-  ul.innerHTML = "";
-  const custom = Object.entries(models).filter(([id]) => id.startsWith("/"));
-  if (!custom.length) {
-    ul.innerHTML = '<li class="muted">— brak —</li>';
-    return;
-  }
-  for (const [id, label] of custom) {
-    const li = document.createElement("li");
-    const name = document.createElement("span");
-    name.textContent = label;
-    name.title = id;
-    const rm = document.createElement("span");
-    rm.className = "rm";
-    rm.textContent = "✕";
-    rm.title = "Usuń z listy";
-    rm.onclick = async (e) => {
-      e.stopPropagation();
-      try {
-        const res = await fetch("/api/models/custom", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: id }),
-        });
-        const data = await res.json();
-        populateModels(data.models, data.default);
-        renderSavedModels(data.models, data.default);
-      } catch (err) { console.error(err); }
-    };
-    li.appendChild(name);
-    li.appendChild(rm);
-    ul.appendChild(li);
-  }
-}
-
-// Wskazanie folderu modelu przez SYSTEMOWE okno (zenity/WSLg) — zwraca realną ścieżkę.
 async function pickModelFolder() {
-  $("fsMsg").textContent = "Otwieram systemowe okno wyboru folderu…";
   try {
-    const picked = await api("/api/fs/pick");
-    if (picked.cancelled || !picked.path) { $("fsMsg").textContent = "Anulowano."; return; }
-    $("fsMsg").textContent = "Dodaję: " + picked.path + " …";
+    const picked = await api("/api/fs/pick");           // otwiera systemowe okno
+    if (picked.cancelled || !picked.path) return;        // anulowano
     const data = await api("/api/models/custom", { path: picked.path });
     populateModels(data.models, data.default, data.added);
-    renderSavedModels(data.models, data.default);
-    $("fsMsg").textContent = "✓ Dodano: " + (data.models[data.added] || data.added);
+    alert("Dodano model: " + (data.models[data.added] || data.added));
   } catch (e) {
     let msg = e.message;
     try { msg = JSON.parse(e.message).detail || msg; } catch (_) {}
-    $("fsMsg").textContent = "Nie dodano: " + msg;
+    alert("Nie dodano: " + msg);
   }
 }
 
-async function openFsModal() {
-  $("fsMsg").textContent = "";
-  $("fsModal").classList.remove("hidden");
+// Usuń aktualnie wybrany WŁASNY model (klucz = ścieżka, zaczyna się od "/").
+async function removeCustomModel(selId) {
+  const sel = $(selId);
+  if (!sel || !sel.value) return;
+  const id = sel.value;
+  if (!id.startsWith("/")) { alert("To wbudowany model — nie usuwam."); return; }
+  if (!confirm("Usunąć z listy: " + sel.options[sel.selectedIndex].textContent + " ?")) return;
   try {
-    const { models, default: def } = await api("/api/models");
-    renderSavedModels(models, def);
-  } catch (_) {}
+    const res = await fetch("/api/models/custom", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: id }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    populateModels(data.models, data.default);
+  } catch (e) { alert("Błąd usuwania: " + e.message); }
 }
-function closeFsModal() { $("fsModal").classList.add("hidden"); }
 
-if ($("addModelBtn")) $("addModelBtn").onclick = openFsModal;
-if ($("pAddModelBtn")) $("pAddModelBtn").onclick = openFsModal;
-if ($("fsCancel")) $("fsCancel").onclick = closeFsModal;
-if ($("fsPick")) $("fsPick").onclick = pickModelFolder;
+if ($("addModelBtn")) $("addModelBtn").onclick = pickModelFolder;
+if ($("pAddModelBtn")) $("pAddModelBtn").onclick = pickModelFolder;
+if ($("removeModelBtn")) $("removeModelBtn").onclick = () => removeCustomModel("model");
+if ($("pRemoveModelBtn")) $("pRemoveModelBtn").onclick = () => removeCustomModel("pModel");
