@@ -121,6 +121,7 @@
         <div class="field">
           <label>Model VLM</label>
           <select id="model"></select>
+          <button type="button" id="addModelBtn" class="mini">📁 Dodaj model z folderu</button>
         </div>
 
         <div class="field">
@@ -212,6 +213,7 @@
           <div class="field">
             <label>Model</label>
             <select id="pModel"></select>
+            <button type="button" id="pAddModelBtn" class="mini">📁 Dodaj model z folderu</button>
           </div>
           <div class="field">
             <label>Kwantyzacja</label>
@@ -439,6 +441,26 @@
           <button id="galDelete" class="danger">🗑 Usuń</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Przeglądarka folderów: wybór folderu z modelem Qwen2.5-VL -->
+  <div id="fsModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-box">
+      <button id="fsCancel" class="modal-x" title="Zamknij (Esc)">✕</button>
+      <h3>Wybierz folder z modelem</h3>
+      <div class="row">
+        <button id="fsUp" class="mini">⬆ Wyżej</button>
+        <code id="fsPath" class="muted"></code>
+      </div>
+      <ul id="fsList" class="fs-list"></ul>
+      <p id="fsMsg" class="info"></p>
+      <div class="row">
+        <button id="fsPick" class="btn primary" disabled>Wybierz ten folder</button>
+      </div>
+      <label class="modal-label">Zapamiętane własne modele</label>
+      <ul id="fsSaved" class="fs-list"></ul>
     </div>
   </div>
 
