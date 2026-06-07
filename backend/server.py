@@ -323,9 +323,64 @@ def _all_models() -> dict:
     return {**captioner.AVAILABLE_MODELS, **_load_named(CUSTOM_MODELS_PATH)}
 
 
+def _add_custom_model(path: str) -> dict:
+    """Zwaliduj i zapisz własny model. Rzuca ValueError z czytelnym powodem."""
+    resolved = Path(path).expanduser().resolve()
+    info = _model_dir_info(resolved)
+    if not info["ok"]:
+        raise ValueError(info["reason"])
+    data = _load_named(CUSTOM_MODELS_PATH)
+    data[str(resolved)] = info["label"]
+    _save_named(CUSTOM_MODELS_PATH, data)
+    return {"added": str(resolved), "label": info["label"]}
+
+
+def _remove_custom_model(path: str) -> None:
+    resolved = str(Path(path).expanduser().resolve())
+    data = _load_named(CUSTOM_MODELS_PATH)
+    if resolved in data:
+        del data[resolved]
+        _save_named(CUSTOM_MODELS_PATH, data)
+
+
+class CustomModel(BaseModel):
+    path: str
+
+
 @app.get("/api/models")
 def api_models():
-    return {"models": captioner.AVAILABLE_MODELS, "default": captioner.DEFAULT_MODEL}
+    return {"models": _all_models(), "default": captioner.DEFAULT_MODEL}
+
+
+@app.get("/api/fs/list")
+def api_fs_list(path: str = ""):
+    base = (Path(path).expanduser() if path else Path.home()).resolve()
+    if not base.is_dir():
+        raise HTTPException(400, f"Nie jest folderem: {base}")
+    parent = None if base.parent == base else str(base.parent)
+    return {
+        "path": str(base),
+        "parent": parent,
+        "dirs": _list_subdirs(base),
+        "is_model": _model_dir_info(base)["ok"],
+    }
+
+
+@app.post("/api/models/custom")
+def api_models_custom_add(req: CustomModel):
+    try:
+        res = _add_custom_model(req.path)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"models": _all_models(),
+            "default": captioner.DEFAULT_MODEL,
+            "added": res["added"]}
+
+
+@app.delete("/api/models/custom")
+def api_models_custom_remove(req: CustomModel):
+    _remove_custom_model(req.path)
+    return {"models": _all_models(), "default": captioner.DEFAULT_MODEL}
 
 
 @app.post("/api/scan")

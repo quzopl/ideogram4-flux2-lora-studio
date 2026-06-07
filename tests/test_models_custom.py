@@ -39,3 +39,28 @@ def test_all_models_merges_custom(tmp_path, monkeypatch):
     models = server._all_models()
     assert "/models/qwen" in models
     assert any("Qwen2.5-VL" in v for v in models.values())
+
+
+import pytest
+
+
+def _make_model_dir(p):
+    p.mkdir()
+    (p / "config.json").write_text(json.dumps({"model_type": "qwen2_5_vl"}))
+    return p
+
+
+def test_add_and_remove_custom_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "CUSTOM_MODELS_PATH", tmp_path / "cm.json")
+    model_dir = _make_model_dir(tmp_path / "mymodel")
+    res = server._add_custom_model(str(model_dir))
+    assert res["added"] == str(model_dir.resolve())
+    assert str(model_dir.resolve()) in server._all_models()
+    server._remove_custom_model(str(model_dir))
+    assert str(model_dir.resolve()) not in server._all_models()
+
+
+def test_add_custom_model_rejects_non_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "CUSTOM_MODELS_PATH", tmp_path / "cm.json")
+    with pytest.raises(ValueError):
+        server._add_custom_model(str(tmp_path))
