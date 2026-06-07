@@ -38,7 +38,7 @@ def list_models(base_url: str = DEFAULT_URL, timeout: float = 3.0) -> list[str]:
         out = _request(f"{base_url.rstrip('/')}/models", None, timeout)
     except (urllib.error.URLError, OSError, ValueError):
         return []
-    data = out.get("data", []) if isinstance(out, dict) else []
+    data = (out.get("data") or []) if isinstance(out, dict) else []
     return [m["id"] for m in data if isinstance(m, dict) and m.get("id")]
 
 
@@ -53,9 +53,12 @@ def _chat(base_url: str, payload: dict, timeout: float) -> str:
     except ValueError as e:
         raise LMStudioError("Błędna odpowiedź LM Studio (nie-JSON).") from e
     try:
-        return out["choices"][0]["message"]["content"]
+        content = out["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as e:
         raise LMStudioError("LM Studio zwróciło odpowiedź bez treści.") from e
+    if content is None:
+        raise LMStudioError("LM Studio zwróciło pustą treść (content=null).")
+    return content
 
 
 def caption_image(base_url: str, model: str, image: Image.Image,

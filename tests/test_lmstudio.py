@@ -88,3 +88,25 @@ def test_all_models_includes_lmstudio(tmp_path, monkeypatch):
     monkeypatch.setattr(server.lmstudio, "list_models", lambda url, timeout=3.0: ["vl-7b"])
     models = server._all_models()
     assert models["lmstudio:vl-7b"] == "LM Studio: vl-7b"
+
+
+def test_chat_http_error_raises(monkeypatch):
+    import urllib.error
+    def boom(req, timeout=0):
+        raise urllib.error.HTTPError("http://x/v1/chat/completions", 503, "busy", {}, None)
+    monkeypatch.setattr(lmstudio.urllib.request, "urlopen", boom)
+    with pytest.raises(lmstudio.LMStudioError):
+        lmstudio.generate_text("http://x/v1", "m", "s", "u")
+
+
+def test_list_models_null_data(monkeypatch):
+    monkeypatch.setattr(lmstudio.urllib.request, "urlopen",
+                        lambda req, timeout=0: _FakeResp({"data": None}))
+    assert lmstudio.list_models("http://x/v1") == []
+
+
+def test_chat_content_null_raises(monkeypatch):
+    monkeypatch.setattr(lmstudio.urllib.request, "urlopen",
+                        lambda req, timeout=0: _FakeResp({"choices": [{"message": {"content": None}}]}))
+    with pytest.raises(lmstudio.LMStudioError):
+        lmstudio.generate_text("http://x/v1", "m", "s", "u")

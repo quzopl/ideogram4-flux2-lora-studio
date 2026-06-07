@@ -159,3 +159,8 @@ def test_postprocess_caption_routes_by_fmt():
     assert _loads(ideo)["high_level_description"] == "x"
     flux = prompts.postprocess_caption("The image shows a cat.", "flux")
     assert not flux.lower().startswith("the image shows")
+
+
+def test_postprocess_caption_aitoolkit():
+    out = prompts.postprocess_caption('{"high_level_description":"y"}', "aitoolkit")
+    assert _loads(out)["high_level_description"] == "y"

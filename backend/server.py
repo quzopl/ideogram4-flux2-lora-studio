@@ -224,6 +224,7 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
 
     try:
         lm_id = _lmstudio_model_id(req.model)
+        lm_url = _lmstudio_url() if lm_id is not None else None
         if req.do_caption and lm_id is None:
             job["state"] = "loading_model"
             job["current"] = "Ładowanie modelu VLM (pierwsze uruchomienie pobiera wagi)…"
@@ -252,7 +253,7 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
                         instruction = prompts.caption_instruction(
                             req.mode, req.style, req.caption_format)
                         raw = lmstudio.caption_image(
-                            _lmstudio_url(), lm_id, img, instruction, req.max_tokens)
+                            lm_url, lm_id, img, instruction, req.max_tokens)
                         caption = prompts.postprocess_caption(raw, req.caption_format)
                     else:
                         caption = captioner.caption_image(
