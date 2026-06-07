@@ -7,6 +7,7 @@ without meta phrases like "the image shows". Two styles are supported:
   - "detailed": one rich exhaustive paragraph.
 """
 from __future__ import annotations
+import json
 
 # Universal FLUX.2 rules: its text encoder is an LLM (Mistral/Qwen3), so it wants
 # natural sentences about object relationships, attributes and actions — not tags,
@@ -207,3 +208,87 @@ def clean_prompt(text: str) -> str:
             break
     out = out.strip().strip('"').strip("'").strip()
     return out
+
+
+# =========================================================================== #
+# Ideogram 4 — strukturalne opisy JSON.
+#
+# Ideogram 4 był trenowany na opisach JSON o ścisłej kolejności kluczy i
+# kompaktowym zapisie. Model (VLM/LLM) generuje treść, a poprawną strukturę
+# składamy tutaj, w Pythonie — niezależnie od tego, co dokładnie zwróci model.
+# =========================================================================== #
+def _extract_json_object(raw: str) -> dict | None:
+    """Wyłuskaj i sparsuj pierwszy obiekt {...} z surowego tekstu modelu."""
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        obj = json.loads(raw[start:end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _norm_elements(raw_elements) -> list[dict]:
+    """Sprowadź listę elementów do {type:obj,description} / {type:text,content}."""
+    out: list[dict] = []
+    if not isinstance(raw_elements, list):
+        return out
+    for el in raw_elements:
+        if not isinstance(el, dict):
+            continue
+        if el.get("type") == "text" or "content" in el:
+            out.append({"type": "text", "content": str(el.get("content", "")).strip()})
+        else:
+            desc = el.get("description", el.get("name", ""))
+            out.append({"type": "obj", "description": str(desc).strip()})
+    return out
+
+
+def _norm_style(raw_style) -> dict:
+    """Złóż style_description w ścisłej kolejności z dokładnie jednym z photo/art_style."""
+    raw_style = raw_style if isinstance(raw_style, dict) else {}
+    style: dict = {
+        "aesthetics": str(raw_style.get("aesthetics", "")).strip(),
+        "lighting": str(raw_style.get("lighting", "")).strip(),
+    }
+    # Dokładnie jedno z photo / art_style. Domyślnie photo (dataset zdjęciowy).
+    if "art_style" in raw_style and "photo" not in raw_style:
+        style["art_style"] = str(raw_style.get("art_style", "")).strip()
+    else:
+        style["photo"] = str(raw_style.get("photo", "")).strip()
+    style["medium"] = str(raw_style.get("medium", "")).strip()
+    return style
+
+
+def _compact(obj: dict) -> str:
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def normalize_ideogram(raw: str) -> str:
+    """Zamień surowe wyjście modelu na poprawny, kompaktowy JSON-string Ideogram.
+
+    Buduje nowy obiekt o ścisłej kolejności kluczy. Gdy wejście nie zawiera
+    poprawnego JSON-a, zawija tekst w minimalny poprawny schemat (fallback).
+    """
+    obj = _extract_json_object(raw)
+    if obj is None:
+        text = " ".join(raw.strip().split())
+        return _compact({
+            "high_level_description": text,
+            "compositional_deconstruction": {"background": text, "elements": []},
+        })
+
+    comp_raw = obj.get("compositional_deconstruction")
+    comp_raw = comp_raw if isinstance(comp_raw, dict) else {}
+    result: dict = {
+        "high_level_description": str(obj.get("high_level_description", "")).strip(),
+    }
+    if "style_description" in obj:
+        result["style_description"] = _norm_style(obj.get("style_description"))
+    result["compositional_deconstruction"] = {
+        "background": str(comp_raw.get("background", "")).strip(),
+        "elements": _norm_elements(comp_raw.get("elements")),
+    }
+    return _compact(result)
