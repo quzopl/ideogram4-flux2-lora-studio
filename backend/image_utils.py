@@ -6,8 +6,18 @@ from __future__ import annotations
 
 from PIL import Image, ImageOps
 
+# Włącz odczyt/zapis HEIC/HEIF (zdjęcia z iPhone'a) — opcjonalna zależność.
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:  # pragma: no cover - środowisko bez pillow-heif
+    pass
+
 # Extensions we accept as input.
-SUPPORTED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
+SUPPORTED_EXT = {
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif",
+    ".heic", ".heif",
+}
 
 
 def compute_bucket(w: int, h: int, target: int, step: int, square: bool) -> tuple[int, int]:
