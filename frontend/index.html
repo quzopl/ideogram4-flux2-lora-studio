@@ -42,7 +42,7 @@
       <div class="tabpane hidden" id="pane-upload">
         <label>Przeciągnij pliki tutaj lub kliknij, aby wybrać</label>
         <div id="dropzone" class="dropzone">Upuść zdjęcia…</div>
-        <input type="file" id="fileInput" multiple accept="image/*" hidden />
+        <input type="file" id="fileInput" multiple accept="image/*,.heic,.heif,image/heic,image/heif" hidden />
       </div>
 
       <p id="srcInfo" class="info"></p>
@@ -67,6 +67,14 @@
           <select id="style">
             <option value="concise" selected>Zwięzły (konkretny, ~3-5 zdań)</option>
             <option value="detailed">Szczegółowy (długi akapit)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Format docelowy</label>
+          <select id="captionFormat">
+            <option value="flux" selected>FLUX.2 (naturalny język)</option>
+            <option value="ideogram">Ideogram 4 (JSON)</option>
           </select>
         </div>
 
@@ -192,6 +200,13 @@
               <option value="product">Produkt / przedmiot</option>
               <option value="landscape">Krajobraz / scena</option>
               <option value="architecture">Architektura</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Format docelowy</label>
+            <select id="promptFormat">
+              <option value="flux" selected>FLUX.2 (naturalny język)</option>
+              <option value="ideogram">Ideogram 4 (JSON)</option>
             </select>
           </div>
           <div class="field">

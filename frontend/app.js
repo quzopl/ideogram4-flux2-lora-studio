@@ -196,6 +196,7 @@ $("processBtn").addEventListener("click", async () => {
     quant: $("quant").value,
     max_tokens: parseInt($("maxTokens").value, 10),
     do_caption: $("doCaption").checked,
+    caption_format: $("captionFormat").value,
   };
 
   $("processBtn").disabled = true;
@@ -425,6 +426,7 @@ async function generatePrompt() {
       model: $("pModel").value,
       quant: $("pQuant").value,
       max_tokens: parseInt($("pMaxTokens").value, 10),
+      caption_format: $("promptFormat").value,
     });
     $("pOutput").value = r.prompt;
     $("pResultCard").classList.remove("hidden");
