@@ -18,7 +18,7 @@ fi
 echo ">> Instaluję zależności (pierwszy raz może chwilę potrwać)…"
 uv pip install -r requirements.txt
 
-PORT="${PORT:-8000}"
+PORT="${PORT:-8023}"
 echo ""
 echo ">> Otwórz w przeglądarce:  http://127.0.0.1:${PORT}"
 echo ">> (Pierwsze opisanie pobierze wagi modelu VLM — kilka GB.)"
