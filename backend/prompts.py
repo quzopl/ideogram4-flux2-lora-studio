@@ -8,6 +8,7 @@ without meta phrases like "the image shows". Two styles are supported:
 """
 from __future__ import annotations
 import json
+import re
 
 # Universal FLUX.2 rules: its text encoder is an LLM (Mistral/Qwen3), so it wants
 # natural sentences about object relationships, attributes and actions — not tags,
@@ -443,3 +444,145 @@ def postprocess_caption(text: str, fmt: str) -> str:
     if fmt in ("ideogram", "aitoolkit"):
         return normalize_ideogram(text)
     return clean_caption(text)
+
+
+# =========================================================================== #
+# Ideogram 4 — pełny schemat wg przewodnika (konwerter promptów tekst->JSON).
+# Osobny od pragmatycznego normalize_ideogram (ten zostaje dla opisów datasetu).
+# =========================================================================== #
+_HEX6_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _upper_hex_list(value) -> list | None:
+    """Lista poprawnych kolorów #RRGGBB WIELKIMI literami; None gdy brak/niepoprawne."""
+    if not isinstance(value, list):
+        return None
+    out = []
+    for c in value:
+        if isinstance(c, str) and _HEX6_RE.match(c.strip()):
+            out.append("#" + c.strip()[1:].upper())
+    return out or None
+
+
+def _norm_bbox(value):
+    """bbox = lista 4 liczb -> [int,int,int,int]; inaczej None."""
+    if isinstance(value, list) and len(value) == 4:
+        try:
+            return [int(v) for v in value]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _norm_style_guide(raw_style) -> dict:
+    """style_description w kolejności zależnej od foto/nie-foto (wg przewodnika)."""
+    raw = raw_style if isinstance(raw_style, dict) else {}
+    style: dict = {}
+    if "aesthetics" in raw:
+        style["aesthetics"] = str(raw.get("aesthetics", "")).strip()
+    if "lighting" in raw:
+        style["lighting"] = str(raw.get("lighting", "")).strip()
+    is_photo = "photo" in raw or "art_style" not in raw
+    if is_photo:
+        if "photo" in raw:
+            style["photo"] = str(raw.get("photo", "")).strip()
+        if "medium" in raw:
+            style["medium"] = str(raw.get("medium", "")).strip()
+    else:
+        if "medium" in raw:
+            style["medium"] = str(raw.get("medium", "")).strip()
+        style["art_style"] = str(raw.get("art_style", "")).strip()
+    pal = _upper_hex_list(raw.get("color_palette"))
+    if pal is not None:
+        style["color_palette"] = pal
+    return style
+
+
+def _norm_elements_guide(raw_elements) -> list:
+    """Elementy w ścisłej kolejności kluczy: obj=type,bbox,desc,color_palette;
+    text=type,bbox,text,desc,color_palette."""
+    out: list[dict] = []
+    if not isinstance(raw_elements, list):
+        return out
+    for el in raw_elements:
+        if not isinstance(el, dict):
+            continue
+        etype = el.get("type")
+        is_text = etype == "text" or (etype != "obj" and "text" in el)
+        new: dict = {"type": "text" if is_text else "obj"}
+        bbox = _norm_bbox(el.get("bbox"))
+        if bbox is not None:
+            new["bbox"] = bbox
+        if is_text:
+            new["text"] = str(el.get("text", "")).strip()
+        new["desc"] = str(el.get("desc", el.get("description", ""))).strip()
+        pal = _upper_hex_list(el.get("color_palette"))
+        if pal is not None:
+            new["color_palette"] = pal
+        out.append(new)
+    return out
+
+
+def normalize_ideogram_guide(raw: str) -> str:
+    """Surowe wyjście modelu -> kompaktowy JSON Ideogram zgodny z przewodnikiem."""
+    obj = _extract_json_object(raw)
+    if obj is None:
+        text = " ".join(raw.strip().split())
+        return _compact({
+            "high_level_description": text,
+            "compositional_deconstruction": {"background": text, "elements": []},
+        })
+    comp_raw = obj.get("compositional_deconstruction")
+    comp_raw = comp_raw if isinstance(comp_raw, dict) else {}
+    result: dict = {
+        "high_level_description": str(obj.get("high_level_description", "")).strip(),
+    }
+    if "style_description" in obj:
+        result["style_description"] = _norm_style_guide(obj.get("style_description"))
+    result["compositional_deconstruction"] = {
+        "background": str(comp_raw.get("background", "")).strip(),
+        "elements": _norm_elements_guide(comp_raw.get("elements")),
+    }
+    return _compact(result)
+
+
+_IDEOGRAM_GUIDE_BASE = (
+    "You are a prompt engineer for the Ideogram 4 text-to-image model, which was trained "
+    "on structured JSON captions with a strict key order."
+)
+
+_IDEOGRAM_GUIDE_SCHEMA = (
+    " Convert the user's prompt into ONE Ideogram 4 JSON object and output JSON only, no "
+    "prose. Top-level keys in this exact order: \"high_level_description\" (one or two "
+    "sentences, the anchor), \"style_description\", \"compositional_deconstruction\". First "
+    "decide PHOTO vs NON-PHOTO from the prompt's cues. For a photo use the key \"photo\" "
+    "with \"medium\":\"photograph\" and order style_description keys as: aesthetics, "
+    "lighting, photo, medium, color_palette. For a painting/illustration/3D render use "
+    "\"art_style\" (never \"photo\") with a matching \"medium\" and order: aesthetics, "
+    "lighting, medium, art_style, color_palette. Never use photo and art_style together. "
+    "Describe lighting in rich detail. compositional_deconstruction must have \"background\" "
+    "(before \"elements\") and \"elements\". Break every salient object into its own "
+    "element. A literal, legible piece of text to render is a {\"type\":\"text\",\"bbox\":"
+    "[y,x,y,x],\"text\":\"EXACT STRING\",\"desc\":\"...\"} element; decorative/illegible "
+    "signs stay as {\"type\":\"obj\",\"bbox\":[y,x,y,x],\"desc\":\"...\"}. Give hard-to-"
+    "render objects (barbell, weapon, hands) their own element; stretch atmosphere layers "
+    "(haze, dust, cracks) over a large bbox. Bounding boxes are [y_min, x_min, y_max, "
+    "x_max] on a 0-1000 scale, origin top-left, Y FIRST; foreground low in frame (high y), "
+    "background high (low y). Colors: a \"color_palette\" array of UPPERCASE hex "
+    "\"#RRGGBB\" (no shorthand), up to 16 globally and up to 5 per element, including "
+    "shadows, highlights and accents. Element key order is strict — obj: type, bbox, desc, "
+    "color_palette; text: type, bbox, text, desc, color_palette. Resolve contradictions "
+    "deliberately instead of passing the conflict on (e.g. f/1.4 on a full body -> "
+    "f/1.8-2.8; \"oil impasto\" with a 50mm lens -> pick one mode and drop the conflicting "
+    "wording). Add texture cues for realism (skin pores, film grain, wet metal sheen). Keep "
+    "any LoRA token exactly as given and place it at the start of the main element's desc "
+    "and in high_level_description; when converting a painting to a photo, drop a painterly "
+    "style trigger. Output ONLY the JSON object."
+)
+
+
+def build_ideogram_studio_guide(action: str = "expand", subject: str = "auto") -> str:
+    """System-prompt konwertera tekst->Ideogram JSON wg pełnego przewodnika."""
+    act = _IDEOGRAM_STUDIO_ACTION.get(action, _IDEOGRAM_STUDIO_ACTION["expand"])
+    subj = _STUDIO_SUBJECT.get(subject, "")
+    return _IDEOGRAM_GUIDE_BASE + act + subj + _IDEOGRAM_GUIDE_SCHEMA

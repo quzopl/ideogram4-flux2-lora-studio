@@ -164,3 +164,62 @@ def test_postprocess_caption_routes_by_fmt():
 def test_postprocess_caption_aitoolkit():
     out = prompts.postprocess_caption('{"high_level_description":"y"}', "aitoolkit")
     assert _loads(out)["high_level_description"] == "y"
+
+
+def test_upper_hex_list_filters_and_uppercases():
+    assert prompts._upper_hex_list(["#aabbcc", "#FFF", "x", "#001122"]) == ["#AABBCC", "#001122"]
+    assert prompts._upper_hex_list("nope") is None
+    assert prompts._upper_hex_list(["#fff"]) is None
+
+
+def test_guide_photo_style_order():
+    raw = ('{"high_level_description":"a cat","style_description":'
+           '{"lighting":"soft","aesthetics":"cozy","medium":"photograph",'
+           '"photo":"50mm","color_palette":["#aabbcc"]},'
+           '"compositional_deconstruction":{"background":"room","elements":[]}}')
+    sd = _loads(prompts.normalize_ideogram_guide(raw))["style_description"]
+    assert list(sd.keys()) == ["aesthetics", "lighting", "photo", "medium", "color_palette"]
+    assert sd["color_palette"] == ["#AABBCC"]
+
+
+def test_guide_non_photo_style_order():
+    raw = ('{"high_level_description":"a knight","style_description":'
+           '{"aesthetics":"epic","lighting":"chiaroscuro","art_style":"oil painting",'
+           '"medium":"painting","color_palette":["#102030"]},'
+           '"compositional_deconstruction":{"background":"hall","elements":[]}}')
+    sd = _loads(prompts.normalize_ideogram_guide(raw))["style_description"]
+    assert list(sd.keys()) == ["aesthetics", "lighting", "medium", "art_style", "color_palette"]
+    assert "photo" not in sd
+
+
+def test_guide_elements_obj_and_text_keys():
+    raw = ('{"high_level_description":"s","compositional_deconstruction":{"background":"bg",'
+           '"elements":[{"type":"obj","bbox":[10,20,30,40],"description":"a sign"},'
+           '{"type":"text","bbox":[1,2,3,4],"text":"STOP","desc":"red octagon"}]}}')
+    els = _loads(prompts.normalize_ideogram_guide(raw))["compositional_deconstruction"]["elements"]
+    assert list(els[0].keys()) == ["type", "bbox", "desc"]
+    assert els[0] == {"type": "obj", "bbox": [10, 20, 30, 40], "desc": "a sign"}
+    assert list(els[1].keys()) == ["type", "bbox", "text", "desc"]
+    assert els[1]["text"] == "STOP"
+
+
+def test_guide_bad_bbox_dropped():
+    raw = ('{"high_level_description":"s","compositional_deconstruction":{"background":"bg",'
+           '"elements":[{"type":"obj","bbox":[1,2,3],"desc":"x"}]}}')
+    el = _loads(prompts.normalize_ideogram_guide(raw))["compositional_deconstruction"]["elements"][0]
+    assert "bbox" not in el
+
+
+def test_guide_fallback_on_invalid_json():
+    out = prompts.normalize_ideogram_guide("totally not json")
+    obj = _loads(out)
+    assert obj["high_level_description"] == "totally not json"
+    assert obj["compositional_deconstruction"]["elements"] == []
+
+
+def test_build_ideogram_studio_guide_has_guide_rules():
+    s = prompts.build_ideogram_studio_guide("expand", "auto")
+    low = s.lower()
+    assert "json" in low
+    for token in ("bbox", "color_palette", "art_style", "desc"):
+        assert token in s
