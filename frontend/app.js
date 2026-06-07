@@ -1642,10 +1642,8 @@ function startEditorJobPolling(jobId) {
 }
 
 // --------------------------------------------------------------------------- //
-// Przeglądarka folderów + własne modele
+// Własne modele: dodawanie przez systemowe okno wyboru folderu + zarządzanie
 // --------------------------------------------------------------------------- //
-let fsCurrent = null;
-
 function renderSavedModels(models, def) {
   const ul = $("fsSaved");
   if (!ul) return;
@@ -1683,51 +1681,35 @@ function renderSavedModels(models, def) {
   }
 }
 
-async function fsBrowse(path) {
+// Wskazanie folderu modelu przez SYSTEMOWE okno (zenity/WSLg) — zwraca realną ścieżkę.
+async function pickModelFolder() {
+  $("fsMsg").textContent = "Otwieram systemowe okno wyboru folderu…";
   try {
-    const q = path ? ("?path=" + encodeURIComponent(path)) : "";
-    const data = await api("/api/fs/list" + q);
-    fsCurrent = data.path;
-    $("fsPath").textContent = data.path;
-    $("fsUp").disabled = !data.parent;
-    $("fsUp").dataset.parent = data.parent || "";
-    $("fsPick").disabled = !data.is_model;
-    $("fsMsg").textContent = data.is_model
-      ? "✓ Ten folder zawiera model — można go wybrać."
-      : "Wejdź w folder zawierający model (config.json).";
-    const ul = $("fsList");
-    ul.innerHTML = "";
-    for (const name of data.dirs) {
-      const li = document.createElement("li");
-      li.textContent = "📁 " + name;
-      li.onclick = () => fsBrowse(data.path.replace(/\/$/, "") + "/" + name);
-      ul.appendChild(li);
-    }
-    if (!data.dirs.length) ul.innerHTML = '<li class="muted">— brak podfolderów —</li>';
+    const picked = await api("/api/fs/pick");
+    if (picked.cancelled || !picked.path) { $("fsMsg").textContent = "Anulowano."; return; }
+    $("fsMsg").textContent = "Dodaję: " + picked.path + " …";
+    const data = await api("/api/models/custom", { path: picked.path });
+    populateModels(data.models, data.default, data.added);
+    renderSavedModels(data.models, data.default);
+    $("fsMsg").textContent = "✓ Dodano: " + (data.models[data.added] || data.added);
   } catch (e) {
-    $("fsMsg").textContent = "Błąd: " + e.message;
+    let msg = e.message;
+    try { msg = JSON.parse(e.message).detail || msg; } catch (_) {}
+    $("fsMsg").textContent = "Nie dodano: " + msg;
   }
 }
 
-function openFsModal() {
+async function openFsModal() {
+  $("fsMsg").textContent = "";
   $("fsModal").classList.remove("hidden");
-  fsBrowse("");  // brak ścieżki -> backend startuje w katalogu domowym
+  try {
+    const { models, default: def } = await api("/api/models");
+    renderSavedModels(models, def);
+  } catch (_) {}
 }
 function closeFsModal() { $("fsModal").classList.add("hidden"); }
 
 if ($("addModelBtn")) $("addModelBtn").onclick = openFsModal;
 if ($("pAddModelBtn")) $("pAddModelBtn").onclick = openFsModal;
 if ($("fsCancel")) $("fsCancel").onclick = closeFsModal;
-if ($("fsUp")) $("fsUp").onclick = () => fsBrowse($("fsUp").dataset.parent || "");
-if ($("fsPick")) $("fsPick").onclick = async () => {
-  try {
-    const data = await api("/api/models/custom", { path: fsCurrent });
-    populateModels(data.models, data.default, data.added);
-    renderSavedModels(data.models, data.default);
-    closeFsModal();
-  } catch (e) {
-    let msg = e.message;
-    try { msg = JSON.parse(e.message).detail || msg; } catch (_) {}
-    $("fsMsg").textContent = "Nie dodano: " + msg;
-  }
-};
+if ($("fsPick")) $("fsPick").onclick = pickModelFolder;

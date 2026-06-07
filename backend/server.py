@@ -383,6 +383,31 @@ def api_models_custom_remove(req: CustomModel):
     return {"models": _all_models(), "default": captioner.DEFAULT_MODEL}
 
 
+@app.get("/api/fs/pick")
+def api_fs_pick():
+    """Otwórz natywne systemowe okno wyboru folderu (zenity/WSLg) i zwróć ścieżkę.
+
+    Przeglądarka nie udostępnia bezwzględnej ścieżki, więc używamy standardowego
+    okna systemowego — działa, bo aplikacja jest lokalna.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["zenity", "--file-selection", "--directory",
+             "--title=Wybierz folder z modelem Qwen2.5-VL"],
+            capture_output=True, text=True, timeout=300,
+        )
+    except FileNotFoundError:
+        raise HTTPException(500, "Brak 'zenity' — natywne okno wyboru niedostępne.")
+    except subprocess.TimeoutExpired:
+        return {"cancelled": True}
+    path = proc.stdout.strip()
+    if proc.returncode != 0 or not path:
+        return {"cancelled": True}  # użytkownik anulował
+    return {"path": path}
+
+
 @app.post("/api/scan")
 def api_scan(req: ScanRequest):
     files = _list_images(req.folder)
