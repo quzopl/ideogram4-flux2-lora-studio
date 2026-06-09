@@ -166,60 +166,144 @@ def test_postprocess_caption_aitoolkit():
     assert _loads(out)["high_level_description"] == "y"
 
 
-def test_upper_hex_list_filters_and_uppercases():
-    assert prompts._upper_hex_list(["#aabbcc", "#FFF", "x", "#001122"]) == ["#AABBCC", "#001122"]
-    assert prompts._upper_hex_list("nope") is None
-    assert prompts._upper_hex_list(["#fff"]) is None
+# --------------------------------------------------------------------------- #
+# Framework v15 — konwerter promptów studia (aspect_ratio + HLD + composition)
+# --------------------------------------------------------------------------- #
+
+def test_v15_top_level_keys_and_order():
+    raw = ('{"compositional_deconstruction":{"background":"a park","elements":[]},'
+           '"high_level_description":"a dog runs","aspect_ratio":"16:9"}')
+    obj = _loads(prompts.normalize_ideogram_v15(raw))
+    assert list(obj.keys()) == [
+        "aspect_ratio", "high_level_description", "compositional_deconstruction",
+    ]
+    assert obj["aspect_ratio"] == "16:9"
 
 
-def test_guide_photo_style_order():
-    raw = ('{"high_level_description":"a cat","style_description":'
-           '{"lighting":"soft","aesthetics":"cozy","medium":"photograph",'
-           '"photo":"50mm","color_palette":["#aabbcc"]},'
+def test_v15_drops_legacy_style_description():
+    raw = ('{"aspect_ratio":"1:1","high_level_description":"a cat",'
+           '"style_description":{"aesthetics":"cozy","lighting":"soft","photo":"50mm",'
+           '"medium":"photograph","color_palette":["#AABBCC"]},'
            '"compositional_deconstruction":{"background":"room","elements":[]}}')
-    sd = _loads(prompts.normalize_ideogram_guide(raw))["style_description"]
-    assert list(sd.keys()) == ["aesthetics", "lighting", "photo", "medium", "color_palette"]
-    assert sd["color_palette"] == ["#AABBCC"]
+    obj = _loads(prompts.normalize_ideogram_v15(raw))
+    assert "style_description" not in obj
+    assert list(obj.keys()) == [
+        "aspect_ratio", "high_level_description", "compositional_deconstruction",
+    ]
 
 
-def test_guide_non_photo_style_order():
-    raw = ('{"high_level_description":"a knight","style_description":'
-           '{"aesthetics":"epic","lighting":"chiaroscuro","art_style":"oil painting",'
-           '"medium":"painting","color_palette":["#102030"]},'
-           '"compositional_deconstruction":{"background":"hall","elements":[]}}')
-    sd = _loads(prompts.normalize_ideogram_guide(raw))["style_description"]
-    assert list(sd.keys()) == ["aesthetics", "lighting", "medium", "art_style", "color_palette"]
-    assert "photo" not in sd
+def test_v15_aspect_ratio_from_px_size():
+    raw = '{"size":"768x1024","high_level_description":"x"}'
+    assert _loads(prompts.normalize_ideogram_v15(raw))["aspect_ratio"] == "3:4"
 
 
-def test_guide_elements_obj_and_text_keys():
-    raw = ('{"high_level_description":"s","compositional_deconstruction":{"background":"bg",'
-           '"elements":[{"type":"obj","bbox":[10,20,30,40],"description":"a sign"},'
+def test_v15_aspect_ratio_reduced():
+    raw = '{"aspect_ratio":"1920:1080","high_level_description":"x"}'
+    assert _loads(prompts.normalize_ideogram_v15(raw))["aspect_ratio"] == "16:9"
+
+
+def test_v15_aspect_ratio_auto_or_missing_defaults():
+    for raw in ('{"aspect_ratio":"auto","high_level_description":"x"}',
+                '{"high_level_description":"x"}'):
+        assert _loads(prompts.normalize_ideogram_v15(raw))["aspect_ratio"] == "1:1"
+
+
+def test_v15_elements_key_order_no_palette():
+    raw = ('{"aspect_ratio":"1:1","high_level_description":"s",'
+           '"compositional_deconstruction":{"background":"bg","elements":['
+           '{"type":"obj","bbox":[10,20,30,40],"desc":"a sign","color_palette":["#AABBCC"]},'
            '{"type":"text","bbox":[1,2,3,4],"text":"STOP","desc":"red octagon"}]}}')
-    els = _loads(prompts.normalize_ideogram_guide(raw))["compositional_deconstruction"]["elements"]
+    els = _loads(prompts.normalize_ideogram_v15(raw))["compositional_deconstruction"]["elements"]
     assert list(els[0].keys()) == ["type", "bbox", "desc"]
     assert els[0] == {"type": "obj", "bbox": [10, 20, 30, 40], "desc": "a sign"}
     assert list(els[1].keys()) == ["type", "bbox", "text", "desc"]
     assert els[1]["text"] == "STOP"
 
 
-def test_guide_bad_bbox_dropped():
-    raw = ('{"high_level_description":"s","compositional_deconstruction":{"background":"bg",'
-           '"elements":[{"type":"obj","bbox":[1,2,3],"desc":"x"}]}}')
-    el = _loads(prompts.normalize_ideogram_guide(raw))["compositional_deconstruction"]["elements"][0]
+def test_v15_bbox_reversed_coords_swapped():
+    raw = ('{"aspect_ratio":"1:1","high_level_description":"s",'
+           '"compositional_deconstruction":{"background":"bg","elements":['
+           '{"type":"obj","bbox":[900,800,100,200],"desc":"x"}]}}')
+    el = _loads(prompts.normalize_ideogram_v15(raw))["compositional_deconstruction"]["elements"][0]
+    assert el["bbox"] == [100, 200, 900, 800]
+
+
+def test_v15_bad_bbox_dropped():
+    raw = ('{"aspect_ratio":"1:1","high_level_description":"s",'
+           '"compositional_deconstruction":{"background":"bg","elements":['
+           '{"type":"obj","bbox":[1,2,3],"desc":"x"}]}}')
+    el = _loads(prompts.normalize_ideogram_v15(raw))["compositional_deconstruction"]["elements"][0]
     assert "bbox" not in el
 
 
-def test_guide_fallback_on_invalid_json():
-    out = prompts.normalize_ideogram_guide("totally not json")
+def test_v15_text_multiline_preserved():
+    raw = ('{"aspect_ratio":"1:1","high_level_description":"s",'
+           '"compositional_deconstruction":{"background":"bg","elements":['
+           '{"type":"text","text":"ENTRE\\nVERSOS","desc":"hero title"}]}}')
+    el = _loads(prompts.normalize_ideogram_v15(raw))["compositional_deconstruction"]["elements"][0]
+    assert el["text"] == "ENTRE\nVERSOS"
+
+
+def test_v15_fallback_on_invalid_json():
+    out = prompts.normalize_ideogram_v15("totally not json")
     obj = _loads(out)
+    assert obj["aspect_ratio"] == "1:1"
     assert obj["high_level_description"] == "totally not json"
     assert obj["compositional_deconstruction"]["elements"] == []
 
 
-def test_build_ideogram_studio_guide_has_guide_rules():
-    s = prompts.build_ideogram_studio_guide("expand", "auto")
+def test_v15_unwraps_double_encoded_hld():
+    inner = ('{"aspect_ratio":"4:5","high_level_description":"a red fox",'
+             '"compositional_deconstruction":{"background":"snowy field","elements":[]}}')
+    raw = json.dumps({"high_level_description": inner})
+    obj = _loads(prompts.normalize_ideogram_v15(raw))
+    assert obj["aspect_ratio"] == "4:5"
+    assert obj["high_level_description"] == "a red fox"
+    assert obj["compositional_deconstruction"]["background"] == "snowy field"
+
+
+def test_v15_unwraps_caption_wrapper():
+    raw = ('{"caption":{"aspect_ratio":"9:16","high_level_description":"a tower",'
+           '"compositional_deconstruction":{"background":"night sky","elements":[]}},'
+           '"seed":42}')
+    obj = _loads(prompts.normalize_ideogram_v15(raw))
+    assert obj["aspect_ratio"] == "9:16"
+    assert obj["high_level_description"] == "a tower"
+
+
+def test_v15_compact_and_non_ascii():
+    raw = '{"aspect_ratio":"1:1","high_level_description":"café in Łódź"}'
+    out = prompts.normalize_ideogram_v15(raw)
+    assert ", " not in out and ": " not in out
+    assert "café" in out and "Łódź" in out
+
+
+def test_build_ideogram_studio_v15_has_framework_rules():
+    s = prompts.build_ideogram_studio_v15("expand", "auto")
     low = s.lower()
     assert "json" in low
-    for token in ("bbox", "color_palette", "art_style", "desc"):
+    for token in ("aspect_ratio", "high_level_description",
+                  "compositional_deconstruction", "bbox", "desc",
+                  "transparent background"):
         assert token in s
+    # v15: bez pól strukturalnych stylu, styl prozą
+    assert "style_description" in s  # wymienione jako zakazane
+    assert "warm" in low             # zakaz "warm" w gradacji foto
+    assert "50" in s                 # limit słów HLD
+    assert "0" in s and "1000" in s  # skala bboxów
+
+
+def test_build_ideogram_studio_v15_refine_migrates_legacy():
+    s = prompts.build_ideogram_studio_v15("refine", "person")
+    low = s.lower()
+    assert "refine" in low or "existing" in low or "repair" in low
+    assert "style_description" in s
+
+
+def test_inject_trigger_works_on_v15_json():
+    base = prompts.normalize_ideogram_v15(
+        '{"aspect_ratio":"1:1","high_level_description":"a person stands"}')
+    out = prompts.inject_trigger_ideogram(base, "ohwx person")
+    obj = _loads(out)
+    assert obj["high_level_description"] == "ohwx person, a person stands"
+    assert obj["aspect_ratio"] == "1:1"

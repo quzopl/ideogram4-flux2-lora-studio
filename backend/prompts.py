@@ -8,6 +8,7 @@ without meta phrases like "the image shows". Two styles are supported:
 """
 from __future__ import annotations
 import json
+import math
 import re
 
 # Universal FLUX.2 rules: its text encoder is an LLM (Mistral/Qwen3), so it wants
@@ -447,60 +448,47 @@ def postprocess_caption(text: str, fmt: str) -> str:
 
 
 # =========================================================================== #
-# Ideogram 4 — pełny schemat wg przewodnika (konwerter promptów tekst->JSON).
-# Osobny od pragmatycznego normalize_ideogram (ten zostaje dla opisów datasetu).
+# Ideogram — framework v15 (konwerter promptów studia tekst->JSON).
+# Trzy klucze: aspect_ratio, high_level_description, compositional_deconstruction.
+# Bez style_description/color_palette — styl, światło i medium idą prozą w HLD
+# lub background. Osobny od normalize_ideogram (ten zostaje dla opisów datasetu).
 # =========================================================================== #
-_HEX6_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_ASPECT_RE = re.compile(r"^\s*(\d+)\s*:\s*(\d+)\s*$")
+_PX_SIZE_RE = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*$")
 
 
-def _upper_hex_list(value) -> list | None:
-    """Lista poprawnych kolorów #RRGGBB WIELKIMI literami; None gdy brak/niepoprawne."""
-    if not isinstance(value, list):
+def _norm_aspect_ratio(value) -> str | None:
+    """'W:H' lub 'WxH' (px) -> zredukowane 'W:H'; None gdy brak/'auto'/niepoprawne."""
+    if not isinstance(value, str):
         return None
-    out = []
-    for c in value:
-        if isinstance(c, str) and _HEX6_RE.match(c.strip()):
-            out.append("#" + c.strip()[1:].upper())
-    return out or None
+    m = _ASPECT_RE.match(value) or _PX_SIZE_RE.match(value)
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    if w <= 0 or h <= 0:
+        return None
+    g = math.gcd(w, h)
+    return f"{w // g}:{h // g}"
 
 
 def _norm_bbox(value):
-    """bbox = lista 4 liczb -> [int,int,int,int]; inaczej None."""
-    if isinstance(value, list) and len(value) == 4:
-        try:
-            return [int(v) for v in value]
-        except (TypeError, ValueError):
-            return None
-    return None
+    """bbox = lista 4 liczb -> [y1,x1,y2,x2] z y1<y2, x1<x2; inaczej None."""
+    if not (isinstance(value, list) and len(value) == 4):
+        return None
+    try:
+        y1, x1, y2, x2 = (int(v) for v in value)
+    except (TypeError, ValueError):
+        return None
+    if y1 > y2:
+        y1, y2 = y2, y1
+    if x1 > x2:
+        x1, x2 = x2, x1
+    return [y1, x1, y2, x2]
 
 
-def _norm_style_guide(raw_style) -> dict:
-    """style_description w kolejności zależnej od foto/nie-foto (wg przewodnika)."""
-    raw = raw_style if isinstance(raw_style, dict) else {}
-    style: dict = {}
-    if "aesthetics" in raw:
-        style["aesthetics"] = str(raw.get("aesthetics", "")).strip()
-    if "lighting" in raw:
-        style["lighting"] = str(raw.get("lighting", "")).strip()
-    is_photo = "photo" in raw or "art_style" not in raw
-    if is_photo:
-        if "photo" in raw:
-            style["photo"] = str(raw.get("photo", "")).strip()
-        if "medium" in raw:
-            style["medium"] = str(raw.get("medium", "")).strip()
-    else:
-        if "medium" in raw:
-            style["medium"] = str(raw.get("medium", "")).strip()
-        style["art_style"] = str(raw.get("art_style", "")).strip()
-    pal = _upper_hex_list(raw.get("color_palette"))
-    if pal is not None:
-        style["color_palette"] = pal
-    return style
-
-
-def _norm_elements_guide(raw_elements) -> list:
-    """Elementy w ścisłej kolejności kluczy: obj=type,bbox,desc,color_palette;
-    text=type,bbox,text,desc,color_palette."""
+def _norm_elements_v15(raw_elements) -> list:
+    """Elementy v15 w ścisłej kolejności kluczy: obj=type,bbox?,desc;
+    text=type,bbox?,text,desc. Bez color_palette."""
     out: list[dict] = []
     if not isinstance(raw_elements, list):
         return out
@@ -514,75 +502,285 @@ def _norm_elements_guide(raw_elements) -> list:
         if bbox is not None:
             new["bbox"] = bbox
         if is_text:
-            new["text"] = str(el.get("text", "")).strip()
-        new["desc"] = str(el.get("desc", el.get("description", ""))).strip()
-        pal = _upper_hex_list(el.get("color_palette"))
-        if pal is not None:
-            new["color_palette"] = pal
+            new["text"] = str(el.get("text") or el.get("content") or "").strip()
+        new["desc"] = str(el.get("desc", el.get("description", "")) or "").strip()
         out.append(new)
     return out
 
 
-def normalize_ideogram_guide(raw: str) -> str:
-    """Surowe wyjście modelu -> kompaktowy JSON Ideogram zgodny z przewodnikiem."""
+def _unwrap_v15(obj: dict) -> dict:
+    """Rozpakuj podwójnie zakodowany JSON i opakowania caption/data (sekcja 13.1)."""
+    for key in ("caption", "data"):
+        inner = obj.get(key)
+        if isinstance(inner, dict) and (
+            "high_level_description" in inner or "compositional_deconstruction" in inner
+        ):
+            obj = inner
+        elif isinstance(inner, str):
+            parsed = _extract_json_object(inner)
+            if parsed is not None:
+                obj = parsed
+    hld = obj.get("high_level_description")
+    if isinstance(hld, str) and hld.lstrip().startswith("{"):
+        parsed = _extract_json_object(hld)
+        if parsed is not None and (
+            "high_level_description" in parsed or "compositional_deconstruction" in parsed
+        ):
+            obj = parsed
+    return obj
+
+
+def normalize_ideogram_v15(raw: str, default_ratio: str = "1:1") -> str:
+    """Surowe wyjście modelu -> kompaktowy JSON Ideogram zgodny z frameworkiem v15.
+
+    Wymusza strukturę (kolejność kluczy, format aspect_ratio, kształt elementów)
+    i wycina pola starego schematu (style_description itd.). Gdy wejście nie
+    zawiera poprawnego JSON-a, zawija tekst w minimalny poprawny schemat.
+    """
     obj = _extract_json_object(raw)
     if obj is None:
         text = " ".join(raw.strip().split())
         return _compact({
+            "aspect_ratio": default_ratio,
             "high_level_description": text,
             "compositional_deconstruction": {"background": text, "elements": []},
         })
+    obj = _unwrap_v15(obj)
+    ratio = (_norm_aspect_ratio(obj.get("aspect_ratio"))
+             or _norm_aspect_ratio(obj.get("size"))
+             or default_ratio)
     comp_raw = obj.get("compositional_deconstruction")
     comp_raw = comp_raw if isinstance(comp_raw, dict) else {}
-    result: dict = {
+    return _compact({
+        "aspect_ratio": ratio,
         "high_level_description": str(obj.get("high_level_description", "")).strip(),
-    }
-    if "style_description" in obj:
-        result["style_description"] = _norm_style_guide(obj.get("style_description"))
-    result["compositional_deconstruction"] = {
-        "background": str(comp_raw.get("background", "")).strip(),
-        "elements": _norm_elements_guide(comp_raw.get("elements")),
-    }
-    return _compact(result)
+        "compositional_deconstruction": {
+            "background": str(comp_raw.get("background", "")).strip(),
+            "elements": _norm_elements_v15(comp_raw.get("elements")),
+        },
+    })
 
 
-_IDEOGRAM_GUIDE_BASE = (
-    "You are a prompt engineer for the Ideogram 4 text-to-image model, which was trained "
-    "on structured JSON captions with a strict key order."
+_IDEOGRAM_V15_BASE = (
+    "You are a prompt engineer for the Ideogram 4 text-to-image model. You convert a "
+    "natural-language idea into ONE structured JSON caption (framework v15) consumed by "
+    "the image renderer."
 )
 
-_IDEOGRAM_GUIDE_SCHEMA = (
-    " Convert the user's prompt into ONE Ideogram 4 JSON object and output JSON only, no "
-    "prose. Top-level keys in this exact order: \"high_level_description\" (one or two "
-    "sentences, the anchor), \"style_description\", \"compositional_deconstruction\". First "
-    "decide PHOTO vs NON-PHOTO from the prompt's cues. For a photo use the key \"photo\" "
-    "with \"medium\":\"photograph\" and order style_description keys as: aesthetics, "
-    "lighting, photo, medium, color_palette. For a painting/illustration/3D render use "
-    "\"art_style\" (never \"photo\") with a matching \"medium\" and order: aesthetics, "
-    "lighting, medium, art_style, color_palette. Never use photo and art_style together. "
-    "Describe lighting in rich detail. compositional_deconstruction must have \"background\" "
-    "(before \"elements\") and \"elements\". Break every salient object into its own "
-    "element. A literal, legible piece of text to render is a {\"type\":\"text\",\"bbox\":"
-    "[y,x,y,x],\"text\":\"EXACT STRING\",\"desc\":\"...\"} element; decorative/illegible "
-    "signs stay as {\"type\":\"obj\",\"bbox\":[y,x,y,x],\"desc\":\"...\"}. Give hard-to-"
-    "render objects (barbell, weapon, hands) their own element; stretch atmosphere layers "
-    "(haze, dust, cracks) over a large bbox. Bounding boxes are [y_min, x_min, y_max, "
-    "x_max] on a 0-1000 scale, origin top-left, Y FIRST; foreground low in frame (high y), "
-    "background high (low y). Colors: a \"color_palette\" array of UPPERCASE hex "
-    "\"#RRGGBB\" (no shorthand), up to 16 globally and up to 5 per element, including "
-    "shadows, highlights and accents. Element key order is strict — obj: type, bbox, desc, "
-    "color_palette; text: type, bbox, text, desc, color_palette. Resolve contradictions "
-    "deliberately instead of passing the conflict on (e.g. f/1.4 on a full body -> "
-    "f/1.8-2.8; \"oil impasto\" with a 50mm lens -> pick one mode and drop the conflicting "
-    "wording). Add texture cues for realism (skin pores, film grain, wet metal sheen). Keep "
-    "any LoRA token exactly as given and place it at the start of the main element's desc "
-    "and in high_level_description; when converting a painting to a photo, drop a painterly "
-    "style trigger. Output ONLY the JSON object."
+_IDEOGRAM_V15_CONTRACT = (
+    " OUTPUT CONTRACT: emit a SINGLE MINIFIED one-line JSON object with exactly these "
+    "three top-level keys in this order: \"aspect_ratio\", \"high_level_description\", "
+    "\"compositional_deconstruction\" (an object with \"background\" then \"elements\"). "
+    "No code fences, no comments, no other top-level keys. The old fields "
+    "style_description, aesthetics, lighting, photo, color_palette, medium and art_style "
+    "DO NOT EXIST anymore — style, lighting, medium and mood are woven as prose into "
+    "high_level_description or background. Keep non-ASCII characters as-is (CJK, "
+    "Cyrillic, diacritics); never \\uNNNN-escape or transliterate. Use single quotes for "
+    "quoted names in prose fields ('Joe's Diner'); the \"text\" field of a text element "
+    "carries the user's literal content."
 )
 
+_IDEOGRAM_V15_ASPECT = (
+    " ASPECT_RATIO: a \"W:H\" string of positive integers, chosen FIRST — it drives every "
+    "bbox decision. If the user gives W:H, copy it; if they give pixel dimensions "
+    "(768x1024), reduce to a fraction (3:4); otherwise pick by medium and composition: "
+    "panorama 16:9 or 3:1, portrait subject 9:16 or 4:5, book cover 2:3, poster 3:4, "
+    "ambiguous 1:1. NEVER emit the literal \"auto\"."
+)
 
-def build_ideogram_studio_guide(action: str = "expand", subject: str = "auto") -> str:
-    """System-prompt konwertera tekst->Ideogram JSON wg pełnego przewodnika."""
-    act = _IDEOGRAM_STUDIO_ACTION.get(action, _IDEOGRAM_STUDIO_ACTION["expand"])
+_IDEOGRAM_V15_HLD = (
+    " HIGH_LEVEL_DESCRIPTION: an observational summary, HARD LIMIT 50 words, one long "
+    "sentence (max two), reading like a short prompt. Start with the subject — never "
+    "'this image shows', 'depicts' or 'captures'. Identify the subject(s), the medium and "
+    "the overall composition; name recognizable brands and characters in full ('Nike Air "
+    "Jordan 1', 'Eiffel Tower'). Do not enumerate granular details — those go to element "
+    "desc or background. Post-processing effects (film grain, halation, Kodak Portra, "
+    "lens diffusion, bokeh) are described HERE as prose, only if the user asked for them. "
+    "For a transparent background, weave in the literal phrase 'on a transparent "
+    "background'."
+)
+
+_IDEOGRAM_V15_ELEMENTS = (
+    " ELEMENTS: each element is {\"type\":\"obj\",\"bbox\":[y1,x1,y2,x2],\"desc\":\"...\"}"
+    " or {\"type\":\"text\",\"bbox\":[y1,x1,y2,x2],\"text\":\"LINE 1\\nLINE 2\","
+    "\"desc\":\"...\"}; bbox is optional per element. ONE SUBJECT = ONE ELEMENT "
+    "(critical): a coherent subject — one animal, person, vehicle, building, plant, "
+    "instrument, machine — is exactly ONE obj element; anatomical and structural parts, "
+    "worn items (watch, jacket, jewelry) and held props are attributes inside its desc, "
+    "NEVER separate elements. Multiple distinct subjects (a person AND a dog; three "
+    "runners) get one element each. A transparent container plus its contents is ONE "
+    "element; an opened car/machine with exposed interior is ONE element. DESC: 30-60 "
+    "words, hard cap 60; identity first, then the key attributes, then one "
+    "distinguishing detail; each desc is a standalone catalog entry. For people always "
+    "name: skin tone, hair (color + style), every visible garment with its color, facial "
+    "expression and gaze, pose, one distinguishing feature. For objects: shape, material, "
+    "color, characteristic parts. NEVER put in desc: shadows of any kind; camera/render "
+    "language (depth of field, sharpness, bokeh, exposure, motion blur, lens flare, "
+    "chromatic aberration, grain) — render properties go to high_level_description or "
+    "background as prose and ONLY when the user named them; the one exception is a "
+    "viewpoint/angle ('low-angle', \"bird's-eye view\"), allowed once, usually on the "
+    "main subject. No impression words (luminous, radiant, vibrant, gorgeous, stunning, "
+    "breathtaking) — use observable properties instead. Do not repeat scene-wide light, "
+    "weather or surroundings per element — describe them ONCE in background. Anchor "
+    "positions to named references ('resting on the lower-right corner of the table in "
+    "front of the laptop', not 'sitting on the surface')."
+)
+
+_IDEOGRAM_V15_BACKGROUND = (
+    " BACKGROUND describes only the scene's SHELL: walls and finishes, floor/ground and "
+    "its condition, ceiling and architecture, windows as architecture, atmosphere (sky, "
+    "clouds, fog), the scene-wide ambient light, and distant out-of-focus context. NO "
+    "DOUBLE COUNTING: every component lives in exactly one field — anything described in "
+    "background must NOT also be an obj element. ALWAYS-BACKGROUND (never an obj): sky, "
+    "clouds, horizon, distant mountains/hills/treelines, weather haze, distant skylines "
+    "and blurred crowds, the surface the scene stands on, ambient walls or a studio "
+    "backdrop. The floor/ground/pavement and its condition — wet, rain-slicked, puddles, "
+    "reflections, snow, frost, spilled water, oil stains, footprints, tire marks, its "
+    "material and texture — lives ONLY in background, zero tolerance, even if the input "
+    "lists it as a foreground item; otherwise the renderer treats the floor obj as a "
+    "flat 2D strip and buries the subject's feet. Discrete objects ON the floor (glass "
+    "shards, crushed cans, leaves, stones, dropped tools) are still elements. Furniture, "
+    "vehicles, equipment, people, decorations and freestanding lamps are obj elements, "
+    "never background — do not smuggle them in as receding arrangements ('rows of desks "
+    "recede', 'cars parked along the street'). Objects BUILT INTO the architecture "
+    "(chalkboard on the back wall, fireplace, large mounted TV, stage, built-in "
+    "bookshelf, fixed reception desk, permanent signage) get a DUAL MENTION: (1) mention "
+    "in background as part of the shell, (2) emit as an obj whose desc starts with 'the "
+    "primary background element', (3) place it FIRST in the elements list. No "
+    "medium/post-processing effects in background (film grain, lens flare, vignetting, "
+    "bokeh, paper or canvas texture, halftone) — those belong in high_level_description."
+)
+
+_IDEOGRAM_V15_BBOX = (
+    " BBOX STRATEGY: add a bbox where precise position matters (portrait subjects, "
+    "products on a surface, logos, wall signs, distinct placeable objects); omit it for "
+    "dense or innumerable content (crowds, flower fields, scattered particles, starry "
+    "skies). Coordinates are normalized 0-1000 in BOTH axes relative to the image shape: "
+    "x left-to-right, y top-to-bottom, origin top-left, format [y1,x1,y2,x2] with y1<y2 "
+    "and x1<x2. SHAPE WARNING: [0,0,500,500] is square only on a square frame — for "
+    "round or square objects scale the spans so (x2-x1)/(y2-y1) approximates W/H; on "
+    "wide frames prefer narrower x spans for a single subject; with several subjects "
+    "give each a tight bbox so none dominates. A main portrait subject should have y2 "
+    "near 1000 (reaching the bottom of the frame) and y1 just under the top edge — do "
+    "not strand the figure with y2 around 760-800."
+)
+
+_IDEOGRAM_V15_SPECIFIC = (
+    " SPECIFICITY — commit to one value; this JSON feeds a diffusion model, leave "
+    "nothing to imagine. Banned hedges in elements and background: 'things like', 'such "
+    "as', 'e.g.', 'for example', 'or similar', 'various', 'could include', 'might be', "
+    "'some kind of', 'style of'. Banned alternatives for a single property ('oak or "
+    "walnut', 'cream or ivory') — pick ONE; 'or' is reserved for literal choice idioms "
+    "like 'YES' or 'NO'. Typography: name ONE typeface category, ONE weight, ONE style. "
+    "Banned implied language: implied, suggested, hinted, barely visible, possibly, "
+    "perhaps, maybe, reads as, almost — if it is in the scene, paint it concretely; if "
+    "not, omit it. EXHAUSTIVE CONTENT: when the user supplies enumerable content "
+    "(schedules, lists, menu items, steps, names, times), EVERY item must appear — as "
+    "many text elements as needed. Every explicitly named visual unit MUST be its own "
+    "element: each quoted string is a text element verbatim; a speech bubble is a text "
+    "element for the quote AND an obj for the bubble; named decorative elements, badges, "
+    "chips, CTAs each get their own obj. Before emitting, count the named visual units "
+    "in the prompt — the elements list must have at least that many. No placeholder "
+    "enumeration: a sequentially numbered set (stones 1-50, seats A1-A20, 31 calendar "
+    "days) gets EVERY item, no 'etc.'. Do not invent concepts the user did not ask for "
+    "(glitch art, wireframe overlay, digital artifacts)."
+)
+
+_IDEOGRAM_V15_PLANNING = (
+    " PLANNING: choose the medium — photograph, illustration, 3D render or graphic "
+    "design — as natural prose in high_level_description/background, not as a "
+    "structural slot. Graphic design covers posters, covers, flyers, banners, stickers, "
+    "logos, packaging, app icons, UI mockups, infographics, menus, cards, tickets, "
+    "signage. Default to photograph when silent or ambiguous — fantastical subjects in "
+    "a photo are fine; leading imperative verbs ('Illustrate a…', 'Paint a…', 'Draw "
+    "a…', 'Render a…') do NOT signal a medium. Name the style ONCE in prose ('Studio "
+    "Ghibli animation', '35mm film photograph', 'flat vector'). A 'professional "
+    "picture/photo/portrait' of a person means a corporate/LinkedIn-style headshot: "
+    "neutral business attire, soft even daylight, neutral backdrop, friendly expression "
+    "— not dramatic studio rim-lighting or creamy DSLR bokeh. PHOTOREAL DEFAULTS: "
+    "default to a phone-snapshot iPhone aesthetic — ambient natural light, neutral "
+    "white balance, faithful (not beautified) skin tones, casual framing; avoid "
+    "DSLR-magazine markers (creamy bokeh, telephoto compression, dramatic rim light, "
+    "cinematic grade) — they signal AI generation. Default light: 'natural daylight', "
+    "'overcast daylight', 'diffused daylight', 'cool-neutral white balance'. The word "
+    "'warm' is BANNED as a grading adjective ('warm light', 'warm tone', 'warm "
+    "grading') — when the scene physically has a warm source, name the SOURCE "
+    "('candle flame', 'sodium streetlamp') and the local pool of light ('amber pool "
+    "from the candle') while the global grade stays neutral. Prefer off-center, "
+    "rule-of-thirds composition; centered ONLY when explicitly requested or the genre "
+    "is inherently symmetrical. No motion blur in candid/realistic shots. Mention "
+    "saturation at most once and only if asked. POPULATE underspecified scenes: real "
+    "scenes are inhabited — add plausible secondary subjects, micro-props implying the "
+    "subject's life, environmental texture and small narrative moments, layered across "
+    "foreground (a blurred leaf in the corner, a bowl rim), midground and background. "
+    "Commit to a specific cultural/regional identity ('Vietnamese pho stall outside "
+    "Hoi An', not 'Southeast Asian village'). Built environments need text everywhere: "
+    "shop name, sub-signs ('OPEN', \"TODAY'S SPECIAL\"), menu boards with handwritten "
+    "items, price tags, jar labels, posters — concrete content, never 'various labels'. "
+    "OVERRIDE: when the brief says minimal, sparse, empty, lonely, isolated, quiet, "
+    "still, negative space, alone, single subject or in the middle of nowhere — respect "
+    "the restraint and skip populating. Fantasy/sci-fi briefs get a population bonus: "
+    "stacked sky drama (galaxies, ringed planets, several moons, nebulae), opposing "
+    "focal points, midground scale anchors, light/energy effects, exotic architecture, "
+    "deeply saturated palettes."
+)
+
+_IDEOGRAM_V15_TEXT = (
+    " TEXT ELEMENTS: \"text\" carries the literal characters visible in the image — "
+    "preserve diacritics, case and punctuation, never transliterate. Text sources: text "
+    "the user quoted (verbatim); text the format requires (headlines, taglines, names, "
+    "dates, CTAs, brands); contextual in-scene text (signs, labels, license plates, "
+    "jersey numbers, neon); numeric content (bib numbers, dates, prices, scores — "
+    "numbers ARE text); product brands (if an element names a product without a brand, "
+    "invent a full brand identity and list every label). Be exhaustive: if a viewer "
+    "could read it, it goes on the list. Each text element appears once; do not restate "
+    "its characters in any desc — refer to it by role or position. Use \\n for line "
+    "breaks WITHIN one element and separate list items for visually distinct blocks; "
+    "for stylized hero typography stack \\n at word boundaries ('ENTRE\\nVERSOS E\\n"
+    "CONTOS') — long single-line titles produce typos. LANGUAGE SCOPING: all prose "
+    "(high_level_description, background, desc) is ALWAYS in English regardless of the "
+    "brief's language; only the literal \"text\" field stays in the brief's language. "
+    "POP CULTURE: when the idea names or clearly implies a brand, product, public "
+    "figure, fictional character, film, game or team, the output MUST carry the "
+    "explicit name in the proper element's desc — never a generic stand-in ('Nike Dunk "
+    "Low Panda', not 'black and white retro sneakers'). TRANSPARENT BACKGROUND: if the "
+    "idea calls for a transparent background, alpha channel, cutout or sticker style, "
+    "the background field MUST be exactly the string 'transparent background' — no "
+    "paraphrase. Keep any LoRA trigger token exactly as given, at the start of "
+    "high_level_description. Output ONLY the JSON object."
+)
+
+_IDEOGRAM_V15_ACTION = {
+    "expand": (
+        " The user gives a short idea plus optionally a target aspect ratio. Expand it "
+        "into a complete v15 JSON caption, inventing plausible concrete details "
+        "(setting, populated depth layers, composition, light as prose) that fit the "
+        "idea while staying faithful to it."
+    ),
+    "refine": (
+        " The user gives an existing prompt — possibly messy, tag-based, written for "
+        "another model, or an older Ideogram JSON. Repair and migrate it: unwrap "
+        "double-encoded JSON and 'caption'/'data' wrappers; derive aspect_ratio from a "
+        "pixel 'size' when no explicit ratio exists; the legacy style_description "
+        "fields (aesthetics, lighting, photo, color_palette, medium, art_style) do not "
+        "exist in v15 — rewrite their content as prose into high_level_description "
+        "(medium, style, post-processing) and/or background (scene light, atmosphere), "
+        "dropping the color palette (weave important colors into element descs); merge "
+        "over-split subjects into one element each, parts into desc; move floor, "
+        "shadows and camera language to the proper fields or cut them; cut 'warm' "
+        "grading and beautifying DSLR markers from photoreal prompts unless a cinematic "
+        "look was explicitly requested; recompute bboxes for the target ratio (main "
+        "subject y2 near 1000, narrower x spans on wide frames). Preserve the user's "
+        "intent and key elements; do not introduce major new subjects."
+    ),
+}
+
+
+def build_ideogram_studio_v15(action: str = "expand", subject: str = "auto") -> str:
+    """System-prompt konwertera tekst->Ideogram JSON wg frameworku v15."""
+    act = _IDEOGRAM_V15_ACTION.get(action, _IDEOGRAM_V15_ACTION["expand"])
     subj = _STUDIO_SUBJECT.get(subject, "")
-    return _IDEOGRAM_GUIDE_BASE + act + subj + _IDEOGRAM_GUIDE_SCHEMA
+    return (_IDEOGRAM_V15_BASE + act + subj + _IDEOGRAM_V15_CONTRACT
+            + _IDEOGRAM_V15_ASPECT + _IDEOGRAM_V15_HLD + _IDEOGRAM_V15_ELEMENTS
+            + _IDEOGRAM_V15_BACKGROUND + _IDEOGRAM_V15_BBOX + _IDEOGRAM_V15_SPECIFIC
+            + _IDEOGRAM_V15_PLANNING + _IDEOGRAM_V15_TEXT)
