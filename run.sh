@@ -23,7 +23,7 @@ uv pip install -r requirements.txt
 export HF_HOME="${HF_HOME:-/mnt/intel/huggingface}"
 mkdir -p "$HF_HOME"
 
-PORT="${PORT:-8023}"
+PORT="${PORT:-8123}"
 echo ""
 echo ">> Otwórz w przeglądarce:  http://127.0.0.1:${PORT}"
 echo ">> Cache modeli (HF_HOME): ${HF_HOME}"
