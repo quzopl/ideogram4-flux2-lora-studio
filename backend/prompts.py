@@ -486,6 +486,15 @@ def _norm_bbox(value):
     return [y1, x1, y2, x2]
 
 
+def _prose(value) -> str:
+    """Pole prozą: string bez zmian; dict/lista od modelu -> wartości jako proza."""
+    if isinstance(value, dict):
+        return ", ".join(_prose(v) for v in value.values() if _prose(v))
+    if isinstance(value, list):
+        return ", ".join(_prose(v) for v in value if _prose(v))
+    return str(value if value is not None else "").strip()
+
+
 def _norm_elements_v15(raw_elements) -> list:
     """Elementy v15 w ścisłej kolejności kluczy: obj=type,bbox?,desc;
     text=type,bbox?,text,desc. Bez color_palette."""
@@ -503,7 +512,7 @@ def _norm_elements_v15(raw_elements) -> list:
             new["bbox"] = bbox
         if is_text:
             new["text"] = str(el.get("text") or el.get("content") or "").strip()
-        new["desc"] = str(el.get("desc", el.get("description", "")) or "").strip()
+        new["desc"] = _prose(el.get("desc", el.get("description", "")))
         out.append(new)
     return out
 
@@ -520,8 +529,12 @@ def _unwrap_v15(obj: dict) -> dict:
             parsed = _extract_json_object(inner)
             if parsed is not None:
                 obj = parsed
+    # Podwójnie zakodowany JSON w hld — także owinięty w ```json``` przez model.
+    # Prawdziwa proza nigdy nie zawiera nazw kluczy schematu.
     hld = obj.get("high_level_description")
-    if isinstance(hld, str) and hld.lstrip().startswith("{"):
+    if isinstance(hld, str) and (
+        "high_level_description" in hld or "compositional_deconstruction" in hld
+    ):
         parsed = _extract_json_object(hld)
         if parsed is not None and (
             "high_level_description" in parsed or "compositional_deconstruction" in parsed
@@ -553,9 +566,9 @@ def normalize_ideogram_v15(raw: str, default_ratio: str = "1:1") -> str:
     comp_raw = comp_raw if isinstance(comp_raw, dict) else {}
     return _compact({
         "aspect_ratio": ratio,
-        "high_level_description": str(obj.get("high_level_description", "")).strip(),
+        "high_level_description": _prose(obj.get("high_level_description", "")),
         "compositional_deconstruction": {
-            "background": str(comp_raw.get("background", "")).strip(),
+            "background": _prose(comp_raw.get("background", "")),
             "elements": _norm_elements_v15(comp_raw.get("elements")),
         },
     })

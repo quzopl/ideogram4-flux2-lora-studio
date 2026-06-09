@@ -112,6 +112,20 @@ _OBJECT_INFO_TTL = 300.0  # seconds
 
 app = FastAPI(title="FLUX LoRA Dataset Prep")
 
+
+@app.middleware("http")
+async def _no_cache_frontend(request, call_next):
+    """Frontend bez cache przeglądarki — po aktualizacji appki UI zawsze świeże.
+
+    'no-cache' wymusza rewalidację (ETag/Last-Modified), więc niezmienione
+    pliki i tak lecą jako 304 — bez kosztu, bez czerstwego app.js.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".html", ".js", ".css")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 # In-memory job registry. Single-user local tool, so this is sufficient.
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()

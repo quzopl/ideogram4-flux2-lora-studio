@@ -262,6 +262,36 @@ def test_v15_unwraps_double_encoded_hld():
     assert obj["compositional_deconstruction"]["background"] == "snowy field"
 
 
+def test_v15_unwraps_fenced_json_inside_hld():
+    # Model potrafi owinąć właściwy JSON w ```json wewnątrz high_level_description.
+    inner = ('```json {\\"aspect_ratio\\":\\"9:16\\",\\"high_level_description\\":'
+             '\\"a seductive woman\\",\\"compositional_deconstruction\\":'
+             '{\\"background\\":\\"neon street\\",\\"elements\\":[]}}```')
+    raw = '{"aspect_ratio":"1:1","high_level_description":"' + inner + '"}'
+    obj = _loads(prompts.normalize_ideogram_v15(raw))
+    assert obj["aspect_ratio"] == "9:16"
+    assert obj["high_level_description"] == "a seductive woman"
+    assert obj["compositional_deconstruction"]["background"] == "neon street"
+
+
+def test_v15_background_as_dict_flattened_to_prose():
+    raw = ('{"aspect_ratio":"4:5","high_level_description":"a woman",'
+           '"compositional_deconstruction":{"background":'
+           '{"scene_light":"ambient neon glow","atmosphere":"urban night"},'
+           '"elements":[]}}')
+    bg = _loads(prompts.normalize_ideogram_v15(raw))["compositional_deconstruction"]["background"]
+    assert bg == "ambient neon glow, urban night"
+    assert "{" not in bg and "'" not in bg
+
+
+def test_v15_desc_as_dict_flattened_to_prose():
+    raw = ('{"aspect_ratio":"1:1","high_level_description":"s",'
+           '"compositional_deconstruction":{"background":"bg","elements":['
+           '{"type":"obj","desc":{"identity":"a red car","detail":"chrome trim"}}]}}')
+    el = _loads(prompts.normalize_ideogram_v15(raw))["compositional_deconstruction"]["elements"][0]
+    assert el["desc"] == "a red car, chrome trim"
+
+
 def test_v15_unwraps_caption_wrapper():
     raw = ('{"caption":{"aspect_ratio":"9:16","high_level_description":"a tower",'
            '"compositional_deconstruction":{"background":"night sky","elements":[]}},'
