@@ -252,6 +252,22 @@
           <button id="pUseBtn">↑ Użyj jako wejście</button>
         </div>
       </section>
+
+      <section class="card" id="pLibCard">
+        <h2><span class="num">3</span> Biblioteka promptów</h2>
+        <p class="info">Każdy wygenerowany prompt zapisuje się tu automatycznie (SQLite). Kliknij 📋, by skopiować całość jednym kliknięciem.</p>
+        <div class="tabs">
+          <button class="plibtab active" data-cat="all">Wszystkie</button>
+          <button class="plibtab" data-cat="flux">FLUX.2</button>
+          <button class="plibtab" data-cat="ideogram">Ideogram (JSON)</button>
+        </div>
+        <div id="pLibList" class="pliblist"></div>
+        <div class="row prow">
+          <button id="pLibExportBtn">⬇ Eksport do pliku .sql</button>
+          <button id="pLibRefreshBtn">↻ Odśwież</button>
+        </div>
+        <p id="pLibStatus" class="info"></p>
+      </section>
     </div><!-- /view-prompts -->
 
     <!-- WIDOK: ComfyUI -->

@@ -18,6 +18,7 @@ import time
 import traceback
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, UploadFile
@@ -66,6 +67,17 @@ def _init_db() -> None:
             node_count INTEGER NOT NULL DEFAULT 0,
             created REAL NOT NULL,
             updated REAL NOT NULL
+        )""",
+        write=True,
+    )
+    _db_query(
+        """CREATE TABLE IF NOT EXISTS prompt_library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT NOT NULL CHECK (category IN ('flux','ideogram')),
+            action TEXT NOT NULL DEFAULT '',
+            input_text TEXT NOT NULL DEFAULT '',
+            prompt TEXT NOT NULL,
+            created REAL NOT NULL
         )""",
         write=True,
     )
@@ -1307,6 +1319,102 @@ def api_comfy_editor_generate(req: ComfyEditorGenerate):
     return {"job_id": job_id}
 
 
+# --------------------------------------------------------------------------- #
+# Biblioteka promptów (SQLite) — każdy wygenerowany prompt trafia do bazy.
+# --------------------------------------------------------------------------- #
+def _prompt_category(caption_format: str) -> str:
+    """Format studia -> kategoria biblioteki. ai-toolkit to też JSON Ideogram."""
+    return "ideogram" if caption_format in ("ideogram", "aitoolkit") else "flux"
+
+
+def _save_prompt_to_library(category: str, action: str, input_text: str, prompt: str) -> int:
+    """Zapisz prompt do biblioteki; zwraca id wiersza.
+
+    Kategoria "ideogram" przyjmuje wyłącznie poprawny JSON (obiekt).
+    """
+    if category == "ideogram":
+        try:
+            obj = json.loads(prompt)
+        except (json.JSONDecodeError, ValueError):
+            obj = None
+        if not isinstance(obj, dict):
+            raise ValueError("Prompt Ideogram musi być poprawnym obiektem JSON.")
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        cur = conn.execute(
+            "INSERT INTO prompt_library(category, action, input_text, prompt, created) "
+            "VALUES (?,?,?,?,?)",
+            (category, action, input_text, prompt, time.time()),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+@app.get("/api/prompts/library")
+def api_prompt_library(category: str = "all"):
+    """Lista zapisanych promptów, najnowsze pierwsze; opcjonalny filtr kategorii."""
+    if category in ("flux", "ideogram"):
+        rows = _db_query(
+            "SELECT id, category, action, input_text, prompt, created "
+            "FROM prompt_library WHERE category=? ORDER BY id DESC",
+            (category,), many=True,
+        )
+    else:
+        rows = _db_query(
+            "SELECT id, category, action, input_text, prompt, created "
+            "FROM prompt_library ORDER BY id DESC",
+            many=True,
+        )
+    return {"prompts": [dict(r) for r in (rows or [])]}
+
+
+@app.delete("/api/prompts/library/{pid}")
+def api_prompt_library_delete(pid: int):
+    if not _db_query("SELECT 1 FROM prompt_library WHERE id=?", (pid,)):
+        raise HTTPException(404, "Nie ma promptu o takim id.")
+    _db_query("DELETE FROM prompt_library WHERE id=?", (pid,), write=True)
+    return {"ok": True}
+
+
+def _sql_quote(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+@app.get("/api/prompts/library/export")
+def api_prompt_library_export(category: str = "all"):
+    """Eksport biblioteki jako plik .sql (CREATE TABLE + INSERTy)."""
+    rows = api_prompt_library(category)["prompts"]
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        f"-- Biblioteka promptów (flux-lora-prep), eksport {stamp}, "
+        f"kategoria: {category}, pozycji: {len(rows)}",
+        "CREATE TABLE IF NOT EXISTS prompt_library (",
+        "    id INTEGER PRIMARY KEY AUTOINCREMENT,",
+        "    category TEXT NOT NULL CHECK (category IN ('flux','ideogram')),",
+        "    action TEXT NOT NULL DEFAULT '',",
+        "    input_text TEXT NOT NULL DEFAULT '',",
+        "    prompt TEXT NOT NULL,",
+        "    created REAL NOT NULL",
+        ");",
+        "",
+    ]
+    for r in rows:
+        lines.append(
+            "INSERT INTO prompt_library (id, category, action, input_text, prompt, created) "
+            f"VALUES ({r['id']}, {_sql_quote(r['category'])}, {_sql_quote(r['action'])}, "
+            f"{_sql_quote(r['input_text'])}, {_sql_quote(r['prompt'])}, {r['created']});"
+        )
+    body = "\n".join(lines) + "\n"
+    fname = f"prompts_{category}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.sql"
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="application/sql; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @app.post("/api/prompt")
 def api_prompt(req: PromptRequest):
     """Expand or refine a generation prompt (FLUX.2 or Ideogram 4 JSON) using the local LLM."""
@@ -1327,8 +1435,12 @@ def api_prompt(req: PromptRequest):
             captioner.ensure_loaded(req.model, quant)
             raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
         if req.caption_format in ("ideogram", "aitoolkit"):
-            return {"prompt": prompts.normalize_ideogram_v15(raw)}
-        return {"prompt": prompts.clean_prompt(raw)}
+            final = prompts.normalize_ideogram_v15(raw)
+        else:
+            final = prompts.clean_prompt(raw)
+        library_id = _save_prompt_to_library(
+            _prompt_category(req.caption_format), req.action, text, final)
+        return {"prompt": final, "library_id": library_id}
     except lmstudio.LMStudioError as e:
         raise HTTPException(502, f"LM Studio: {e}")
     except Exception as e:  # noqa: BLE001

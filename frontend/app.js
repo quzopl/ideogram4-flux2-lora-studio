@@ -454,7 +454,8 @@ async function generatePrompt() {
     });
     $("pOutput").value = r.prompt;
     $("pResultCard").classList.remove("hidden");
-    setPStatus("Gotowe.", "ok");
+    setPStatus("Gotowe. Zapisano w bibliotece.", "ok");
+    loadPromptLib();
   } catch (e) {
     setPStatus("Błąd: " + e.message, "err");
   } finally {
@@ -495,6 +496,127 @@ function setPStatus(msg, cls) {
   el.textContent = msg;
   el.className = "info" + (cls ? " " + cls : "");
 }
+
+// --------------------------------------------------------------------------- //
+// 📚 Biblioteka promptów (SQLite po stronie backendu)
+// --------------------------------------------------------------------------- //
+let pLibCat = "all";
+
+function setPLibStatus(msg, cls) {
+  const el = $("pLibStatus");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.className = "info" + (cls ? " " + cls : "");
+}
+
+async function copyTextToClipboard(txt) {
+  try {
+    await navigator.clipboard.writeText(txt);
+  } catch {
+    // Fallback dla http:// bez clipboard API — tymczasowa textarea.
+    const ta = document.createElement("textarea");
+    ta.value = txt;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+}
+
+function renderPromptLib(items) {
+  const list = $("pLibList");
+  if (!list) return;
+  list.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "info";
+    empty.textContent = "Biblioteka jest pusta — wygeneruj pierwszy prompt powyżej.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "plib-item";
+
+    const badge = document.createElement("span");
+    badge.className = "plib-badge " + it.category;
+    badge.textContent = it.category === "ideogram" ? "Ideogram JSON" : "FLUX.2";
+
+    const body = document.createElement("div");
+    body.className = "plib-body";
+    const text = document.createElement("div");
+    text.className = "plib-text";
+    text.textContent = it.prompt;
+    text.title = "Kliknij, by rozwinąć/zwinąć";
+    text.addEventListener("click", () => text.classList.toggle("expanded"));
+    const meta = document.createElement("div");
+    meta.className = "plib-meta";
+    const when = new Date(it.created * 1000).toLocaleString("pl-PL");
+    meta.textContent = `#${it.id} · ${when}` + (it.input_text ? ` · „${it.input_text.slice(0, 60)}”` : "");
+    body.appendChild(text);
+    body.appendChild(meta);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "📋 Kopiuj";
+    copyBtn.title = "Skopiuj cały prompt do schowka";
+    copyBtn.addEventListener("click", async () => {
+      await copyTextToClipboard(it.prompt);
+      copyBtn.textContent = "✓ Skopiowano";
+      setTimeout(() => { copyBtn.textContent = "📋 Kopiuj"; }, 1500);
+    });
+
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "🗑";
+    delBtn.title = "Usuń z biblioteki";
+    delBtn.addEventListener("click", async () => {
+      try {
+        const res = await fetch(`/api/prompts/library/${it.id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await res.text());
+        loadPromptLib();
+      } catch (e) {
+        setPLibStatus("Błąd usuwania: " + e.message, "err");
+      }
+    });
+
+    const btns = document.createElement("div");
+    btns.className = "plib-btns";
+    btns.appendChild(copyBtn);
+    btns.appendChild(delBtn);
+
+    row.appendChild(badge);
+    row.appendChild(body);
+    row.appendChild(btns);
+    list.appendChild(row);
+  }
+}
+
+async function loadPromptLib() {
+  if (!$("pLibList")) return;
+  try {
+    const r = await api(`/api/prompts/library?category=${pLibCat}`);
+    renderPromptLib(r.prompts);
+    setPLibStatus(`Pozycji: ${r.prompts.length}`, "");
+  } catch (e) {
+    setPLibStatus("Błąd wczytywania biblioteki: " + e.message, "err");
+  }
+}
+
+document.querySelectorAll(".plibtab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".plibtab").forEach((t) => t.classList.remove("active"));
+    tab.classList.add("active");
+    pLibCat = tab.dataset.cat;
+    loadPromptLib();
+  });
+});
+
+if ($("pLibExportBtn")) $("pLibExportBtn").addEventListener("click", () => {
+  // Pobranie pliku .sql zgodnie z aktywnym filtrem kategorii.
+  window.location.href = `/api/prompts/library/export?category=${pLibCat}`;
+});
+
+if ($("pLibRefreshBtn")) $("pLibRefreshBtn").addEventListener("click", loadPromptLib);
+loadPromptLib();
 
 // --------------------------------------------------------------------------- //
 // 🎨 ComfyUI: konfiguracja, biblioteki, generacja z progress + preview, galeria
