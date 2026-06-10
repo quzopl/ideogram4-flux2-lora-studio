@@ -422,7 +422,7 @@ def api_models():
 def api_fs_list(path: str = ""):
     base = (Path(path).expanduser() if path else Path.home()).resolve()
     if not base.is_dir():
-        raise HTTPException(400, f"Nie jest folderem: {base}")
+        raise HTTPException(400, f"Not a folder: {base}")
     parent = None if base.parent == base else str(base.parent)
     return {
         "path": str(base),
@@ -1509,9 +1509,29 @@ def api_ideogram_render(req: IdeogramRenderRequest):
     return {"job_id": job_id, "warnings": v15_lint.lint_v15(req.prompt)}
 
 
+def _vlm_image_to_v15(image, instruction: str, model: str, quant: str,
+                      max_tokens: int, default_ratio: str) -> str:
+    """Run the chosen vision model (local or LM Studio) and normalize to v15."""
+    lm_id = _lmstudio_model_id(model)
+    if lm_id is not None:
+        raw = lmstudio.caption_image(_lmstudio_url(), lm_id, image, instruction, max_tokens)
+    else:
+        captioner.ensure_loaded(model, quant if quant in ("4bit", "none") else "4bit")
+        raw = captioner.query_image(image, instruction, max_new_tokens=max_tokens)
+    return prompts.normalize_ideogram_v15(raw, default_ratio=default_ratio)
+
+
 @app.post("/api/ideogram/analyze")
-async def api_ideogram_analyze(file: UploadFile):
-    """Reference image -> v15 prompt draft (Florence-2: caption + real bboxes + OCR)."""
+async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
+                               model: str = Form(captioner.DEFAULT_MODEL),
+                               quant: str = Form("4bit"),
+                               max_tokens: int = Form(768)):
+    """Reference image -> v15 prompt draft.
+
+    Engines: "florence" (caption + measured bboxes + OCR), "vlm" (the chosen
+    vision model drafts the whole JSON, estimating bboxes itself), "hybrid"
+    (Florence measures the bboxes/OCR, the vision model writes the v15 prose).
+    """
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file.")
     data = await file.read()
@@ -1520,13 +1540,34 @@ async def api_ideogram_analyze(file: UploadFile):
         image = Image.open(io.BytesIO(data)).convert("RGB")
     except Exception:
         raise HTTPException(400, "Failed to read the image.")
+
+    ratio = florence.nearest_aspect(image.width, image.height)
+    used_model = florence.DEFAULT_MODEL
     try:
-        caption, elements = florence.analyze_image(image)
+        if engine == "vlm":
+            draft = _vlm_image_to_v15(image, prompts.build_image_v15_instruction(),
+                                      model, quant, max_tokens, ratio)
+            used_model = model
+        elif engine == "hybrid":
+            caption, elements = florence.analyze_image(image)
+            base = florence.build_v15_draft(caption, elements, image.width, image.height)
+            draft = _vlm_image_to_v15(image, prompts.build_hybrid_v15_instruction(base),
+                                      model, quant, max_tokens, ratio)
+            used_model = f"{florence.DEFAULT_MODEL} + {model}"
+        else:
+            caption, elements = florence.analyze_image(image)
+            draft = florence.build_v15_draft(caption, elements, image.width, image.height)
+    except HTTPException:
+        raise
+    except lmstudio.LMStudioError as e:
+        raise HTTPException(502, f"LM Studio: {e}")
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"Florence-2 analysis failed: {e}")
-    draft = florence.build_v15_draft(caption, elements, image.width, image.height)
-    return {"json": draft, "elements": len(elements),
-            "model": florence.DEFAULT_MODEL, "warnings": v15_lint.lint_v15(draft)}
+        raise HTTPException(500, f"Image analysis failed: {e}")
+
+    n_elements = len((json.loads(draft).get("compositional_deconstruction") or {})
+                     .get("elements") or [])
+    return {"json": draft, "elements": n_elements,
+            "model": used_model, "warnings": v15_lint.lint_v15(draft)}
 
 
 @app.post("/api/prompt")

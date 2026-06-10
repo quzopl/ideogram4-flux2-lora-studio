@@ -78,24 +78,98 @@ def test_build_v15_draft_caps_hld_at_sentence():
     assert hld.startswith("The first sentence")
 
 
-def test_analyze_endpoint_uses_module(monkeypatch, tmp_path):
+def _upload_png(width=800, height=600):
     import io
-    import asyncio
     from PIL import Image
+    from starlette.datastructures import UploadFile, Headers
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), "red").save(buf, format="PNG")
+    buf.seek(0)
+    return UploadFile(buf, filename="t.png", headers=Headers({"content-type": "image/png"}))
+
+
+def test_analyze_endpoint_florence_engine(monkeypatch):
+    import asyncio
     from backend import server
 
     def fake_analyze(img):
         return "A test scene.", [{"type": "obj", "bbox": [0, 0, 500, 500], "desc": "a thing"}]
     monkeypatch.setattr(server.florence, "analyze_image", fake_analyze)
 
-    buf = io.BytesIO()
-    Image.new("RGB", (800, 600), "red").save(buf, format="PNG")
-    buf.seek(0)
-
-    from starlette.datastructures import UploadFile, Headers
-    up = UploadFile(buf, filename="t.png", headers=Headers({"content-type": "image/png"}))
-    out = asyncio.run(server.api_ideogram_analyze(up))
+    out = asyncio.run(server.api_ideogram_analyze(_upload_png()))
     obj = json.loads(out["json"])
     assert obj["aspect_ratio"] == "4:3"
     assert obj["compositional_deconstruction"]["elements"][0]["desc"] == "a thing"
     assert isinstance(out["warnings"], list)
+    assert out["model"] == florence.DEFAULT_MODEL
+
+
+def test_analyze_endpoint_vlm_engine(monkeypatch):
+    import asyncio
+    from backend import server
+
+    seen = {}
+    monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q: seen.update(model=m))
+    monkeypatch.setattr(server.captioner, "query_image",
+                        lambda img, instr, max_new_tokens=768: seen.update(instr=instr) or
+                        '{"aspect_ratio":"1:1","high_level_description":"a vlm draft",'
+                        '"compositional_deconstruction":{"background":"plain wall","elements":[]}}')
+
+    out = asyncio.run(server.api_ideogram_analyze(
+        _upload_png(), engine="vlm", model="Qwen/Qwen2.5-VL-7B-Instruct"))
+    obj = json.loads(out["json"])
+    assert obj["high_level_description"] == "a vlm draft"
+    # aspect z obrazu wygrywa, gdy model zwrócił inny / brak
+    assert obj["aspect_ratio"] in ("1:1", "4:3")
+    assert seen["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
+    assert "IMAGE" in seen["instr"]
+    assert out["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
+
+
+def test_analyze_endpoint_hybrid_engine(monkeypatch):
+    import asyncio
+    from backend import server
+
+    def fake_analyze(img):
+        return "A cat by a sign.", [
+            {"type": "obj", "bbox": [100, 100, 900, 500], "desc": "cat"},
+            {"type": "text", "bbox": [50, 600, 120, 950], "text": "HELLO", "desc": 'text "HELLO"'},
+        ]
+    monkeypatch.setattr(server.florence, "analyze_image", fake_analyze)
+    seen = {}
+    monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q: None)
+
+    def fake_query(img, instr, max_new_tokens=768):
+        seen["instr"] = instr
+        return ('{"aspect_ratio":"4:3","high_level_description":"a tabby cat next to a sign",'
+                '"compositional_deconstruction":{"background":"a plain wall","elements":['
+                '{"type":"obj","bbox":[100,100,900,500],"desc":"a tabby cat sitting upright"},'
+                '{"type":"text","bbox":[50,600,120,950],"text":"HELLO","desc":"white sans-serif sign"}]}}')
+    monkeypatch.setattr(server.captioner, "query_image", fake_query)
+
+    out = asyncio.run(server.api_ideogram_analyze(
+        _upload_png(), engine="hybrid", model="Qwen/Qwen2.5-VL-7B-Instruct",
+        quant="4bit", max_tokens=768))
+    obj = json.loads(out["json"])
+    # instrukcja hybrydowa zawiera szkic Florence z realnymi bboxami
+    assert '"bbox":[100,100,900,500]' in seen["instr"].replace(" ", "")
+    assert obj["compositional_deconstruction"]["elements"][1]["text"] == "HELLO"
+
+
+def test_image_v15_instruction_builder():
+    from backend import prompts
+    s = prompts.build_image_v15_instruction()
+    assert "IMAGE" in s
+    for token in ("aspect_ratio", "high_level_description",
+                  "compositional_deconstruction", "bbox", "0-1000"):
+        assert token in s
+    assert "style_description" in s  # wymienione jako nieistniejące
+
+
+def test_hybrid_v15_instruction_builder():
+    from backend import prompts
+    draft = '{"aspect_ratio":"4:3","high_level_description":"x"}'
+    s = prompts.build_hybrid_v15_instruction(draft)
+    assert draft in s
+    assert "KEEP" in s or "keep" in s
+    assert "bbox" in s

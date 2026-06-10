@@ -315,8 +315,14 @@
               <button id="bxAddObj" class="primary">+ obj</button>
               <button id="bxAddText">+ text</button>
               <button id="bxImp">📥 Paste JSON</button>
-              <button id="bxFromImage" title="Florence-2: scene caption + real bboxes + OCR from a reference photo">📷 From image</button>
+              <button id="bxFromImage" title="Analyze a reference photo into a v15 draft">📷 From image</button>
               <input type="file" id="bxFromImageFile" accept="image/*" class="hidden" />
+              <select id="bxImgEngine" title="How to analyze the reference image">
+                <option value="florence" selected>Florence-2 — fast, measured bboxes</option>
+                <option value="hybrid">Hybrid — Florence bboxes + VLM prose</option>
+                <option value="vlm">VLM only — full draft, estimated bboxes</option>
+              </select>
+              <select id="bxImgModel" class="hidden" title="Vision model used for the prose/draft"></select>
             </div>
             <div id="bxImpBar" class="hidden">
               <textarea id="bxImpTxt" placeholder="Paste a prompt JSON (old or new format, even broken/double-encoded — it will be unwrapped and converted to v15)" style="min-height:90px;width:100%"></textarea>

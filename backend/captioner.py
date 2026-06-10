@@ -13,8 +13,8 @@ from . import prompts
 
 # Models exposed in the UI. Keep the lighter one first for safe defaults.
 AVAILABLE_MODELS = {
-    "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen2.5-VL 3B (fp16, szybki, ~7 GB VRAM)",
-    "Qwen/Qwen2.5-VL-7B-Instruct": "Qwen2.5-VL 7B (4-bit, najlepszy opis, ~9 GB VRAM)",
+    "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen2.5-VL 3B (fp16, fast, ~7 GB VRAM)",
+    "Qwen/Qwen2.5-VL-7B-Instruct": "Qwen2.5-VL 7B (4-bit, best captions, ~9 GB VRAM)",
 }
 DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 
@@ -127,6 +127,12 @@ def caption_image(
 
     fmt="flux" -> natural-language caption; fmt="ideogram"/"aitoolkit" -> compact JSON caption.
     """
+    raw = query_image(image, prompts.caption_instruction(mode, style, fmt), max_new_tokens)
+    return prompts.postprocess_caption(raw, fmt)
+
+
+def query_image(image: Image.Image, instruction: str, max_new_tokens: int = 768) -> str:
+    """Run the loaded VLM on an image with a custom instruction; raw text out."""
     import torch
 
     model = _state["model"]
@@ -134,7 +140,6 @@ def caption_image(
     if model is None or processor is None:
         raise RuntimeError("Model not loaded — call ensure_loaded() first.")
 
-    instruction = prompts.caption_instruction(mode, style, fmt)
     messages = [
         {
             "role": "user",
@@ -164,7 +169,7 @@ def caption_image(
     decoded = processor.batch_decode(
         trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
-    return prompts.postprocess_caption(decoded, fmt)
+    return decoded
 
 
 def generate_text(

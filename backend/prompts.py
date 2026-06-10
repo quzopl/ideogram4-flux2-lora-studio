@@ -814,6 +814,53 @@ def _detail_directive(elements_detail: str, desc_detail: str) -> str:
             "guidance above): " + " ".join(parts))
 
 
+# --- Image -> v15: instructions for vision models (Qwen-VL / LM Studio) ---- #
+_IDEOGRAM_V15_IMAGE_ACTION = (
+    " IMAGE MODE: you are given an actual IMAGE. Look at it carefully and "
+    "reconstruct it as ONE v15 JSON caption: the overall subject, medium and "
+    "composition in high_level_description; the scene shell (walls, ground, sky, "
+    "ambient light, distant context) in background; and every distinct subject, "
+    "placeable object and piece of LEGIBLE text as its own element. Estimate each "
+    "element's bbox from where it actually sits in the image, mapped onto the "
+    "0-1000 grid ([y1,x1,y2,x2], origin top-left). Put the exact visible "
+    "characters into the \"text\" field of text elements. PRESERVE THE COMPOSITION "
+    "AND LAYOUT exactly — describe what is there, do not invent content that is "
+    "not visible. Pick aspect_ratio closest to the image's real proportions."
+)
+
+
+def build_image_v15_instruction() -> str:
+    """Instruction for a vision model: image -> full v15 JSON draft."""
+    return (_IDEOGRAM_V15_BASE + _IDEOGRAM_V15_IMAGE_ACTION + _IDEOGRAM_V15_CONTRACT
+            + _IDEOGRAM_V15_ASPECT + _IDEOGRAM_V15_HLD + _IDEOGRAM_V15_ELEMENTS
+            + _IDEOGRAM_V15_BACKGROUND + _IDEOGRAM_V15_BBOX + _IDEOGRAM_V15_SPECIFIC
+            + _IDEOGRAM_V15_TEXT)
+
+
+def build_hybrid_v15_instruction(draft_json: str) -> str:
+    """Instruction for a vision model: enrich a Florence draft, keeping its bboxes.
+
+    The draft carries MEASURED bboxes and OCR text; the vision model only
+    rewrites the prose (HLD, background, descs) to full v15 quality.
+    """
+    return (
+        _IDEOGRAM_V15_BASE
+        + " You are given an IMAGE and a machine-generated DRAFT of its v15 JSON "
+        "caption. The draft's bboxes were MEASURED by an object detector and its "
+        "text elements come from OCR — they are accurate. Your job is to look at "
+        "the image and rewrite ONLY the prose: write a proper high_level_description "
+        "(max 50 words, starts with the subject), a proper background (the scene "
+        "shell: walls, ground, sky, ambient light), and a full desc for every "
+        "element (identity first, then key attributes, one distinguishing detail; "
+        "30-60 words for main subjects). KEEP every element's bbox, type, order and "
+        "literal \"text\" value exactly as in the draft. You may drop an element "
+        "only if it clearly duplicates another one or is part of an already-listed "
+        "subject (one subject = one element). Do not add elements that are not in "
+        "the draft. DRAFT: " + draft_json
+        + _IDEOGRAM_V15_CONTRACT
+    )
+
+
 def build_ideogram_studio_v15(action: str = "expand", subject: str = "auto",
                               elements_detail: str = "balanced",
                               desc_detail: str = "balanced") -> str:
