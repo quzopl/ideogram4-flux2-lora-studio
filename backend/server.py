@@ -26,7 +26,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import captioner, comfy_client, comfy_workflows, image_utils, lmstudio, prompts, v15_lint
+from . import (captioner, comfy_client, comfy_workflows, ideogram_workflow,
+               image_utils, lmstudio, prompts, v15_lint)
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -1452,6 +1453,59 @@ def api_prompt_library_export(category: str = "all"):
         media_type="application/sql; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# --------------------------------------------------------------------------- #
+# Render Ideogram 4 — wbudowany workflow (backend/ideogram_workflow.py),
+# joby i galeria współdzielone z resztą integracji ComfyUI.
+# --------------------------------------------------------------------------- #
+IDEOGRAM_RENDER_CFG_PATH = WORK / "ideogram_render.json"
+
+
+class IdeogramRenderRequest(BaseModel):
+    prompt: str       # minified JSON v15
+    params: dict = {}
+
+
+@app.get("/api/ideogram/render/config")
+def api_ideogram_render_config():
+    """Ostatnio użyte parametry renderu (zmergowane z domyślnymi)."""
+    return {"params": ideogram_workflow.merge_params(_load_named(IDEOGRAM_RENDER_CFG_PATH)),
+            "presets": list(ideogram_workflow.PRESETS.keys())}
+
+
+@app.post("/api/ideogram/render")
+def api_ideogram_render(req: IdeogramRenderRequest):
+    """Wyrenderuj prompt v15 wbudowanym workflow Ideogram 4 na ComfyUI."""
+    try:
+        obj = json.loads(req.prompt)
+    except (json.JSONDecodeError, ValueError):
+        obj = None
+    if not isinstance(obj, dict):
+        raise HTTPException(400, "Prompt musi być obiektem JSON (v15).")
+    params = ideogram_workflow.merge_params(req.params)
+    _save_named(IDEOGRAM_RENDER_CFG_PATH, params)
+    workflow = ideogram_workflow.build_workflow(req.prompt, params)
+
+    job_id = uuid.uuid4().hex[:12]
+    with COMFY_JOBS_LOCK:
+        COMFY_JOBS[job_id] = {
+            "id": job_id,
+            "state": "pending",
+            "total": 1,
+            "done_count": 0,
+            "current": "Start…",
+            "current_node": "",
+            "progress": {"value": 0, "max": 0},
+            "preview": None,
+            "preview_ts": 0,
+            "images": [],
+            "error": "",
+            "cancel": False,
+        }
+    t = threading.Thread(target=_run_comfy_raw_job, args=(job_id, workflow), daemon=True)
+    t.start()
+    return {"job_id": job_id, "warnings": v15_lint.lint_v15(req.prompt)}
 
 
 @app.post("/api/prompt")

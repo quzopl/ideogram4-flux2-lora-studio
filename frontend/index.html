@@ -340,6 +340,65 @@
           </div>
         </div>
       </section>
+      <section class="card">
+        <h2>🎨 Render (Ideogram 4 przez ComfyUI)</h2>
+        <p class="info">Renderuje aktualny stan kanwy wbudowanym workflow Ideogram 4. Prompt dostaje jawną wskazówkę orientacji i dokładne wymiary — bez tego model potrafi obrócić lub zgnieść layout. Wymaga ComfyUI z nodami Ideogram 4.</p>
+        <div class="grid">
+          <div class="field">
+            <label>Preset jakości</label>
+            <select id="irPreset">
+              <option value="Quality">Quality (48 kroków)</option>
+              <option value="Default">Default (20)</option>
+              <option value="Turbo" selected>Turbo (12)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Megapiksele</label>
+            <input type="number" id="irMp" value="2" min="0.1" max="4" step="0.1" />
+          </div>
+          <div class="field">
+            <label>Seed <label style="font-weight:normal"><input type="checkbox" id="irRandom" checked style="width:auto;vertical-align:middle" /> losowy</label></label>
+            <input type="number" id="irSeed" value="0" min="0" />
+          </div>
+          <div class="field">
+            <label>Scheduler</label>
+            <select id="irVariant">
+              <option value="simple" selected>Simple (AuraFlow + euler)</option>
+              <option value="ideogram4">Ideogram 4 (oryginalny)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Batch</label>
+            <input type="number" id="irBatch" value="1" min="1" max="16" />
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="irLoraOn" style="width:auto;vertical-align:middle" /> LoRA (model-only)</label>
+            <input type="text" id="irLora" list="irLoraList" placeholder="nazwa pliku LoRA" />
+            <datalist id="irLoraList"></datalist>
+          </div>
+          <div class="field">
+            <label>Siła LoRA</label>
+            <input type="number" id="irLoraStr" value="1" min="-10" max="10" step="0.05" />
+          </div>
+        </div>
+        <details style="margin:10px 0">
+          <summary class="info" style="cursor:pointer">Modele (zaawansowane)</summary>
+          <div class="grid" style="margin-top:8px">
+            <div class="field"><label>Model dyfuzyjny</label><input type="text" id="irDiff" value="ideogram4_fp8_scaled.safetensors" /></div>
+            <div class="field"><label>Model bezwarunkowy</label><input type="text" id="irUncond" value="ideogram4_unconditional_fp8_scaled.safetensors" /></div>
+            <div class="field"><label>VAE</label><input type="text" id="irVae" value="flux2-vae.safetensors" /></div>
+            <div class="field"><label>CLIP (text encoder)</label><input type="text" id="irClip" value="qwen3vl_8b_fp8_scaled.safetensors" /></div>
+          </div>
+        </details>
+        <div class="row prow">
+          <button id="irRenderBtn" class="primary">🎨 Renderuj kanwę</button>
+          <button id="irCancelBtn" class="hidden">✕ Anuluj</button>
+        </div>
+        <div class="progress" style="margin:10px 0"><div id="irBar" style="height:100%;width:0%;background:var(--accent);transition:width .25s"></div></div>
+        <p id="irStatus" class="info"></p>
+        <img id="irPreview" class="hidden" style="max-width:100%;border-radius:8px;border:1px solid var(--border)" alt="podgląd" />
+        <div id="irResults" class="irres"></div>
+      </section>
     </div><!-- /view-bbox -->
 
     <!-- WIDOK: ComfyUI -->
@@ -545,6 +604,7 @@
 
   <script src="/studio_extras.js"></script>
   <script src="/bbox_editor.js"></script>
+  <script src="/ideogram_render.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

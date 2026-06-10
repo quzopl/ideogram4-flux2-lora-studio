@@ -61,3 +61,7 @@
 .v15item.err { border-color: var(--err); background: rgba(248,113,113,.08); }
 .v15item.err .ico { color: var(--err); }
 .v15item.ok { border-color: var(--ok); background: rgba(74,222,128,.08); color: var(--ok); }
+
+/* Wyniki renderu Ideogram 4 */
+.irres { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
+.irres img { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }

@@ -396,6 +396,8 @@
     },
     // Widok stał się widoczny — przelicz wymiary kanwy.
     onShow() { fitFrame(); },
+    // Aktualny stan kanwy jako zminifikowany JSON v15 (np. do renderu).
+    getJson() { return JSON.stringify(buildCaption()); },
   };
 
   document.addEventListener("DOMContentLoaded", () => {
