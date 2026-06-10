@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import captioner, comfy_client, comfy_workflows, image_utils, lmstudio, prompts
+from . import captioner, comfy_client, comfy_workflows, image_utils, lmstudio, prompts, v15_lint
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -171,6 +171,15 @@ class PromptRequest(BaseModel):
     quant: str = "4bit"      # "4bit" | "none"
     max_tokens: int = 768
     caption_format: str = "flux"  # "flux" | "ideogram"
+    elements_detail: str = "balanced"  # few | balanced | detailed | maximal
+    desc_detail: str = "balanced"      # brief | balanced | rich
+
+
+class LibrarySaveRequest(BaseModel):
+    category: str            # "flux" | "ideogram"
+    prompt: str
+    input_text: str = ""
+    action: str = "manual"
 
 
 # --------------------------------------------------------------------------- #
@@ -1366,6 +1375,22 @@ def _save_prompt_to_library(category: str, action: str, input_text: str, prompt:
         conn.close()
 
 
+@app.post("/api/prompts/library")
+def api_prompt_library_save(req: LibrarySaveRequest):
+    """Ręczny zapis promptu do biblioteki (np. z edytora bbox)."""
+    if req.category not in ("flux", "ideogram"):
+        raise HTTPException(400, "Kategoria musi być 'flux' albo 'ideogram'.")
+    if not req.prompt.strip():
+        raise HTTPException(400, "Pusty prompt.")
+    try:
+        pid = _save_prompt_to_library(
+            req.category, req.action, req.input_text, req.prompt.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"id": pid, "warnings": v15_lint.lint_v15(req.prompt)
+            if req.category == "ideogram" else []}
+
+
 @app.get("/api/prompts/library")
 def api_prompt_library(category: str = "all"):
     """Lista zapisanych promptów, najnowsze pierwsze; opcjonalny filtr kategorii."""
@@ -1439,7 +1464,8 @@ def api_prompt(req: PromptRequest):
     quant = req.quant if req.quant in ("4bit", "none") else "4bit"
     try:
         if req.caption_format in ("ideogram", "aitoolkit"):
-            system = prompts.build_ideogram_studio_v15(req.action, req.subject)
+            system = prompts.build_ideogram_studio_v15(
+                req.action, req.subject, req.elements_detail, req.desc_detail)
         else:
             system = prompts.build_studio_system(req.action, req.subject)
         lm_id = _lmstudio_model_id(req.model)
@@ -1450,11 +1476,13 @@ def api_prompt(req: PromptRequest):
             raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
         if req.caption_format in ("ideogram", "aitoolkit"):
             final = prompts.normalize_ideogram_v15(raw)
+            warnings = v15_lint.lint_v15(final)
         else:
             final = prompts.clean_prompt(raw)
+            warnings = []
         library_id = _save_prompt_to_library(
             _prompt_category(req.caption_format), req.action, text, final)
-        return {"prompt": final, "library_id": library_id}
+        return {"prompt": final, "library_id": library_id, "warnings": warnings}
     except lmstudio.LMStudioError as e:
         raise HTTPException(502, f"LM Studio: {e}")
     except Exception as e:  # noqa: BLE001

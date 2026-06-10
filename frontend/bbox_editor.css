@@ -1,0 +1,63 @@
+/* Edytor bbox v15 — style scoped do #view-bbox (osobny moduł, nie rusza reszty). */
+#view-bbox .bxwrap { display: grid; grid-template-columns: 1fr 400px; gap: 16px; min-height: 70vh; }
+@media (max-width: 900px) { #view-bbox .bxwrap { grid-template-columns: 1fr; } }
+
+#view-bbox .bxstage { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+#view-bbox .bxtoolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#view-bbox .bxseg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+#view-bbox .bxseg button { background: var(--card2); color: var(--muted); border: 0; border-radius: 0; padding: 7px 12px; font-size: 13px; }
+#view-bbox .bxseg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+#view-bbox .bxar { width: 74px; text-align: center; font-family: ui-monospace, Menlo, monospace; }
+
+#view-bbox .bxhost {
+  flex: 1; display: flex; align-items: center; justify-content: center; min-height: 340px;
+  background: repeating-linear-gradient(45deg, #14161b 0 10px, #101216 10px 20px);
+  border: 1px solid var(--border); border-radius: 12px; padding: 16px; overflow: hidden;
+}
+#view-bbox .bxframe {
+  position: relative; background: #1d2026;
+  box-shadow: 0 0 0 1px var(--border), 0 18px 50px rgba(0,0,0,.5);
+  background-image: linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+  background-size: 10% 10%, 10% 10%;
+}
+#view-bbox .bx { position: absolute; border: 1.5px solid var(--accent); background: rgba(108,140,255,.12); cursor: move; border-radius: 2px; }
+#view-bbox .bx.sel { border-color: #fff; background: rgba(108,140,255,.22); box-shadow: 0 0 0 1px var(--accent); }
+#view-bbox .bx .tag {
+  position: absolute; top: -9px; left: 6px; background: var(--accent); color: #fff;
+  font: 600 11px/1.4 system-ui, sans-serif; padding: 1px 6px; border-radius: 5px;
+  white-space: nowrap; pointer-events: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+}
+#view-bbox .bx.text { border-color: #b07cff; background: rgba(176,124,255,.12); }
+#view-bbox .bx.text .tag { background: #b07cff; }
+#view-bbox .bxh { position: absolute; width: 11px; height: 11px; background: #fff; border: 1px solid var(--accent); border-radius: 2px; }
+#view-bbox .bxh.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+
+#view-bbox .bxside { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+#view-bbox .bxscroll { overflow: auto; max-height: 52vh; display: flex; flex-direction: column; gap: 12px; }
+#view-bbox .bxcard { border: 1px solid var(--border); border-radius: 9px; padding: 11px; background: var(--card2); }
+#view-bbox .bxcard.sel { border-color: var(--accent); }
+#view-bbox .bxcard .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+#view-bbox .bxmini { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); }
+#view-bbox .bxx { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
+#view-bbox .bxx:hover { color: var(--err); }
+#view-bbox .bxzb { background: var(--card); border: 1px solid var(--border); color: var(--muted); cursor: pointer; font-size: 10px; line-height: 1; border-radius: 4px; padding: 3px 5px; }
+#view-bbox .bxzb:hover { color: var(--accent); border-color: var(--accent); }
+#view-bbox .bxctr { float: right; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); }
+#view-bbox .bxctr.over { color: var(--err); }
+#view-bbox pre.bxjson {
+  margin: 0; background: #0b0c0e; border: 1px solid var(--border); border-radius: 8px;
+  padding: 11px; font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+  color: #cdd2da; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+#view-bbox textarea { font-family: ui-monospace, Menlo, monospace; font-size: 12px; min-height: 48px; }
+
+/* Lista znalezisk lintera v15 — współdzielona ze studiem (bez scope). */
+.v15list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.v15item { font-size: 12px; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--border); display: flex; gap: 7px; align-items: flex-start; }
+.v15item .ico { font-weight: 700; }
+.v15item.warn { border-color: #e0a83a; background: rgba(224,168,58,.08); }
+.v15item.warn .ico { color: #e0a83a; }
+.v15item.err { border-color: var(--err); background: rgba(248,113,113,.08); }
+.v15item.err .ico { color: var(--err); }
+.v15item.ok { border-color: var(--ok); background: rgba(74,222,128,.08); color: var(--ok); }

@@ -106,16 +106,20 @@ refreshGpu();
 // --------------------------------------------------------------------------- //
 // Top navigation (Dataset <-> Generator promptów)
 // --------------------------------------------------------------------------- //
+// Przełączanie generyczne po id "view-<nazwa>" — nowe widoki (moduły) nie
+// wymagają zmian tutaj, poza ewentualnym hookiem aktywacyjnym.
+function switchView(view) {
+  document.querySelectorAll(".navtab").forEach((t) =>
+    t.classList.toggle("active", t.dataset.view === view));
+  document.querySelectorAll('main > div[id^="view-"]').forEach((div) =>
+    div.classList.toggle("hidden", div.id !== "view-" + view));
+  if (view === "comfy") { loadComfyConfig(); loadEditorWorkflowFromServer(); }
+  if (view === "bbox" && window.BboxEditor) window.BboxEditor.onShow();
+}
+window.switchView = switchView;
+
 document.querySelectorAll(".navtab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".navtab").forEach((t) => t.classList.remove("active"));
-    tab.classList.add("active");
-    const view = tab.dataset.view;
-    $("view-dataset").classList.toggle("hidden", view !== "dataset");
-    $("view-prompts").classList.toggle("hidden", view !== "prompts");
-    $("view-comfy").classList.toggle("hidden", view !== "comfy");
-    if (view === "comfy") { loadComfyConfig(); loadEditorWorkflowFromServer(); }
-  });
+  tab.addEventListener("click", () => switchView(tab.dataset.view));
 });
 
 // --------------------------------------------------------------------------- //
@@ -451,9 +455,13 @@ async function generatePrompt() {
       quant: $("pQuant").value,
       max_tokens: parseInt($("pMaxTokens").value, 10),
       caption_format: $("promptFormat").value,
+      elements_detail: $("pElemDetail") ? $("pElemDetail").value : "balanced",
+      desc_detail: $("pDescDetail") ? $("pDescDetail").value : "balanced",
     });
     $("pOutput").value = r.prompt;
     $("pResultCard").classList.remove("hidden");
+    if (window.renderStudioWarnings) window.renderStudioWarnings(r.warnings);
+    updateToCanvasBtn();
     setPStatus("Gotowe. Zapisano w bibliotece.", "ok");
     loadPromptLib();
   } catch (e) {
@@ -490,6 +498,19 @@ $("pUseBtn").addEventListener("click", () => {
   $("pInput").focus();
   setPStatus("Przeniesiono wynik do wejścia.", "");
 });
+
+// „Edytuj w kanwie" — tylko dla formatów JSON (Ideogram/ai-toolkit).
+function updateToCanvasBtn() {
+  const fmt = $("promptFormat") ? $("promptFormat").value : "flux";
+  if ($("pToCanvasBtn")) $("pToCanvasBtn").classList.toggle("hidden", fmt === "flux");
+}
+if ($("pToCanvasBtn")) $("pToCanvasBtn").addEventListener("click", () => {
+  const txt = $("pOutput").value.trim();
+  if (!txt || !window.BboxEditor) return;
+  switchView("bbox");
+  window.BboxEditor.open(txt);
+});
+if ($("promptFormat")) $("promptFormat").addEventListener("change", updateToCanvasBtn);
 
 function setPStatus(msg, cls) {
   const el = $("pStatus");
@@ -581,6 +602,16 @@ function renderPromptLib(items) {
     const btns = document.createElement("div");
     btns.className = "plib-btns";
     btns.appendChild(copyBtn);
+    if (it.category === "ideogram" && window.BboxEditor) {
+      const canvasBtn = document.createElement("button");
+      canvasBtn.textContent = "🧩";
+      canvasBtn.title = "Otwórz w edytorze bbox";
+      canvasBtn.addEventListener("click", () => {
+        switchView("bbox");
+        window.BboxEditor.open(it.prompt);
+      });
+      btns.appendChild(canvasBtn);
+    }
     btns.appendChild(delBtn);
 
     row.appendChild(badge);

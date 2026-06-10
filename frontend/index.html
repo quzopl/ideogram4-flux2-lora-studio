@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FLUX LoRA — przygotowanie zdjęć</title>
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/bbox_editor.css" />
 </head>
 <body>
   <header>
@@ -13,6 +14,7 @@
     <nav class="topnav">
       <button class="navtab active" data-view="dataset">📸 Dataset (captions)</button>
       <button class="navtab" data-view="prompts">✨ Generator promptów</button>
+      <button class="navtab" data-view="bbox">🧩 Edytor bbox</button>
       <button class="navtab" data-view="comfy">🎨 ComfyUI</button>
       <div class="gpubar">
         <span id="gpuStatus" class="info">GPU: …</span>
@@ -237,6 +239,28 @@
             <label>Max długość (tokeny)</label>
             <input type="number" id="pMaxTokens" value="768" min="64" max="2048" step="32" />
           </div>
+          <div class="field hidden" id="pElemDetailField">
+            <label>Liczba elementów (Ideogram)</label>
+            <select id="pElemDetail">
+              <option value="few">Mało (2–3)</option>
+              <option value="balanced" selected>Wyważona (wg frameworku)</option>
+              <option value="detailed">Szczegółowa (6–10)</option>
+              <option value="maximal">Maksymalna (10–16)</option>
+            </select>
+          </div>
+          <div class="field hidden" id="pDescDetailField">
+            <label>Gęstość opisów (Ideogram)</label>
+            <select id="pDescDetail">
+              <option value="brief">Zwięzłe (15–30 słów)</option>
+              <option value="balanced" selected>Wyważone</option>
+              <option value="rich">Bogate (blisko 60 słów)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Presety stylu (doklejają instrukcję zachowującą kompozycję)</label>
+          <div class="row" id="pPresets"></div>
         </div>
 
         <button id="pGenBtn" class="primary">✨ Generuj prompt</button>
@@ -246,10 +270,12 @@
       <section class="card hidden" id="pResultCard">
         <h2><span class="num">2</span> Wynik (FLUX.2)</h2>
         <textarea id="pOutput" class="bigtext"></textarea>
+        <div id="pWarnBox" class="v15list hidden"></div>
         <div class="row prow">
           <button id="pCopyBtn">📋 Kopiuj</button>
           <button id="pRegenBtn">↻ Generuj ponownie</button>
           <button id="pUseBtn">↑ Użyj jako wejście</button>
+          <button id="pToCanvasBtn" class="hidden">🧩 Edytuj w kanwie</button>
         </div>
       </section>
 
@@ -269,6 +295,52 @@
         <p id="pLibStatus" class="info"></p>
       </section>
     </div><!-- /view-prompts -->
+
+    <!-- WIDOK: EDYTOR BBOX v15 -->
+    <div id="view-bbox" class="hidden">
+      <section class="card">
+        <h2>🧩 Edytor bbox — prompt Ideogram v15</h2>
+        <p class="info">Rozmieść elementy wizualnie na kanwie (0–1000, [y1,x1,y2,x2]). Klik = wybór + przeciąganie (środek przesuwa, róg skaluje); powtórny klik cykluje nakładające się boksy.</p>
+        <div class="bxwrap">
+          <div class="bxstage">
+            <div class="bxtoolbar">
+              <div class="bxseg" id="bxAr">
+                <button data-ar="1:1" class="on">1:1</button>
+                <button data-ar="4:5">4:5</button>
+                <button data-ar="9:16">9:16</button>
+                <button data-ar="16:9">16:9</button>
+                <button data-ar="3:1">3:1</button>
+              </div>
+              <input class="bxar" id="bxArCustom" value="1:1" title="własne W:H" />
+              <button id="bxAddObj" class="primary">+ obj</button>
+              <button id="bxAddText">+ text</button>
+              <button id="bxImp">📥 Wklej JSON</button>
+            </div>
+            <div id="bxImpBar" class="hidden">
+              <textarea id="bxImpTxt" placeholder="Wklej prompt JSON (stary lub nowy format, także zepsuty/podwójnie zakodowany — rozpakuje i przekonwertuje na v15)" style="min-height:90px;width:100%"></textarea>
+              <div class="row" style="align-items:center;margin-top:8px">
+                <button id="bxImpLoad" class="primary">Wczytaj</button>
+                <button id="bxImpCancel">Anuluj</button>
+                <span class="info" id="bxImpMsg"></span>
+              </div>
+            </div>
+            <div class="bxhost"><div class="bxframe" id="bxFrame"></div></div>
+          </div>
+          <div class="bxside">
+            <div class="bxscroll" id="bxList"></div>
+            <div id="bxValBox" class="v15list"></div>
+            <div class="row prow">
+              <button id="bxCopy" class="primary">📋 Kopiuj (minified)</button>
+              <button id="bxCopyPretty">Pretty</button>
+              <button id="bxDl">⬇ Pobierz</button>
+              <button id="bxSave">💾 Zapisz do biblioteki</button>
+            </div>
+            <p id="bxStatus" class="info"></p>
+            <pre class="bxjson" id="bxJson"></pre>
+          </div>
+        </div>
+      </section>
+    </div><!-- /view-bbox -->
 
     <!-- WIDOK: ComfyUI -->
     <div id="view-comfy" class="hidden">
@@ -471,6 +543,8 @@
     </div>
   </div>
 
+  <script src="/studio_extras.js"></script>
+  <script src="/bbox_editor.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

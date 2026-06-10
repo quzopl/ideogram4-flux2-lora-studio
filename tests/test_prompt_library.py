@@ -65,6 +65,35 @@ def test_delete_unknown_id_404(tmp_db):
         server.api_prompt_library_delete(12345)
 
 
+def test_manual_save_endpoint(tmp_db):
+    req = server.LibrarySaveRequest(
+        category="ideogram",
+        prompt='{"aspect_ratio":"1:1","high_level_description":"x",'
+               '"compositional_deconstruction":{"background":"plain studio wall","elements":[]}}',
+        input_text="z edytora bbox")
+    out = server.api_prompt_library_save(req)
+    assert out["id"] > 0
+    assert isinstance(out["warnings"], list)
+    row = server.api_prompt_library("ideogram")["prompts"][0]
+    assert row["action"] == "manual"
+
+
+def test_manual_save_rejects_bad_ideogram_json(tmp_db):
+    from fastapi import HTTPException
+    import pytest as _pytest
+    req = server.LibrarySaveRequest(category="ideogram", prompt="not json")
+    with _pytest.raises(HTTPException):
+        server.api_prompt_library_save(req)
+
+
+def test_manual_save_rejects_bad_category(tmp_db):
+    from fastapi import HTTPException
+    import pytest as _pytest
+    req = server.LibrarySaveRequest(category="weird", prompt="abc")
+    with _pytest.raises(HTTPException):
+        server.api_prompt_library_save(req)
+
+
 def test_export_sql_dump(tmp_db):
     server._save_prompt_to_library("flux", "expand", "idea", "it's a prompt with 'quotes'")
     server._save_prompt_to_library(

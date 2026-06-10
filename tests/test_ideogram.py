@@ -330,6 +330,17 @@ def test_build_ideogram_studio_v15_refine_migrates_legacy():
     assert "style_description" in s
 
 
+def test_build_v15_detail_directives():
+    base = prompts.build_ideogram_studio_v15("expand", "auto")
+    assert "DETAIL SETTINGS" not in base  # balanced = bez nadpisania
+    s = prompts.build_ideogram_studio_v15(
+        "expand", "auto", elements_detail="maximal", desc_detail="rich")
+    assert "DETAIL SETTINGS" in s
+    assert "10 to 16" in s and "60-word" in s
+    few = prompts.build_ideogram_studio_v15("expand", "auto", elements_detail="few")
+    assert "2 to 3" in few
+
+
 def test_inject_trigger_works_on_v15_json():
     base = prompts.normalize_ideogram_v15(
         '{"aspect_ratio":"1:1","high_level_description":"a person stands"}')

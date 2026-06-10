@@ -789,11 +789,39 @@ _IDEOGRAM_V15_ACTION = {
 }
 
 
-def build_ideogram_studio_v15(action: str = "expand", subject: str = "auto") -> str:
+# Kontrolki szczegółowości (wzór: Ideogrammar) — nadpisują domyślną liczbę
+# elementów i gęstość opisów. Doklejane NA KOŃCU, by wygrały z resztą reguł.
+_V15_ELEMENT_LEVELS = {
+    "few": "Decompose the scene into only 2 to 3 elements — just the most important subjects.",
+    "balanced": "",  # domyślne zachowanie frameworku — bez nadpisania
+    "detailed": "Decompose the scene into 6 to 10 elements, breaking it into more distinct parts.",
+    "maximal": "Decompose the scene into 10 to 16 elements, breaking it very finely into many distinct parts.",
+}
+_V15_DESC_LEVELS = {
+    "brief": "Keep each element's desc to a tight 15-30 words.",
+    "balanced": "",
+    "rich": "Write each element's desc close to the 60-word cap, covering materials, colors and spatial anchors.",
+}
+
+
+def _detail_directive(elements_detail: str, desc_detail: str) -> str:
+    e = _V15_ELEMENT_LEVELS.get(elements_detail, "")
+    d = _V15_DESC_LEVELS.get(desc_detail, "")
+    if not e and not d:
+        return ""
+    parts = [p for p in (e, d) if p]
+    return (" DETAIL SETTINGS (override any element-count or description-length "
+            "guidance above): " + " ".join(parts))
+
+
+def build_ideogram_studio_v15(action: str = "expand", subject: str = "auto",
+                              elements_detail: str = "balanced",
+                              desc_detail: str = "balanced") -> str:
     """System-prompt konwertera tekst->Ideogram JSON wg frameworku v15."""
     act = _IDEOGRAM_V15_ACTION.get(action, _IDEOGRAM_V15_ACTION["expand"])
     subj = _STUDIO_SUBJECT.get(subject, "")
     return (_IDEOGRAM_V15_BASE + act + subj + _IDEOGRAM_V15_CONTRACT
             + _IDEOGRAM_V15_ASPECT + _IDEOGRAM_V15_HLD + _IDEOGRAM_V15_ELEMENTS
             + _IDEOGRAM_V15_BACKGROUND + _IDEOGRAM_V15_BBOX + _IDEOGRAM_V15_SPECIFIC
-            + _IDEOGRAM_V15_PLANNING + _IDEOGRAM_V15_TEXT)
+            + _IDEOGRAM_V15_PLANNING + _IDEOGRAM_V15_TEXT
+            + _detail_directive(elements_detail, desc_detail))
