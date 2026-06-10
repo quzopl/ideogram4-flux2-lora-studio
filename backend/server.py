@@ -26,8 +26,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (captioner, comfy_client, comfy_workflows, ideogram_workflow,
-               image_utils, lmstudio, prompts, v15_lint)
+from . import (captioner, comfy_client, comfy_workflows, florence,
+               ideogram_workflow, image_utils, lmstudio, prompts, v15_lint)
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -603,6 +603,7 @@ def api_unload():
     if _busy():
         raise HTTPException(409, "Trwa przetwarzanie — poczekaj na zakończenie.")
     captioner.unload()
+    florence.unload()
     return captioner.gpu_status()
 
 
@@ -1506,6 +1507,26 @@ def api_ideogram_render(req: IdeogramRenderRequest):
     t = threading.Thread(target=_run_comfy_raw_job, args=(job_id, workflow), daemon=True)
     t.start()
     return {"job_id": job_id, "warnings": v15_lint.lint_v15(req.prompt)}
+
+
+@app.post("/api/ideogram/analyze")
+async def api_ideogram_analyze(file: UploadFile):
+    """Obraz referencyjny -> szkic promptu v15 (Florence-2: opis + realne bboxy + OCR)."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Prześlij plik graficzny.")
+    data = await file.read()
+    try:
+        from PIL import Image
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        raise HTTPException(400, "Nie udało się odczytać obrazu.")
+    try:
+        caption, elements = florence.analyze_image(image)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"Analiza Florence-2 nie powiodła się: {e}")
+    draft = florence.build_v15_draft(caption, elements, image.width, image.height)
+    return {"json": draft, "elements": len(elements),
+            "model": florence.DEFAULT_MODEL, "warnings": v15_lint.lint_v15(draft)}
 
 
 @app.post("/api/prompt")

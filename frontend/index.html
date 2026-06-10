@@ -315,6 +315,8 @@
               <button id="bxAddObj" class="primary">+ obj</button>
               <button id="bxAddText">+ text</button>
               <button id="bxImp">📥 Wklej JSON</button>
+              <button id="bxFromImage" title="Florence-2: opis sceny + realne bboxy + OCR z referencyjnego zdjęcia">📷 Z obrazka</button>
+              <input type="file" id="bxFromImageFile" accept="image/*" class="hidden" />
             </div>
             <div id="bxImpBar" class="hidden">
               <textarea id="bxImpTxt" placeholder="Wklej prompt JSON (stary lub nowy format, także zepsuty/podwójnie zakodowany — rozpakuje i przekonwertuje na v15)" style="min-height:90px;width:100%"></textarea>
@@ -605,6 +607,7 @@
   <script src="/studio_extras.js"></script>
   <script src="/bbox_editor.js"></script>
   <script src="/ideogram_render.js"></script>
+  <script src="/image_to_prompt.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
