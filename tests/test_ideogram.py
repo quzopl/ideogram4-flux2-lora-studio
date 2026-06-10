@@ -102,7 +102,7 @@ def test_get_ideogram_prompt_person_skips_identity():
     assert "high_level_description" in p
     assert "style_description" in p
     assert "compositional_deconstruction" in p
-    assert "identity" in low or "tożsam" in low or "likeness" in low
+    assert "identity" in low or "likeness" in low
 
 
 def test_get_ideogram_prompt_generic_default():
@@ -140,7 +140,7 @@ def test_normalize_text_content_null_becomes_empty():
 
 
 def test_person_detail_mode_covers_marks():
-    # FLUX i Ideogram: tryb "person_detail" wymienia znaki szczególne
+    # FLUX and Ideogram: the "person_detail" mode lists distinguishing marks
     for p in (prompts.get_prompt("person_detail"),
               prompts.get_ideogram_prompt("person_detail")):
         low = p.lower()
@@ -167,7 +167,7 @@ def test_postprocess_caption_aitoolkit():
 
 
 # --------------------------------------------------------------------------- #
-# Framework v15 — konwerter promptów studia (aspect_ratio + HLD + composition)
+# Framework v15 — the studio prompt converter (aspect_ratio + HLD + composition)
 # --------------------------------------------------------------------------- #
 
 def test_v15_top_level_keys_and_order():
@@ -263,7 +263,7 @@ def test_v15_unwraps_double_encoded_hld():
 
 
 def test_v15_unwraps_fenced_json_inside_hld():
-    # Model potrafi owinąć właściwy JSON w ```json wewnątrz high_level_description.
+    # The model can wrap the real JSON in ```json inside high_level_description.
     inner = ('```json {\\"aspect_ratio\\":\\"9:16\\",\\"high_level_description\\":'
              '\\"a seductive woman\\",\\"compositional_deconstruction\\":'
              '{\\"background\\":\\"neon street\\",\\"elements\\":[]}}```')
@@ -316,11 +316,11 @@ def test_build_ideogram_studio_v15_has_framework_rules():
                   "compositional_deconstruction", "bbox", "desc",
                   "transparent background"):
         assert token in s
-    # v15: bez pól strukturalnych stylu, styl prozą
-    assert "style_description" in s  # wymienione jako zakazane
-    assert "warm" in low             # zakaz "warm" w gradacji foto
-    assert "50" in s                 # limit słów HLD
-    assert "0" in s and "1000" in s  # skala bboxów
+    # v15: no structural style fields, style as prose
+    assert "style_description" in s  # mentioned as forbidden
+    assert "warm" in low             # "warm" banned as photo grading
+    assert "50" in s                 # HLD word limit
+    assert "0" in s and "1000" in s  # bbox scale
 
 
 def test_build_ideogram_studio_v15_refine_migrates_legacy():

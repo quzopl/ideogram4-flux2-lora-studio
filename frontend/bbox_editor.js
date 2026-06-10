@@ -1,7 +1,7 @@
 /* =========================================================================== //
-// Edytor bbox v15 — osobny moduł (adaptacja samodzielnej appki użytkownika).
-// Kanwa 0-1000 [y1,x1,y2,x2], karty obj/text z licznikami słów, z-order,
-// import starych/zepsutych JSON-ów, żywy linter v15, zapis do biblioteki.
+// v15 bbox editor — standalone module (adapted from the user's standalone app).
+// 0-1000 canvas [y1,x1,y2,x2], obj/text cards with word counters, z-order,
+// import of legacy/broken JSONs, live v15 linter, save-to-library.
 // API: window.BboxEditor = { open(jsonString), onShow() }
 // =========================================================================== */
 "use strict";
@@ -12,7 +12,7 @@
   const byId = (id) => document.getElementById(id);
   const frame = () => byId("bxFrame");
 
-  /* ---- normalizacja wejścia (wrappery, podwójne kodowanie, size->ratio) ---- */
+  /* ---- input normalization (wrappers, double encoding, size->ratio) ---- */
   function normalize(obj) {
     if (typeof obj === "string") obj = JSON.parse(obj);
     for (const k of ["caption", "data", "result", "output"]) {
@@ -63,7 +63,7 @@
     sel = els.length ? els[0].id : null;
   }
 
-  /* ---- kanwa ---- */
+  /* ---- canvas ---- */
   function setAR(val) {
     ar = val;
     if (byId("bxArCustom")) byId("bxArCustom").value = val;
@@ -172,7 +172,7 @@
   }
   function updateBboxReadout(e) {
     const c = document.querySelector('#view-bbox .bxcard[data-id="' + e.id + '"] .bxmini');
-    if (c && c.childNodes[0]) c.childNodes[0].textContent = e.hasBbox ? ("bbox [" + e.bbox.join(", ") + "] ") : "bez bbox ";
+    if (c && c.childNodes[0]) c.childNodes[0].textContent = e.hasBbox ? ("bbox [" + e.bbox.join(", ") + "] ") : "no bbox ";
   }
   function bumpZ(id, dir) {
     const sorted = [...els].sort((a, b) => a.z - b.z), i = sorted.findIndex((e) => e.id === id), j = i + (dir > 0 ? 1 : -1);
@@ -186,7 +186,7 @@
     sel = uid; render();
   }
 
-  /* ---- panel boczny ---- */
+  /* ---- side panel ---- */
   function renderList() {
     const L = byId("bxList");
     if (!L) return;
@@ -196,12 +196,12 @@
     head.innerHTML =
       '<div class="field"><label>aspect_ratio</label><input id="bxFAr" value="' + esc(ar) + '"></div>' +
       '<div class="field"><label>high_level_description <span class="bxctr" id="bxHldCtr"></span></label><textarea id="bxFHld" style="min-height:64px">' + esc(hld) + "</textarea></div>" +
-      '<div class="field"><label>background (tylko powłoka sceny)</label><textarea id="bxFBg" style="min-height:80px">' + esc(bg) + "</textarea></div>";
+      '<div class="field"><label>background (scene shell only)</label><textarea id="bxFBg" style="min-height:80px">' + esc(bg) + "</textarea></div>";
     L.appendChild(head);
     if (!els.length) {
       const h = document.createElement("p");
       h.className = "info";
-      h.textContent = "Dodaj element + obj lub + text. Jeden podmiot = jeden element (części w desc).";
+      h.textContent = "Add an element with + obj or + text. One subject = one element (parts go into desc).";
       L.appendChild(h);
     }
     [...els].sort((a, b) => a.z - b.z).forEach((e) => {
@@ -211,12 +211,12 @@
       c.innerHTML =
         '<div class="top"><b>' + (e.type === "text" ? "text" : "obj") + " #" + e.id + "</b>" +
         '<span style="display:flex;gap:4px;align-items:center">' +
-        '<button class="bxzb" data-up="' + e.id + '" title="na wierzch">&#9650;</button>' +
-        '<button class="bxzb" data-down="' + e.id + '" title="pod spód">&#9660;</button>' +
+        '<button class="bxzb" data-up="' + e.id + '" title="bring forward">&#9650;</button>' +
+        '<button class="bxzb" data-down="' + e.id + '" title="send backward">&#9660;</button>' +
         '<button class="bxx" data-x="' + e.id + '">&times;</button></span></div>' +
-        '<div class="bxmini" style="margin-bottom:8px">' + (e.hasBbox ? ("bbox [" + e.bbox.join(", ") + "] ") : "bez bbox ") +
+        '<div class="bxmini" style="margin-bottom:8px">' + (e.hasBbox ? ("bbox [" + e.bbox.join(", ") + "] ") : "no bbox ") +
         '&middot; <label style="cursor:pointer"><input type="checkbox" data-bb="' + e.id + '" ' + (e.hasBbox ? "checked" : "") + ' style="width:auto;vertical-align:middle"> bbox</label></div>' +
-        (e.type === "text" ? '<div class="field" style="margin-bottom:8px"><label>text (verbatim, \\n = nowa linia)</label><textarea data-f="text" data-id="' + e.id + '" style="min-height:40px">' + esc(e.text) + "</textarea></div>" : "") +
+        (e.type === "text" ? '<div class="field" style="margin-bottom:8px"><label>text (verbatim, \\n = new line)</label><textarea data-f="text" data-id="' + e.id + '" style="min-height:40px">' + esc(e.text) + "</textarea></div>" : "") +
         '<div class="field"><label>desc <span class="bxctr" data-ctr="' + e.id + '"></span></label><textarea data-f="desc" data-id="' + e.id + '">' + esc(e.desc) + "</textarea></div>";
       c.addEventListener("click", (ev) => {
         if (ev.target.closest("[data-x],[data-up],[data-down],[data-bb],textarea,input")) return;
@@ -252,17 +252,17 @@
   const wordCount = (s) => ((s || "").trim() ? s.trim().split(/\s+/).length : 0);
   function updateCounters() {
     const hc = byId("bxHldCtr");
-    if (hc) { const n = wordCount(hld); hc.textContent = n + "/50 słów"; hc.classList.toggle("over", n > 50); }
+    if (hc) { const n = wordCount(hld); hc.textContent = n + "/50 words"; hc.classList.toggle("over", n > 50); }
     document.querySelectorAll("#view-bbox [data-ctr]").forEach((s) => {
       const e = els.find((x) => x.id == s.dataset.ctr);
       if (!e) return;
       const n = wordCount(e.desc);
-      s.textContent = n + "/60 słów";
+      s.textContent = n + "/60 words";
       s.classList.toggle("over", n > 60);
     });
   }
 
-  /* ---- wyjście ---- */
+  /* ---- output ---- */
   function buildCaption() {
     return {
       aspect_ratio: ar,
@@ -281,7 +281,7 @@
   }
   function renderJSON() { const p = byId("bxJson"); if (p) p.textContent = JSON.stringify(buildCaption(), null, 2); }
 
-  /* ---- linter v15 (lustrzany z backend/v15_lint.py) ---- */
+  /* ---- v15 linter (mirrors backend/v15_lint.py) ---- */
   const WARM_RE = /\bwarm(\b|ly)/i;
   const RENDER_RE = /\b(bokeh|depth of field|shallow focus|f\/\d|mm lens|telephoto|chromatic aberration|lens flare|vignett|film grain|motion blur|iso \d|drop shadow|cast shadow|casts a shadow)\b/i;
   const PART_RE = /\b(thorax|abdomen|wingtip|left leg|right leg|left arm|right arm|windshield|wheels?|petals?|stem only|each limb|forearm only)\b/i;
@@ -294,35 +294,35 @@
     const box = byId("bxValBox");
     if (!box) return;
     const v = [];
-    if (hadLegacyStyle) v.push(["warn", "Wczytano STARY format ze style_description — te pola NIE istnieją w v15 i zostały pominięte; przepisz styl prozą do HLD lub background."]);
-    if (!ar || !/^\d+:\d+$/.test(ar)) v.push(["err", "aspect_ratio musi być w formacie W:H"]);
-    if (!hld.trim()) v.push(["warn", "high_level_description jest puste"]);
+    if (hadLegacyStyle) v.push(["warn", "Loaded the OLD format with style_description — those fields do NOT exist in v15 and were dropped; rewrite the style as prose into the HLD or background."]);
+    if (!ar || !/^\d+:\d+$/.test(ar)) v.push(["err", "aspect_ratio must be in W:H format"]);
+    if (!hld.trim()) v.push(["warn", "high_level_description is empty"]);
     else {
-      if (wordCount(hld) > 50) v.push(["warn", "HLD przekracza 50 słów (" + wordCount(hld) + ")"]);
-      if (/\b(this image (shows|depicts)|depicts|captures)\b/i.test(hld)) v.push(["warn", "HLD nie powinno zaczynać się od shows/depicts/captures — zacznij od podmiotu"]);
+      if (wordCount(hld) > 50) v.push(["warn", "HLD exceeds 50 words (" + wordCount(hld) + ")"]);
+      if (/\b(this image (shows|depicts)|depicts|captures)\b/i.test(hld)) v.push(["warn", "HLD should not open with shows/depicts/captures — start with the subject"]);
     }
-    if (WARM_RE.test(hld) || WARM_RE.test(bg)) v.push(["warn", "słowo \"warm\" jako gradacja jest odradzane w fotorealizmie — opisz źródło światła konkretnie"]);
-    if (POSTFX_RE.test(bg)) v.push(["warn", "background zawiera efekt post-processingu — przenieś do high_level_description"]);
-    if (ARRANGE_RE.test(bg)) v.push(["err", "background opisuje rozmieszczone meble/ludzi — to treść pierwszego planu, zrób z tego elementy"]);
+    if (WARM_RE.test(hld) || WARM_RE.test(bg)) v.push(["warn", "the word \"warm\" as grading is discouraged in photorealism — name the light source concretely"]);
+    if (POSTFX_RE.test(bg)) v.push(["warn", "background contains a post-processing effect — move it to high_level_description"]);
+    if (ARRANGE_RE.test(bg)) v.push(["err", "background describes placed furniture/people — that is foreground content, make them elements"]);
     let textCount = 0;
     els.forEach((e) => {
       const tag = "(" + e.type + " #" + e.id + ") ";
-      if (e.type === "text") { textCount++; if (!e.text.trim()) v.push(["warn", tag + "pusty text"]); }
-      if (wordCount(e.desc) > 60) v.push(["warn", tag + "desc > 60 słów (" + wordCount(e.desc) + ")"]);
-      if (RENDER_RE.test(e.desc)) v.push(["err", tag + "desc zawiera język kamery/cienia — przenieś do HLD/background"]);
-      if (WARM_RE.test(e.desc)) v.push(["warn", tag + "\"warm\" w desc — odradzane"]);
-      if (PART_RE.test(e.desc) && e.type === "obj") v.push(["warn", tag + "desc wygląda na pojedynczą część podmiotu — jeden podmiot = jeden element"]);
-      if (FLOOR_RE.test(e.desc)) v.push(["err", tag + "opis nawierzchni/podłogi/kałuży jako element — przenieś do background"]);
-      if (HEDGE_RE.test(e.desc)) v.push(["warn", tag + "hedging (such as/various/implied…) — commit do konkretnej wartości"]);
-      if (e.hasBbox) { const [y0, x0, y1, x1] = e.bbox; if (!(y0 < y1 && x0 < x1)) v.push(["err", tag + "bbox: wymagane y1<y2 oraz x1<x2"]); }
+      if (e.type === "text") { textCount++; if (!e.text.trim()) v.push(["warn", tag + "empty text"]); }
+      if (wordCount(e.desc) > 60) v.push(["warn", tag + "desc > 60 words (" + wordCount(e.desc) + ")"]);
+      if (RENDER_RE.test(e.desc)) v.push(["err", tag + "desc contains camera/shadow language — move it to the HLD/background"]);
+      if (WARM_RE.test(e.desc)) v.push(["warn", tag + "\"warm\" in desc — discouraged"]);
+      if (PART_RE.test(e.desc) && e.type === "obj") v.push(["warn", tag + "desc looks like a single body/structural part — one subject = one element"]);
+      if (FLOOR_RE.test(e.desc)) v.push(["err", tag + "floor/ground/puddle described as an element — move it to background"]);
+      if (HEDGE_RE.test(e.desc)) v.push(["warn", tag + "hedging (such as/various/implied…) — commit to one concrete value"]);
+      if (e.hasBbox) { const [y0, x0, y1, x1] = e.bbox; if (!(y0 < y1 && x0 < x1)) v.push(["err", tag + "bbox: y1<y2 and x1<x2 required"]); }
     });
     if (textCount === 0 && BUILTENV_RE.test(hld + " " + bg))
-      v.push(["warn", "scena wygląda na built environment, a nie ma elementów text — realne sceny niosą tekst niemal wszędzie"]);
+      v.push(["warn", "the scene looks like a built environment but has no text elements — real scenes carry text almost everywhere"]);
     window.renderV15Findings(box, v.map(([level, msg]) => ({ level, msg })));
   }
   function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 
-  /* ---- akcje ---- */
+  /* ---- actions ---- */
   function setStatus(msg, cls) {
     const el = byId("bxStatus");
     if (el) { el.textContent = msg || ""; el.className = "info" + (cls ? " " + cls : ""); }
@@ -335,16 +335,16 @@
         body: JSON.stringify({
           category: "ideogram",
           prompt: JSON.stringify(buildCaption()),
-          input_text: "edytor bbox",
+          input_text: "bbox editor",
           action: "manual",
         }),
       });
       if (!res.ok) throw new Error((await res.text()) || res.statusText);
       const r = await res.json();
-      setStatus("Zapisano w bibliotece (#" + r.id + ").", "ok");
+      setStatus("Saved to the library (#" + r.id + ").", "ok");
       if (typeof window.loadPromptLib === "function") window.loadPromptLib();
     } catch (e) {
-      setStatus("Błąd zapisu: " + e.message, "err");
+      setStatus("Save error: " + e.message, "err");
     }
   }
   function flash(id, on, off) { const b = byId(id); if (!b) return; b.textContent = on; setTimeout(() => { b.textContent = off; }, 1200); }
@@ -364,9 +364,9 @@
         impBar.classList.add("hidden");
         msg.textContent = "";
         render(); fitFrame();
-      } catch (e) { msg.textContent = "Błąd parsowania JSON (" + e.message + ")"; }
+      } catch (e) { msg.textContent = "JSON parse error (" + e.message + ")"; }
     };
-    byId("bxCopy").onclick = () => { navigator.clipboard.writeText(JSON.stringify(buildCaption())); flash("bxCopy", "✓ Skopiowano", "📋 Kopiuj (minified)"); };
+    byId("bxCopy").onclick = () => { navigator.clipboard.writeText(JSON.stringify(buildCaption())); flash("bxCopy", "✓ Copied", "📋 Copy (minified)"); };
     byId("bxCopyPretty").onclick = () => { navigator.clipboard.writeText(JSON.stringify(buildCaption(), null, 2)); flash("bxCopyPretty", "✓ OK", "Pretty"); };
     byId("bxDl").onclick = () => {
       const blob = new Blob([JSON.stringify(buildCaption())], { type: "application/json" });
@@ -381,22 +381,22 @@
     window.addEventListener("resize", fitFrame);
   }
 
-  /* ---- publiczne API ---- */
+  /* ---- public API ---- */
   window.BboxEditor = {
-    // Wczytaj JSON (string) do edytora; wywołuj PO przełączeniu na widok bbox.
+    // Load a JSON string into the editor; call AFTER switching to the bbox view.
     open(raw) {
       try {
         loadCaption(raw);
-        setStatus("Wczytano prompt do edycji.", "ok");
+        setStatus("Prompt loaded for editing.", "ok");
       } catch (e) {
-        setStatus("Błąd parsowania JSON: " + e.message, "err");
+        setStatus("JSON parse error: " + e.message, "err");
         return;
       }
       fitFrame();
     },
-    // Widok stał się widoczny — przelicz wymiary kanwy.
+    // The view became visible — recompute the canvas size.
     onShow() { fitFrame(); },
-    // Aktualny stan kanwy jako zminifikowany JSON v15 (np. do renderu).
+    // Current canvas state as minified v15 JSON (e.g. for rendering).
     getJson() { return JSON.stringify(buildCaption()); },
   };
 

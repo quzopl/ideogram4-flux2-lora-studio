@@ -474,7 +474,7 @@ a.btn.primary:hover { background: var(--accent-hover); }
 .fs-list li:hover { background: rgba(127,127,127,0.12); }
 .fs-list li .rm { cursor: pointer; opacity: 0.7; }
 
-/* --- Biblioteka promptów --------------------------------------------------- */
+/* --- Prompt library --------------------------------------------------------- */
 .plibtab { border-radius: 8px; }
 .plibtab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .pliblist { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; max-height: 480px; overflow: auto; }

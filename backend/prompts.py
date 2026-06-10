@@ -227,14 +227,14 @@ def clean_prompt(text: str) -> str:
 
 
 # =========================================================================== #
-# Ideogram 4 — strukturalne opisy JSON.
+# Ideogram 4 — structured JSON captions.
 #
-# Ideogram 4 był trenowany na opisach JSON o ścisłej kolejności kluczy i
-# kompaktowym zapisie. Model (VLM/LLM) generuje treść, a poprawną strukturę
-# składamy tutaj, w Pythonie — niezależnie od tego, co dokładnie zwróci model.
+# Ideogram 4 was trained on JSON captions with a strict key order and compact
+# formatting. The model (VLM/LLM) generates the content; the correct structure
+# is assembled here in Python — regardless of what exactly the model returns.
 # =========================================================================== #
 def _extract_json_object(raw: str) -> dict | None:
-    """Wyłuskaj i sparsuj pierwszy obiekt {...} z surowego tekstu modelu."""
+    """Extract and parse the first {...} object from the raw model output."""
     start = raw.find("{")
     end = raw.rfind("}")
     if start == -1 or end == -1 or end <= start:
@@ -247,7 +247,7 @@ def _extract_json_object(raw: str) -> dict | None:
 
 
 def _norm_elements(raw_elements) -> list[dict]:
-    """Sprowadź listę elementów do {type:obj,description} / {type:text,content}."""
+    """Reduce the element list to {type:obj,description} / {type:text,content}."""
     out: list[dict] = []
     if not isinstance(raw_elements, list):
         return out
@@ -271,13 +271,13 @@ def _norm_elements(raw_elements) -> list[dict]:
 
 
 def _norm_style(raw_style) -> dict:
-    """Złóż style_description w ścisłej kolejności z dokładnie jednym z photo/art_style."""
+    """Assemble style_description in strict order with exactly one of photo/art_style."""
     raw_style = raw_style if isinstance(raw_style, dict) else {}
     style: dict = {
         "aesthetics": str(raw_style.get("aesthetics", "")).strip(),
         "lighting": str(raw_style.get("lighting", "")).strip(),
     }
-    # Dokładnie jedno z photo / art_style. Domyślnie photo (dataset zdjęciowy).
+    # Exactly one of photo / art_style. Defaults to photo (photo dataset).
     if "art_style" in raw_style and "photo" not in raw_style:
         style["art_style"] = str(raw_style.get("art_style", "")).strip()
     else:
@@ -291,10 +291,10 @@ def _compact(obj: dict) -> str:
 
 
 def normalize_ideogram(raw: str) -> str:
-    """Zamień surowe wyjście modelu na poprawny, kompaktowy JSON-string Ideogram.
+    """Turn raw model output into a valid, compact Ideogram JSON string.
 
-    Buduje nowy obiekt o ścisłej kolejności kluczy. Gdy wejście nie zawiera
-    poprawnego JSON-a, zawija tekst w minimalny poprawny schemat (fallback).
+    Builds a fresh object with a strict key order. When the input contains no
+    valid JSON, wraps the text in a minimal valid schema (fallback).
     """
     obj = _extract_json_object(raw)
     if obj is None:
@@ -319,9 +319,9 @@ def normalize_ideogram(raw: str) -> str:
 
 
 def inject_trigger_ideogram(json_str: str, trigger: str) -> str:
-    """Wstaw trigger na początek high_level_description (nie przed cały JSON).
+    """Insert the trigger at the start of high_level_description (not before the JSON).
 
-    Gdy wejście nie jest poprawnym JSON-em lub trigger pusty — zwróć bez zmian.
+    If the input is not valid JSON or the trigger is empty — return unchanged.
     """
     trigger = trigger.strip()
     if not trigger:
@@ -338,7 +338,7 @@ def inject_trigger_ideogram(json_str: str, trigger: str) -> str:
 
 
 def ideogram_pretty(json_str: str) -> str | None:
-    """Ładnie sformatowany obiekt JSON do pliku .json. None gdy wejście błędne."""
+    """Pretty-printed JSON object for the .json file. None when the input is invalid."""
     try:
         obj = json.loads(json_str)
     except (json.JSONDecodeError, ValueError):
@@ -348,7 +348,7 @@ def ideogram_pretty(json_str: str) -> str | None:
     return json.dumps(obj, indent=2, ensure_ascii=False)
 
 
-# --- Instrukcja: opis obrazu jako JSON Ideogram 4 -------------------------- #
+# --- Instruction: describe an image as Ideogram 4 JSON --------------------- #
 _IDEOGRAM_SCHEMA = (
     " Return ONLY one JSON object, nothing else, with exactly these top-level "
     "keys in this order: \"high_level_description\" (one or two sentences), "
@@ -403,7 +403,7 @@ def get_ideogram_prompt(mode: str) -> str:
     return focus + _IDEOGRAM_SCHEMA
 
 
-# --- Instrukcja: Generator promptów w trybie Ideogram (text-only) ---------- #
+# --- Instruction: prompt studio in Ideogram mode (text-only) --------------- #
 _IDEOGRAM_STUDIO_BASE = (
     "You are a prompt engineer for the Ideogram 4 text-to-image model, which was "
     "trained on structured JSON captions. You turn the user's input into one valid "
@@ -434,31 +434,31 @@ def build_ideogram_studio_system(action: str = "expand", subject: str = "auto") 
 
 
 def caption_instruction(mode: str, style: str, fmt: str) -> str:
-    """Instrukcja opisu obrazu wspólna dla obu silników (lokalny i LM Studio)."""
+    """Captioning instruction shared by both engines (local and LM Studio)."""
     if fmt in ("ideogram", "aitoolkit"):
         return get_ideogram_prompt(mode)
     return get_prompt(mode, style)
 
 
 def postprocess_caption(text: str, fmt: str) -> str:
-    """Post-processing surowego opisu wg formatu (wspólny dla obu silników)."""
+    """Raw-caption post-processing by format (shared by both engines)."""
     if fmt in ("ideogram", "aitoolkit"):
         return normalize_ideogram(text)
     return clean_caption(text)
 
 
 # =========================================================================== #
-# Ideogram — framework v15 (konwerter promptów studia tekst->JSON).
-# Trzy klucze: aspect_ratio, high_level_description, compositional_deconstruction.
-# Bez style_description/color_palette — styl, światło i medium idą prozą w HLD
-# lub background. Osobny od normalize_ideogram (ten zostaje dla opisów datasetu).
+# Ideogram — framework v15 (the studio's text->JSON prompt converter).
+# Three keys: aspect_ratio, high_level_description, compositional_deconstruction.
+# No style_description/color_palette — style, light and medium go as prose into
+# the HLD or background. Separate from normalize_ideogram (kept for dataset captions).
 # =========================================================================== #
 _ASPECT_RE = re.compile(r"^\s*(\d+)\s*:\s*(\d+)\s*$")
 _PX_SIZE_RE = re.compile(r"^\s*(\d+)\s*[xX×]\s*(\d+)\s*$")
 
 
 def _norm_aspect_ratio(value) -> str | None:
-    """'W:H' lub 'WxH' (px) -> zredukowane 'W:H'; None gdy brak/'auto'/niepoprawne."""
+    """'W:H' or 'WxH' (px) -> reduced 'W:H'; None when missing/'auto'/invalid."""
     if not isinstance(value, str):
         return None
     m = _ASPECT_RE.match(value) or _PX_SIZE_RE.match(value)
@@ -472,7 +472,7 @@ def _norm_aspect_ratio(value) -> str | None:
 
 
 def _norm_bbox(value):
-    """bbox = lista 4 liczb -> [y1,x1,y2,x2] z y1<y2, x1<x2; inaczej None."""
+    """bbox = a list of 4 numbers -> [y1,x1,y2,x2] with y1<y2, x1<x2; else None."""
     if not (isinstance(value, list) and len(value) == 4):
         return None
     try:
@@ -487,7 +487,7 @@ def _norm_bbox(value):
 
 
 def _prose(value) -> str:
-    """Pole prozą: string bez zmian; dict/lista od modelu -> wartości jako proza."""
+    """Prose field: strings unchanged; a dict/list from the model -> values as prose."""
     if isinstance(value, dict):
         return ", ".join(_prose(v) for v in value.values() if _prose(v))
     if isinstance(value, list):
@@ -496,8 +496,8 @@ def _prose(value) -> str:
 
 
 def _norm_elements_v15(raw_elements) -> list:
-    """Elementy v15 w ścisłej kolejności kluczy: obj=type,bbox?,desc;
-    text=type,bbox?,text,desc. Bez color_palette."""
+    """v15 elements in strict key order: obj=type,bbox?,desc;
+    text=type,bbox?,text,desc. No color_palette."""
     out: list[dict] = []
     if not isinstance(raw_elements, list):
         return out
@@ -518,7 +518,7 @@ def _norm_elements_v15(raw_elements) -> list:
 
 
 def _unwrap_v15(obj: dict) -> dict:
-    """Rozpakuj podwójnie zakodowany JSON i opakowania caption/data (sekcja 13.1)."""
+    """Unwrap double-encoded JSON and caption/data wrappers (section 13.1)."""
     for key in ("caption", "data"):
         inner = obj.get(key)
         if isinstance(inner, dict) and (
@@ -529,8 +529,8 @@ def _unwrap_v15(obj: dict) -> dict:
             parsed = _extract_json_object(inner)
             if parsed is not None:
                 obj = parsed
-    # Podwójnie zakodowany JSON w hld — także owinięty w ```json``` przez model.
-    # Prawdziwa proza nigdy nie zawiera nazw kluczy schematu.
+    # Double-encoded JSON inside the hld — possibly fenced in ```json``` by the model.
+    # Real prose never contains the schema key names.
     hld = obj.get("high_level_description")
     if isinstance(hld, str) and (
         "high_level_description" in hld or "compositional_deconstruction" in hld
@@ -544,11 +544,11 @@ def _unwrap_v15(obj: dict) -> dict:
 
 
 def normalize_ideogram_v15(raw: str, default_ratio: str = "1:1") -> str:
-    """Surowe wyjście modelu -> kompaktowy JSON Ideogram zgodny z frameworkiem v15.
+    """Raw model output -> compact Ideogram JSON compliant with framework v15.
 
-    Wymusza strukturę (kolejność kluczy, format aspect_ratio, kształt elementów)
-    i wycina pola starego schematu (style_description itd.). Gdy wejście nie
-    zawiera poprawnego JSON-a, zawija tekst w minimalny poprawny schemat.
+    Enforces the structure (key order, aspect_ratio format, element shape) and
+    strips legacy-schema fields (style_description etc.). When the input has no
+    valid JSON, wraps the text in a minimal valid schema.
     """
     obj = _extract_json_object(raw)
     if obj is None:
@@ -789,11 +789,11 @@ _IDEOGRAM_V15_ACTION = {
 }
 
 
-# Kontrolki szczegółowości (wzór: Ideogrammar) — nadpisują domyślną liczbę
-# elementów i gęstość opisów. Doklejane NA KOŃCU, by wygrały z resztą reguł.
+# Detail controls (pattern: Ideogrammar) — override the default element count
+# and description density. Appended LAST so they win over the other rules.
 _V15_ELEMENT_LEVELS = {
     "few": "Decompose the scene into only 2 to 3 elements — just the most important subjects.",
-    "balanced": "",  # domyślne zachowanie frameworku — bez nadpisania
+    "balanced": "",  # the framework's default behavior — no override
     "detailed": "Decompose the scene into 6 to 10 elements, breaking it into more distinct parts.",
     "maximal": "Decompose the scene into 10 to 16 elements, breaking it very finely into many distinct parts.",
 }
@@ -817,7 +817,7 @@ def _detail_directive(elements_detail: str, desc_detail: str) -> str:
 def build_ideogram_studio_v15(action: str = "expand", subject: str = "auto",
                               elements_detail: str = "balanced",
                               desc_detail: str = "balanced") -> str:
-    """System-prompt konwertera tekst->Ideogram JSON wg frameworku v15."""
+    """System prompt of the text->Ideogram JSON converter per framework v15."""
     act = _IDEOGRAM_V15_ACTION.get(action, _IDEOGRAM_V15_ACTION["expand"])
     subj = _STUDIO_SUBJECT.get(subject, "")
     return (_IDEOGRAM_V15_BASE + act + subj + _IDEOGRAM_V15_CONTRACT

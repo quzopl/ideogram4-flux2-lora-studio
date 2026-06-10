@@ -1,14 +1,14 @@
-"""Florence-2: obraz -> szkic promptu Ideogram v15 z realnymi bboxami.
+"""Florence-2: image -> Ideogram v15 prompt draft with real bboxes.
 
-Cztery zadania modelu (szczegółowy opis sceny, detekcja obiektów, opisy
-regionów, OCR z pozycjami) sklejone w listę elementów v15: boxy z detekcji
-wzbogacane opisami regionów po IoU, duplikaty odcinane, tekst z OCR jako
-elementy text z dosłowną treścią. Wymiary znormalizowane do 0-1000 w
-porządku [y1,x1,y2,x2] (notacja v15).
+Four model tasks (detailed scene caption, object detection, dense region
+captions, OCR with regions) merged into a v15 elements list: detection boxes
+enriched with region captions by IoU, duplicates dropped, OCR text becomes
+text elements with literal content. Coordinates normalized to 0-1000 in
+[y1,x1,y2,x2] order (v15 notation).
 
-Model natywny w transformers >= 5 (bez trust_remote_code); ładowany leniwie,
-zwalniany przez unload() razem z resztą modeli (przycisk "Zwolnij GPU").
-Czyste funkcje (normalizacja, scalanie, montaż JSON) są niezależne od modelu.
+Native model in transformers >= 5 (no trust_remote_code); loaded lazily and
+released by unload() together with the other models ("Release GPU" button).
+The pure functions (normalization, merging, JSON assembly) are model-free.
 """
 from __future__ import annotations
 import json
@@ -17,15 +17,15 @@ import os
 import re
 import threading
 
-# Checkpointy skonwertowane pod natywną implementację w transformers >= 5
-# (oryginalne microsoft/Florence-2-* wymagają trust_remote_code i starszych
-# transformers). Większy wariant: florence-community/Florence-2-large-ft.
+# Checkpoints converted for the native transformers >= 5 implementation
+# (the original microsoft/Florence-2-* need trust_remote_code and older
+# transformers). Bigger variant: florence-community/Florence-2-large-ft.
 DEFAULT_MODEL = os.environ.get("FLORENCE_MODEL", "florence-community/Florence-2-base-ft")
 
 _LOCK = threading.Lock()
 _RUNTIME: dict | None = None   # {"model","processor","torch","device"}
 
-# Standardowe proporcje, do których przyciągamy wymiary zdjęcia.
+# Standard aspect ratios the image dimensions snap to.
 _ASPECTS = ["1:1", "4:5", "5:4", "3:4", "4:3", "2:3", "3:2",
             "9:16", "16:9", "21:9", "3:1", "1:3"]
 
@@ -33,10 +33,10 @@ _TAG_RE = re.compile(r"</?s>|<pad>|</?[^>]+>", re.IGNORECASE)
 
 
 # --------------------------------------------------------------------------- #
-# Czyste funkcje (testowalne bez modelu)
+# Pure functions (testable without the model)
 # --------------------------------------------------------------------------- #
 def nearest_aspect(width: int, height: int) -> str:
-    """Najbliższe standardowe W:H dla wymiarów obrazu (po logarytmie ilorazu)."""
+    """Nearest standard W:H for the image dimensions (by log of the quotient)."""
     ar = width / height if height else 1.0
     best, best_d = "1:1", float("inf")
     for opt in _ASPECTS:
@@ -55,7 +55,7 @@ def clean_label(label: str) -> str:
 
 
 def norm_bbox_xyxy(box, width: int, height: int) -> list[int]:
-    """Pikselowe [x1,y1,x2,y2] -> v15 [y1,x1,y2,x2] na siatce 0-1000."""
+    """Pixel [x1,y1,x2,y2] -> v15 [y1,x1,y2,x2] on the 0-1000 grid."""
     x1, y1, x2, y2 = (float(v) for v in box[:4])
     if x2 < x1:
         x1, x2 = x2, x1
@@ -67,7 +67,7 @@ def norm_bbox_xyxy(box, width: int, height: int) -> list[int]:
 
 
 def quad_to_xyxy(coords) -> list[float]:
-    """Czworokąt OCR (x,y * 4) -> obejmujący prostokąt [x1,y1,x2,y2]."""
+    """OCR quad (x,y * 4) -> enclosing rectangle [x1,y1,x2,y2]."""
     xs, ys = list(coords[0::2]), list(coords[1::2])
     return [min(xs), min(ys), max(xs), max(ys)]
 
@@ -87,7 +87,7 @@ def bbox_iou(a, b) -> float:
 
 def merge_detections(od: dict, dense: dict, ocr: dict,
                      width: int, height: int) -> list[dict]:
-    """Sklej OD + opisy regionów + OCR w elementy v15 (max 40)."""
+    """Merge OD + region captions + OCR into v15 elements (max 40)."""
     od = od if isinstance(od, dict) else {}
     dense = dense if isinstance(dense, dict) else {}
     ocr = ocr if isinstance(ocr, dict) else {}
@@ -104,7 +104,7 @@ def merge_detections(od: dict, dense: dict, ocr: dict,
         if bbox_area(bbox) <= 40:
             continue
         desc = clean_label(label)
-        # opis regionu (gęstszy semantycznie) wygrywa z gołą etykietą detekcji
+        # the region caption (semantically richer) beats the bare detection label
         best = max(dense_items, key=lambda it: bbox_iou(bbox, it["bbox"]), default=None)
         if best and bbox_iou(bbox, best["bbox"]) > 0.2:
             desc = best["desc"]
@@ -124,7 +124,7 @@ def merge_detections(od: dict, dense: dict, ocr: dict,
             elements.append({"type": "text", "bbox": bbox, "text": text,
                              "desc": f'text "{text}"'})
 
-    # deduplikacja: prawie identyczny box + ta sama treść = jeden element
+    # dedupe: a near-identical box + the same content = one element
     seen: list[dict] = []
     for el in sorted(elements, key=lambda e: (e["bbox"][0], e["bbox"][1])):
         dup = any(bbox_iou(el["bbox"], o["bbox"]) > 0.85 and el["desc"] == o["desc"]
@@ -135,7 +135,7 @@ def merge_detections(od: dict, dense: dict, ocr: dict,
 
 
 def _cap_words(text: str, limit: int) -> str:
-    """Przytnij do limitu słów na granicy zdania (twardo, gdy zdanie za długie)."""
+    """Trim to the word limit at a sentence boundary (hard cut if one sentence is too long)."""
     words = text.split()
     if len(words) <= limit:
         return text
@@ -150,7 +150,7 @@ def _cap_words(text: str, limit: int) -> str:
 
 def build_v15_draft(caption: str, elements: list[dict],
                     width: int, height: int) -> str:
-    """Zmontuj zminifikowany szkic JSON v15 z wyników analizy obrazu."""
+    """Assemble the minified v15 JSON draft from the image analysis results."""
     caption = " ".join((caption or "").split()) or "Uploaded image scene."
     out_els = []
     for el in elements:
@@ -170,7 +170,7 @@ def build_v15_draft(caption: str, elements: list[dict],
 
 
 # --------------------------------------------------------------------------- #
-# Model (leniwie ładowany)
+# Model (lazily loaded)
 # --------------------------------------------------------------------------- #
 def _get_runtime() -> dict:
     global _RUNTIME
@@ -194,7 +194,7 @@ def _get_runtime() -> dict:
 
 
 def unload() -> None:
-    """Zwolnij Florence-2 z pamięci (spinane z przyciskiem 'Zwolnij GPU')."""
+    """Release Florence-2 from memory (wired to the 'Release GPU' button)."""
     global _RUNTIME
     with _LOCK:
         if _RUNTIME is None:
@@ -231,7 +231,7 @@ def _run_task(image, task: str) -> dict | str:
 
 
 def analyze_image(image) -> tuple[str, list[dict]]:
-    """PIL.Image -> (opis sceny, elementy v15). Ładuje model przy 1. użyciu."""
+    """PIL.Image -> (scene caption, v15 elements). Loads the model on first use."""
     caption = _run_task(image, "<MORE_DETAILED_CAPTION>")
     caption = caption if isinstance(caption, str) else ""
     od = _run_task(image, "<OD>")
@@ -242,6 +242,6 @@ def analyze_image(image) -> tuple[str, list[dict]]:
         dense if isinstance(dense, dict) else {},
         ocr if isinstance(ocr, dict) else {},
         image.width, image.height)
-    # Z opisu sceny zdejmujemy tylko tagi specjalne — interpunkcja zostaje.
+    # Strip only the special tags from the caption — punctuation stays.
     caption = re.sub(r"\s+", " ", _TAG_RE.sub(" ", caption)).strip()
     return caption, elements

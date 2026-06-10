@@ -1,7 +1,7 @@
 /* =========================================================================== //
-// Render Ideogram 4 — osobny moduł. Bierze JSON v15 z edytora bbox, wysyła do
-// /api/ideogram/render (wbudowany workflow ComfyUI po stronie backendu) i
-// śledzi job przez wspólne endpointy /api/comfy/job/* (progress + podgląd).
+// Ideogram 4 render — standalone module. Takes the v15 JSON from the bbox
+// editor, posts it to /api/ideogram/render (the built-in ComfyUI workflow on
+// the backend) and tracks the job via the shared /api/comfy/job/* endpoints.
 // =========================================================================== */
 "use strict";
 
@@ -51,7 +51,7 @@
     try {
       const r = await fetch("/api/ideogram/render/config");
       if (r.ok) applyConfig((await r.json()).params);
-    } catch (_) { /* defaulty z HTML zostają */ }
+    } catch (_) { /* keep the HTML defaults */ }
   }
 
   async function loadLoras() {
@@ -65,7 +65,7 @@
         o.value = name;
         list.appendChild(o);
       }
-    } catch (_) { /* ComfyUI offline — pole zostaje ręczne */ }
+    } catch (_) { /* ComfyUI offline — the field stays manual */ }
   }
 
   function setBusy(busy) {
@@ -104,7 +104,7 @@
       if (!r.ok) throw new Error(await r.text());
       job = await r.json();
     } catch (e) {
-      setStatus("Błąd odpytywania: " + e.message, "err");
+      setStatus("Polling error: " + e.message, "err");
       stopPolling();
       return;
     }
@@ -118,13 +118,13 @@
     }
     if (job.state === "done") {
       showResults(job.images);
-      setStatus("Gotowe — obraz zapisany w galerii ComfyUI.", "ok");
+      setStatus("Done — image saved to the ComfyUI gallery.", "ok");
       stopPolling();
     } else if (job.state === "error") {
-      setStatus("Błąd renderu: " + (job.error || "?"), "err");
+      setStatus("Render error: " + (job.error || "?"), "err");
       stopPolling();
     } else if (job.state === "cancelled") {
-      setStatus("Anulowano.", "");
+      setStatus("Cancelled.", "");
       stopPolling();
     }
   }
@@ -135,7 +135,7 @@
       byId("irSeed").value = Math.floor(Math.random() * 1e15);
     }
     setBusy(true);
-    setStatus("Kolejkuję render…", "");
+    setStatus("Queueing the render…", "");
     try {
       const r = await fetch("/api/ideogram/render", {
         method: "POST",
@@ -150,7 +150,7 @@
       }
       pollTimer = setInterval(poll, 700);
     } catch (e) {
-      setStatus("Błąd: " + e.message, "err");
+      setStatus("Error: " + e.message, "err");
       setBusy(false);
     }
   }

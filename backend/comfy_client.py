@@ -34,7 +34,7 @@ def _request(url: str, *, data: bytes | None = None, timeout: float = 30.0) -> b
         body = e.read().decode("utf-8", "replace")[:600]
         raise ComfyError(f"HTTP {e.code} z {url}: {body}") from None
     except urllib.error.URLError as e:
-        raise ComfyError(f"Brak połączenia z {url}: {e.reason}") from None
+        raise ComfyError(f"No connection to {url}: {e.reason}") from None
 
 
 def _join(base: str, path: str) -> str:
@@ -78,7 +78,7 @@ def queue_prompt(base_url: str, workflow: dict, client_id: str | None = None) ->
     res = json.loads(raw)
     pid = res.get("prompt_id")
     if not pid:
-        raise ComfyError(f"Nieoczekiwana odpowiedź: {res}")
+        raise ComfyError(f"Unexpected response: {res}")
     return pid
 
 

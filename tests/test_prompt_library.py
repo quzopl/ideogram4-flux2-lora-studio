@@ -5,7 +5,7 @@ from backend import server
 
 @pytest.fixture()
 def tmp_db(tmp_path, monkeypatch):
-    """Świeża baza SQLite per test — podmienia DB_PATH i tworzy schemat."""
+    """Fresh SQLite database per test — swaps DB_PATH and creates the schema."""
     monkeypatch.setattr(server, "DB_PATH", tmp_path / "test.db")
     server._init_db()
     return tmp_path / "test.db"
@@ -25,7 +25,7 @@ def test_save_and_list_newest_first(tmp_db):
         '{"aspect_ratio":"1:1","high_level_description":"a dog"}')
     out = server.api_prompt_library("all")
     assert len(out["prompts"]) == 2
-    assert out["prompts"][0]["category"] == "ideogram"  # nowszy pierwszy
+    assert out["prompts"][0]["category"] == "ideogram"  # newest first
     assert out["prompts"][1]["prompt"].startswith("A tabby cat")
     assert out["prompts"][0]["id"] > out["prompts"][1]["id"]
 
@@ -70,7 +70,7 @@ def test_manual_save_endpoint(tmp_db):
         category="ideogram",
         prompt='{"aspect_ratio":"1:1","high_level_description":"x",'
                '"compositional_deconstruction":{"background":"plain studio wall","elements":[]}}',
-        input_text="z edytora bbox")
+        input_text="from the bbox editor")
     out = server.api_prompt_library_save(req)
     assert out["id"] > 0
     assert isinstance(out["warnings"], list)
@@ -102,7 +102,7 @@ def test_export_sql_dump(tmp_db):
     sql = resp.body.decode("utf-8")
     assert "CREATE TABLE IF NOT EXISTS prompt_library" in sql
     assert sql.count("INSERT INTO prompt_library") == 2
-    assert "it''s a prompt with ''quotes''" in sql  # poprawne escapowanie SQL
+    assert "it''s a prompt with ''quotes''" in sql  # proper SQL escaping
     assert ".sql" in resp.headers["content-disposition"]
 
 

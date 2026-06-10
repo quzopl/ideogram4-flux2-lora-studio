@@ -47,7 +47,7 @@ def test_hld_over_50_words():
 
 def test_hld_meta_opening():
     out = _lint(_ok_caption(high_level_description="This image shows a musician."))
-    assert any("podmiotu" in f["msg"] for f in out)
+    assert any("subject" in f["msg"] for f in out)
 
 
 def test_warm_grading_flagged():
@@ -61,7 +61,7 @@ def test_camera_language_in_desc_is_error():
     cap["compositional_deconstruction"]["elements"][0]["desc"] = \
         "a musician with creamy bokeh behind him"
     out = _lint(cap)
-    assert any(f["level"] == "err" and "kamery" in f["msg"] for f in out)
+    assert any(f["level"] == "err" and "camera" in f["msg"] for f in out)
 
 
 def test_floor_as_element_is_error():

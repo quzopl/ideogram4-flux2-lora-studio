@@ -11,7 +11,7 @@ def _nodes_by_type(wf, class_type):
 
 
 def test_compute_dims_reference_value():
-    # Wartość zweryfikowana w Ideogrammar: 3:2 @ 2MP -> 1776x1184.
+    # Value verified against Ideogrammar: 3:2 @ 2MP -> 1776x1184.
     assert iw.compute_dims("3:2", 2.0) == (1776, 1184)
 
 
@@ -83,11 +83,11 @@ def test_build_workflow_lora_splice():
     lora = _nodes_by_type(wf, "LoraLoaderModelOnly")[0]
     assert lora["inputs"]["lora_name"] == "my.safetensors"
     assert lora["inputs"]["strength_model"] == 0.8
-    # konsument modelu dyfuzyjnego (AuraFlow w wariancie simple) wskazuje na LoRA
+    # the diffusion model's consumer (AuraFlow in the simple variant) points at the LoRA
     aura = _nodes_by_type(wf, "ModelSamplingAuraFlow")[0]
     lora_id = next(k for k, n in wf.items() if n["class_type"] == "LoraLoaderModelOnly")
     assert aura["inputs"]["model"][0] == lora_id
-    # a LoRA bierze model z loadera dyfuzyjnego, nie z samej siebie
+    # and the LoRA takes the model from the diffusion loader, not from itself
     diff_id = lora["inputs"]["model"][0]
     assert wf[diff_id]["class_type"] == "UNETLoader"
 
@@ -128,13 +128,13 @@ def test_render_endpoint_starts_job(tmp_path, monkeypatch):
         prompt=V15, params={"preset": "Default", "seed": 7}))
     assert out["job_id"]
     assert isinstance(out["warnings"], list)
-    # job zarejestrowany we wspólnej maszynerii ComfyUI
+    # the job is registered in the shared ComfyUI machinery
     job = server.COMFY_JOBS.pop(out["job_id"])
     assert job["state"] in ("pending", "running", "done")
-    # parametry utrwalone do następnego renderu
+    # the parameters persist for the next render
     saved = server.api_ideogram_render_config()["params"]
     assert saved["preset"] == "Default" and saved["seed"] == 7
-    # workflow przekazany do runnera zawiera prompt
+    # the workflow handed to the runner contains the prompt
     import time
     for _ in range(50):
         if captured.get("wf"):

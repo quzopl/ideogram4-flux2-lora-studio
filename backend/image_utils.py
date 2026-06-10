@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from PIL import Image, ImageOps
 
-# Włącz odczyt/zapis HEIC/HEIF (zdjęcia z iPhone'a) — opcjonalna zależność.
+# Enable HEIC/HEIF read/write (iPhone photos) — optional dependency.
 try:
     from pillow_heif import register_heif_opener
     register_heif_opener()
-except ImportError:  # pragma: no cover - środowisko bez pillow-heif
+except ImportError:  # pragma: no cover - environment without pillow-heif
     pass
 
 # Extensions we accept as input.

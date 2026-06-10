@@ -14,7 +14,7 @@ _HEADERS = {"Content-Type": "application/json", "Authorization": "Bearer lm-stud
 
 
 class LMStudioError(RuntimeError):
-    """Czytelny błąd komunikacji z LM Studio."""
+    """Readable LM Studio communication error."""
 
 
 def _image_data_uri(image: Image.Image) -> str:
@@ -33,7 +33,7 @@ def _request(url: str, payload: dict | None, timeout: float) -> dict:
 
 
 def list_models(base_url: str = DEFAULT_URL, timeout: float = 3.0) -> list[str]:
-    """Lista id modeli z LM Studio; pusta lista, gdy serwer niedostępny."""
+    """Model ids from LM Studio; empty list when the server is unreachable."""
     try:
         out = _request(f"{base_url.rstrip('/')}/models", None, timeout)
     except (urllib.error.URLError, OSError, ValueError):
@@ -49,15 +49,15 @@ def _chat(base_url: str, payload: dict, timeout: float) -> str:
     except urllib.error.HTTPError as e:
         raise LMStudioError(f"LM Studio HTTP {e.code}.") from e
     except (urllib.error.URLError, OSError) as e:
-        raise LMStudioError(f"Nie można połączyć z LM Studio ({base_url}).") from e
+        raise LMStudioError(f"Cannot connect to LM Studio ({base_url}).") from e
     except ValueError as e:
-        raise LMStudioError("Błędna odpowiedź LM Studio (nie-JSON).") from e
+        raise LMStudioError("Bad LM Studio response (not JSON).") from e
     try:
         content = out["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as e:
-        raise LMStudioError("LM Studio zwróciło odpowiedź bez treści.") from e
+        raise LMStudioError("LM Studio returned a response without content.") from e
     if content is None:
-        raise LMStudioError("LM Studio zwróciło pustą treść (content=null).")
+        raise LMStudioError("LM Studio returned empty content (content=null).")
     return content
 
 

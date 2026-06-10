@@ -18,7 +18,7 @@ let state = {
   folder: null,
   count: 0,
   jobId: null,
-  deleted: new Set(), // indeksy zdjęć usuniętych przez użytkownika
+  deleted: new Set(), // indices of photos removed by the user
 };
 
 // --------------------------------------------------------------------------- //
@@ -53,7 +53,7 @@ function populateModels(models, def, selectKey) {
 })();
 
 // --------------------------------------------------------------------------- //
-// Status GPU + zwalnianie modelu z pamięci
+// GPU status + releasing models from memory
 // --------------------------------------------------------------------------- //
 const shortModel = (m) => (m ? m.split("/").pop() : "");
 
@@ -73,7 +73,7 @@ function applyGpu(g) {
     el.className = "info ok";
     btn.disabled = false;
   } else {
-    el.textContent = `Model niezaładowany${vram}`;
+    el.textContent = `Model not loaded${vram}`;
     el.className = "info";
     btn.disabled = true;
   }
@@ -90,12 +90,12 @@ async function refreshGpu() {
 $("unloadBtn").addEventListener("click", async () => {
   const btn = $("unloadBtn");
   btn.disabled = true;
-  $("gpuStatus").textContent = "Zwalnianie pamięci GPU…";
+  $("gpuStatus").textContent = "Releasing GPU memory…";
   $("gpuStatus").className = "info";
   try {
     applyGpu(await api("/api/unload", {}));
   } catch (e) {
-    $("gpuStatus").textContent = "Błąd: " + e.message;
+    $("gpuStatus").textContent = "Error: " + e.message;
     $("gpuStatus").className = "info err";
     refreshGpu();
   }
@@ -104,10 +104,10 @@ $("unloadBtn").addEventListener("click", async () => {
 refreshGpu();
 
 // --------------------------------------------------------------------------- //
-// Top navigation (Dataset <-> Generator promptów)
+// Top navigation (Dataset <-> Prompt studio)
 // --------------------------------------------------------------------------- //
-// Przełączanie generyczne po id "view-<nazwa>" — nowe widoki (moduły) nie
-// wymagają zmian tutaj, poza ewentualnym hookiem aktywacyjnym.
+// Generic switching by "view-<name>" id — new views (modules) need no
+// changes here beyond an optional activation hook.
 function switchView(view) {
   document.querySelectorAll(".navtab").forEach((t) =>
     t.classList.toggle("active", t.dataset.view === view));
@@ -146,10 +146,10 @@ $("scanBtn").addEventListener("click", async () => {
     const r = await api("/api/scan", { folder });
     state.folder = r.folder;
     state.count = r.count;
-    setSrcInfo(`Znaleziono ${r.count} zdjęć w: ${r.folder}`, "ok");
+    setSrcInfo(`Found ${r.count} images in: ${r.folder}`, "ok");
     $("processBtn").disabled = r.count === 0;
   } catch (e) {
-    setSrcInfo("Błąd: " + e.message, "err");
+    setSrcInfo("Error: " + e.message, "err");
     $("processBtn").disabled = true;
   }
 });
@@ -170,7 +170,7 @@ dropzone.addEventListener("drop", (e) => uploadFiles(e.dataTransfer.files));
 
 async function uploadFiles(fileList) {
   if (!fileList || !fileList.length) return;
-  setSrcInfo("Przesyłanie " + fileList.length + " plików…");
+  setSrcInfo("Uploading " + fileList.length + " files…");
   const fd = new FormData();
   for (const f of fileList) fd.append("files", f);
   try {
@@ -178,10 +178,10 @@ async function uploadFiles(fileList) {
     const r = await res.json();
     state.folder = r.folder;
     state.count = r.count;
-    setSrcInfo(`Przesłano ${r.count} zdjęć.`, "ok");
+    setSrcInfo(`Uploaded ${r.count} images.`, "ok");
     $("processBtn").disabled = r.count === 0;
   } catch (e) {
-    setSrcInfo("Błąd przesyłania: " + e.message, "err");
+    setSrcInfo("Upload error: " + e.message, "err");
   }
 }
 
@@ -216,8 +216,8 @@ $("processBtn").addEventListener("click", async () => {
   $("progressCard").classList.remove("hidden");
   $("resultsCard").classList.add("hidden");
   $("exportCard").classList.add("hidden");
-  $("results").innerHTML = "";       // wyczyść poprzednie wyniki
-  state.deleted = new Set();          // i listę usuniętych
+  $("results").innerHTML = "";       // clear previous results
+  state.deleted = new Set();          // and the removed list
   setProgress(0, "Start…");
 
   try {
@@ -225,7 +225,7 @@ $("processBtn").addEventListener("click", async () => {
     state.jobId = job_id;
     pollJob(job_id, total);
   } catch (e) {
-    setProgress(0, "Błąd: " + e.message, "err");
+    setProgress(0, "Error: " + e.message, "err");
     $("processBtn").disabled = false;
   }
 });
@@ -235,26 +235,26 @@ async function pollJob(jobId, total) {
     const job = await api("/api/job/" + jobId);
 
     if (job.state === "loading_model") {
-      setProgress(2, job.current || "Ładowanie modelu…");
+      setProgress(2, job.current || "Loading the model…");
     } else if (job.state === "processing" || job.state === "pending") {
       const pct = total ? Math.round((job.processed / total) * 100) : 0;
       setProgress(pct, `Przetworzono ${job.processed}/${total} — ${job.current}`);
       renderResults(job);
     } else if (job.state === "done") {
-      setProgress(100, `Gotowe: ${job.processed} zdjęć.`, "ok");
+      setProgress(100, `Done: ${job.processed} images.`, "ok");
       renderResults(job);
       $("exportCard").classList.remove("hidden");
       $("processBtn").disabled = false;
       refreshGpu();
       return;
     } else if (job.state === "error") {
-      setProgress(0, "Błąd przetwarzania: " + job.error, "err");
+      setProgress(0, "Processing error: " + job.error, "err");
       $("processBtn").disabled = false;
       return;
     }
     setTimeout(() => pollJob(jobId, total), 1000);
   } catch (e) {
-    setProgress(0, "Błąd: " + e.message, "err");
+    setProgress(0, "Error: " + e.message, "err");
     $("processBtn").disabled = false;
   }
 }
@@ -281,7 +281,7 @@ function renderResults(job) {
       card.className = "result";
       card.id = "res-" + r.idx;
       card.innerHTML = `
-        <button class="del" title="Usuń to zdjęcie z datasetu" data-idx="${r.idx}">✕</button>
+        <button class="del" title="Remove this photo from the dataset" data-idx="${r.idx}">✕</button>
         <img src="/api/thumb/${job.id}/${r.idx}" loading="lazy" />
         <div class="meta">
           <span>${r.out_name || r.src_name}</span>
@@ -293,7 +293,7 @@ function renderResults(job) {
       // Set caption once; don't clobber user edits on subsequent polls.
       card.querySelector("textarea").value = r.caption || "";
 
-      // Usuwanie zdjęcia z datasetu.
+      // Removing a photo from the dataset.
       card.querySelector(".del").addEventListener("click", () => {
         state.deleted.add(r.idx);
         card.remove();
@@ -305,7 +305,7 @@ function renderResults(job) {
   updateExportCount();
 }
 
-// Live podgląd słowa-wyzwalacza (trigger) doklejanego do każdego opisu.
+// Live preview of the trigger word prepended to every caption.
 function updateTriggerPreviews() {
   const trigger = $("trigger").value.trim();
   const on = $("prependTrigger").checked && trigger;
@@ -325,18 +325,18 @@ function updateExportCount() {
   if (el) {
     const removed = state.deleted.size;
     el.textContent =
-      `Do eksportu: ${total} zdjęć` + (removed ? ` (usunięto ${removed}).` : ".");
+      `To export: ${total} images` + (removed ? ` (${removed} removed).` : ".");
   }
 }
 
-// Odśwież podgląd triggera, gdy zmienia się pole lub checkbox.
+// Refresh the trigger preview when the field or checkbox changes.
 $("trigger").addEventListener("input", updateTriggerPreviews);
 $("prependTrigger").addEventListener("change", updateTriggerPreviews);
 
 // --------------------------------------------------------------------------- //
 // Export
 // --------------------------------------------------------------------------- //
-// Zbiera wspólny payload eksportu (opisy, trigger, usunięte indeksy).
+// Collects the shared export payload (captions, trigger, removed indices).
 function exportPayload() {
   const captions = {};
   document.querySelectorAll("#results textarea").forEach((ta) => {
@@ -353,19 +353,19 @@ function exportPayload() {
 
 $("exportBtn").addEventListener("click", async () => {
   const output = $("outputFolder").value.trim();
-  if (!output) { setExportInfo("Podaj folder docelowy.", "err"); return; }
+  if (!output) { setExportInfo("Enter a destination folder.", "err"); return; }
   if (!state.jobId) return;
 
   setExportInfo("Eksportowanie…");
   try {
     const r = await api("/api/export", { ...exportPayload(), output_folder: output });
-    setExportInfo(`Zapisano ${r.written} par (zdjęcie + .txt) w: ${r.output_folder}`, "ok");
+    setExportInfo(`Saved ${r.written} pairs (image + .txt) to: ${r.output_folder}`, "ok");
   } catch (e) {
-    setExportInfo("Błąd eksportu: " + e.message, "err");
+    setExportInfo("Export error: " + e.message, "err");
   }
 });
 
-// Pobranie całego datasetu jako .zip.
+// Download the whole dataset as a .zip.
 $("zipBtn").addEventListener("click", async () => {
   if (!state.jobId) return;
   setExportInfo("Pakowanie do .zip…");
@@ -388,9 +388,9 @@ $("zipBtn").addEventListener("click", async () => {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    setExportInfo(`Pobrano paczkę: ${fname}`, "ok");
+    setExportInfo(`Downloaded: ${fname}`, "ok");
   } catch (e) {
-    setExportInfo("Błąd pakowania: " + e.message, "err");
+    setExportInfo("Packaging error: " + e.message, "err");
   }
 });
 
@@ -401,16 +401,16 @@ function setExportInfo(msg, cls) {
 }
 
 // --------------------------------------------------------------------------- //
-// Generator promptów FLUX.2
+// Prompt studio
 // --------------------------------------------------------------------------- //
 let pAction = "expand";
 
 const P_PLACEHOLDERS = {
-  expand: "np. kobieta z rudymi włosami w kawiarni",
-  refine: "np. woman, red hair, cafe, masterpiece, best quality, 8k, detailed",
+  expand: "e.g. a woman with red hair in a cafe",
+  refine: "e.g. woman, red hair, cafe, masterpiece, best quality, 8k, detailed",
 };
 
-// Etykieta docelowego formatu do podpowiedzi (zależnie od dropdownu).
+// Target-format label for the hint (depends on the dropdown).
 function _promptFormatLabel() {
   const f = $("promptFormat") ? $("promptFormat").value : "flux";
   if (f === "ideogram") return "Ideogram 4 (JSON)";
@@ -418,12 +418,12 @@ function _promptFormatLabel() {
   return "FLUX.2";
 }
 
-// Hint zależny od akcji (expand/refine) i wybranego formatu docelowego.
+// Hint depends on the action (expand/refine) and the selected target format.
 function updatePHint() {
   const fmt = _promptFormatLabel();
   const hint = pAction === "refine"
-    ? `Wklej dłuższy/istniejący prompt — model uporządkuje go i dostosuje do: ${fmt}.`
-    : `Wpisz krótki pomysł, a model rozbuduje go w pełny prompt: ${fmt}.`;
+    ? `Paste a longer/existing prompt — the model will clean it up and adapt it to: ${fmt}.`
+    : `Type a short idea and the model will expand it into a full prompt: ${fmt}.`;
   if ($("pHint")) $("pHint").textContent = hint;
   if ($("pInput")) $("pInput").placeholder = P_PLACEHOLDERS[pAction];
 }
@@ -441,11 +441,11 @@ updatePHint();
 
 async function generatePrompt() {
   const text = $("pInput").value.trim();
-  if (!text) { setPStatus("Wpisz prompt do przetworzenia.", "err"); return; }
+  if (!text) { setPStatus("Type a prompt to process.", "err"); return; }
 
   $("pGenBtn").disabled = true;
   $("pRegenBtn").disabled = true;
-  setPStatus("Generuję… (pierwsze użycie ładuje model)", "");
+  setPStatus("Generating… (first use loads the model)", "");
   try {
     const r = await api("/api/prompt", {
       text,
@@ -462,10 +462,10 @@ async function generatePrompt() {
     $("pResultCard").classList.remove("hidden");
     if (window.renderStudioWarnings) window.renderStudioWarnings(r.warnings);
     updateToCanvasBtn();
-    setPStatus("Gotowe. Zapisano w bibliotece.", "ok");
+    setPStatus("Done. Saved to the library.", "ok");
     loadPromptLib();
   } catch (e) {
-    setPStatus("Błąd: " + e.message, "err");
+    setPStatus("Error: " + e.message, "err");
   } finally {
     $("pGenBtn").disabled = false;
     $("pRegenBtn").disabled = false;
@@ -481,11 +481,11 @@ $("pCopyBtn").addEventListener("click", async () => {
   if (!txt) return;
   try {
     await navigator.clipboard.writeText(txt);
-    setPStatus("Skopiowano do schowka.", "ok");
+    setPStatus("Copied to clipboard.", "ok");
   } catch {
     $("pOutput").select();
     document.execCommand("copy");
-    setPStatus("Skopiowano.", "ok");
+    setPStatus("Copied.", "ok");
   }
 });
 
@@ -493,13 +493,13 @@ $("pUseBtn").addEventListener("click", () => {
   const txt = $("pOutput").value.trim();
   if (!txt) return;
   $("pInput").value = txt;
-  // Edycja istniejącego promptu => przełącz na tryb „Popraw".
+  // Editing an existing prompt => switch to "Refine" mode.
   document.querySelector('.ptab[data-action="refine"]').click();
   $("pInput").focus();
-  setPStatus("Przeniesiono wynik do wejścia.", "");
+  setPStatus("Moved the result to the input.", "");
 });
 
-// „Edytuj w kanwie" — tylko dla formatów JSON (Ideogram/ai-toolkit).
+// "Edit on canvas" — JSON formats only (Ideogram/ai-toolkit).
 function updateToCanvasBtn() {
   const fmt = $("promptFormat") ? $("promptFormat").value : "flux";
   if ($("pToCanvasBtn")) $("pToCanvasBtn").classList.toggle("hidden", fmt === "flux");
@@ -519,7 +519,7 @@ function setPStatus(msg, cls) {
 }
 
 // --------------------------------------------------------------------------- //
-// 📚 Biblioteka promptów (SQLite po stronie backendu)
+// 📚 Prompt library (SQLite on the backend)
 // --------------------------------------------------------------------------- //
 let pLibCat = "all";
 
@@ -551,7 +551,7 @@ function renderPromptLib(items) {
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "info";
-    empty.textContent = "Biblioteka jest pusta — wygeneruj pierwszy prompt powyżej.";
+    empty.textContent = "The library is empty — generate your first prompt above.";
     list.appendChild(empty);
     return;
   }
@@ -568,7 +568,7 @@ function renderPromptLib(items) {
     const text = document.createElement("div");
     text.className = "plib-text";
     text.textContent = it.prompt;
-    text.title = "Kliknij, by rozwinąć/zwinąć";
+    text.title = "Click to expand/collapse";
     text.addEventListener("click", () => text.classList.toggle("expanded"));
     const meta = document.createElement("div");
     meta.className = "plib-meta";
@@ -578,24 +578,24 @@ function renderPromptLib(items) {
     body.appendChild(meta);
 
     const copyBtn = document.createElement("button");
-    copyBtn.textContent = "📋 Kopiuj";
-    copyBtn.title = "Skopiuj cały prompt do schowka";
+    copyBtn.textContent = "📋 Copy";
+    copyBtn.title = "Copy the whole prompt to clipboard";
     copyBtn.addEventListener("click", async () => {
       await copyTextToClipboard(it.prompt);
-      copyBtn.textContent = "✓ Skopiowano";
-      setTimeout(() => { copyBtn.textContent = "📋 Kopiuj"; }, 1500);
+      copyBtn.textContent = "✓ Copied";
+      setTimeout(() => { copyBtn.textContent = "📋 Copy"; }, 1500);
     });
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "🗑";
-    delBtn.title = "Usuń z biblioteki";
+    delBtn.title = "Delete from the library";
     delBtn.addEventListener("click", async () => {
       try {
         const res = await fetch(`/api/prompts/library/${it.id}`, { method: "DELETE" });
         if (!res.ok) throw new Error(await res.text());
         loadPromptLib();
       } catch (e) {
-        setPLibStatus("Błąd usuwania: " + e.message, "err");
+        setPLibStatus("Delete error: " + e.message, "err");
       }
     });
 
@@ -605,7 +605,7 @@ function renderPromptLib(items) {
     if (it.category === "ideogram" && window.BboxEditor) {
       const canvasBtn = document.createElement("button");
       canvasBtn.textContent = "🧩";
-      canvasBtn.title = "Otwórz w edytorze bbox";
+      canvasBtn.title = "Open in the bbox editor";
       canvasBtn.addEventListener("click", () => {
         switchView("bbox");
         window.BboxEditor.open(it.prompt);
@@ -626,9 +626,9 @@ async function loadPromptLib() {
   try {
     const r = await api(`/api/prompts/library?category=${pLibCat}`);
     renderPromptLib(r.prompts);
-    setPLibStatus(`Pozycji: ${r.prompts.length}`, "");
+    setPLibStatus(`Items: ${r.prompts.length}`, "");
   } catch (e) {
-    setPLibStatus("Błąd wczytywania biblioteki: " + e.message, "err");
+    setPLibStatus("Library load error: " + e.message, "err");
   }
 }
 
@@ -660,8 +660,8 @@ const cInfo = (id, msg, cls) => {
 };
 
 let comfyMapping = null;
-let comfyLoras = [];          // pełna lista LoRA z /api/comfy/loras
-let comfyLoraSlots = 0;       // ile LoRA-loaderów wykrył mapping
+let comfyLoras = [];          // full LoRA list from /api/comfy/loras
+let comfyLoraSlots = 0;       // how many LoRA loaders the mapping detected
 let comfyJobId = null;
 let comfyJobTimer = null;
 
@@ -675,7 +675,7 @@ async function loadComfyConfig() {
       $("cMapping").value = JSON.stringify(c.mapping, null, 2);
       $("cMappingBox").classList.remove("hidden");
       cInfo("cWorkflowInfo",
-        `Workflow w pamięci: ${c.workflow_node_count} węzłów, ${comfyLoraSlots} LoRA-slot(ów). Wgraj inny, jeśli chcesz podmienić.`,
+        `Workflow in memory: ${c.workflow_node_count} nodes, ${comfyLoraSlots} LoRA slot(s). Upload another one to replace it.`,
         "ok");
       ensureLoraRows();
     } else {
@@ -683,7 +683,7 @@ async function loadComfyConfig() {
       cInfo("cWorkflowInfo", "Brak wgranego workflow.", "");
     }
   } catch (e) {
-    cInfo("cUrlInfo", "Błąd ładowania konfiguracji: " + e.message, "err");
+    cInfo("cUrlInfo", "Config load error: " + e.message, "err");
   }
   await Promise.all([refreshMappingLib(), refreshPromptLib(), refreshGallery(), refreshEdLib()]);
 }
@@ -692,17 +692,17 @@ async function loadComfyConfig() {
 $("cUrlSave").addEventListener("click", async () => {
   try {
     const r = await api("/api/comfy/url", { url: $("cUrl").value.trim() });
-    cInfo("cUrlInfo", "Zapisano: " + r.url, "ok");
-  } catch (e) { cInfo("cUrlInfo", "Błąd: " + e.message, "err"); }
+    cInfo("cUrlInfo", "Saved: " + r.url, "ok");
+  } catch (e) { cInfo("cUrlInfo", "Error: " + e.message, "err"); }
 });
 
 $("cTest").addEventListener("click", async () => {
-  cInfo("cUrlInfo", "Łączę z ComfyUI…");
+  cInfo("cUrlInfo", "Connecting to ComfyUI…");
   try {
     const r = await api("/api/comfy/test", {});
     const v = r.stats?.system?.comfyui_version || r.stats?.system?.os || "ok";
-    cInfo("cUrlInfo", `Połączono z ${r.url} (${v}).`, "ok");
-  } catch (e) { cInfo("cUrlInfo", "Brak połączenia: " + e.message, "err"); }
+    cInfo("cUrlInfo", `Connected to ${r.url} (${v}).`, "ok");
+  } catch (e) { cInfo("cUrlInfo", "No connection: " + e.message, "err"); }
 });
 
 // ---- Workflow upload (drop + click) ---- //
@@ -719,7 +719,7 @@ cDz.addEventListener("drop", (e) => uploadWorkflow(e.dataTransfer.files?.[0]));
 
 async function uploadWorkflow(file) {
   if (!file) return;
-  cInfo("cWorkflowInfo", `Wczytuję ${file.name}…`);
+  cInfo("cWorkflowInfo", `Loading ${file.name}…`);
   const fd = new FormData();
   fd.append("file", file);
   try {
@@ -732,14 +732,14 @@ async function uploadWorkflow(file) {
     $("cMappingBox").classList.remove("hidden");
     const src = r.source === "png" ? "z metadanych PNG" : "z pliku JSON";
     cInfo("cWorkflowInfo",
-      `Wczytano workflow ${src}: ${r.node_count} węzłów, ${comfyLoraSlots} LoRA-slot(ów).`,
+      `Loaded workflow ${src}: ${r.node_count} nodes, ${comfyLoraSlots} LoRA slot(s).`,
       "ok");
     if (r.current_prompt && !$("cPrompt").value.trim()) {
       $("cPrompt").value = r.current_prompt;  // auto-wpis aktualnego promptu
     }
     ensureLoraRows();
   } catch (e) {
-    cInfo("cWorkflowInfo", "Błąd: " + e.message, "err");
+    cInfo("cWorkflowInfo", "Error: " + e.message, "err");
   }
 }
 
@@ -753,8 +753,8 @@ $("cMappingSave").addEventListener("click", async () => {
     comfyMapping = r.mapping;
     comfyLoraSlots = (r.mapping.lora_nodes || []).length;
     ensureLoraRows();
-    cInfo("cMappingInfo", "Zapisano mapowanie.", "ok");
-  } catch (e) { cInfo("cMappingInfo", "Błąd zapisu: " + e.message, "err"); }
+    cInfo("cMappingInfo", "Mapping saved.", "ok");
+  } catch (e) { cInfo("cMappingInfo", "Save error: " + e.message, "err"); }
 });
 
 // ---- Mapping library ---- //
@@ -762,7 +762,7 @@ async function refreshMappingLib() {
   try {
     const r = await api("/api/comfy/mappings");
     const sel = $("cMappingLib");
-    sel.innerHTML = '<option value="">— zapisane mapowania —</option>';
+    sel.innerHTML = '<option value="">— saved mappings —</option>';
     for (const name of Object.keys(r.items || {})) {
       const opt = document.createElement("option");
       opt.value = name; opt.textContent = name;
@@ -773,7 +773,7 @@ async function refreshMappingLib() {
 
 $("cMappingLibSave").addEventListener("click", async () => {
   const name = $("cMappingLibName").value.trim();
-  if (!name) { cInfo("cMappingInfo", "Podaj nazwę.", "err"); return; }
+  if (!name) { cInfo("cMappingInfo", "Enter a name.", "err"); return; }
   let value;
   try { value = JSON.parse($("cMapping").value); }
   catch (e) { cInfo("cMappingInfo", "Niepoprawny JSON: " + e.message, "err"); return; }
@@ -781,8 +781,8 @@ $("cMappingLibSave").addEventListener("click", async () => {
     await api("/api/comfy/mappings", { name, value });
     $("cMappingLibName").value = "";
     await refreshMappingLib();
-    cInfo("cMappingInfo", `Zapisano "${name}".`, "ok");
-  } catch (e) { cInfo("cMappingInfo", "Błąd: " + e.message, "err"); }
+    cInfo("cMappingInfo", `Saved "${name}".`, "ok");
+  } catch (e) { cInfo("cMappingInfo", "Error: " + e.message, "err"); }
 });
 
 $("cMappingLibLoad").addEventListener("click", async () => {
@@ -797,19 +797,19 @@ $("cMappingLibLoad").addEventListener("click", async () => {
     comfyMapping = m;
     comfyLoraSlots = (m.lora_nodes || []).length;
     ensureLoraRows();
-    cInfo("cMappingInfo", `Wczytano "${name}".`, "ok");
-  } catch (e) { cInfo("cMappingInfo", "Błąd: " + e.message, "err"); }
+    cInfo("cMappingInfo", `Loaded "${name}".`, "ok");
+  } catch (e) { cInfo("cMappingInfo", "Error: " + e.message, "err"); }
 });
 
 $("cMappingLibDel").addEventListener("click", async () => {
   const name = $("cMappingLib").value;
   if (!name) return;
-  if (!confirm(`Usunąć mapowanie „${name}"?`)) return;
+  if (!confirm(`Delete mapping "${name}"?`)) return;
   try {
     await fetch("/api/comfy/mappings/" + encodeURIComponent(name), { method: "DELETE" });
     await refreshMappingLib();
-    cInfo("cMappingInfo", `Usunięto "${name}".`, "ok");
-  } catch (e) { cInfo("cMappingInfo", "Błąd: " + e.message, "err"); }
+    cInfo("cMappingInfo", `Deleted "${name}".`, "ok");
+  } catch (e) { cInfo("cMappingInfo", "Error: " + e.message, "err"); }
 });
 
 // ---- Prompt library ---- //
@@ -817,7 +817,7 @@ async function refreshPromptLib() {
   try {
     const r = await api("/api/comfy/prompts");
     const sel = $("cPromptLib");
-    sel.innerHTML = '<option value="">— zapisane prompty —</option>';
+    sel.innerHTML = '<option value="">— saved prompts —</option>';
     for (const name of Object.keys(r.items || {})) {
       const opt = document.createElement("option");
       opt.value = name; opt.textContent = name;
@@ -828,15 +828,15 @@ async function refreshPromptLib() {
 
 $("cPromptLibSave").addEventListener("click", async () => {
   const name = $("cPromptLibName").value.trim();
-  if (!name) { cInfo("cLoraStatus", "Podaj nazwę promptu.", "err"); return; }
+  if (!name) { cInfo("cLoraStatus", "Enter a prompt name.", "err"); return; }
   const value = $("cPrompt").value.trim();
   if (!value) { cInfo("cLoraStatus", "Najpierw wpisz prompt.", "err"); return; }
   try {
     await api("/api/comfy/prompts", { name, value });
     $("cPromptLibName").value = "";
     await refreshPromptLib();
-    cInfo("cLoraStatus", `Zapisano prompt "${name}".`, "ok");
-  } catch (e) { cInfo("cLoraStatus", "Błąd: " + e.message, "err"); }
+    cInfo("cLoraStatus", `Saved prompt "${name}".`, "ok");
+  } catch (e) { cInfo("cLoraStatus", "Error: " + e.message, "err"); }
 });
 
 $("cPromptLibLoad").addEventListener("click", async () => {
@@ -845,23 +845,23 @@ $("cPromptLibLoad").addEventListener("click", async () => {
   try {
     const r = await api("/api/comfy/prompts");
     if (r.items[name] != null) $("cPrompt").value = r.items[name];
-  } catch (e) { cInfo("cLoraStatus", "Błąd: " + e.message, "err"); }
+  } catch (e) { cInfo("cLoraStatus", "Error: " + e.message, "err"); }
 });
 
 $("cPromptLibDel").addEventListener("click", async () => {
   const name = $("cPromptLib").value;
   if (!name) return;
-  if (!confirm(`Usunąć prompt „${name}"?`)) return;
+  if (!confirm(`Delete prompt "${name}"?`)) return;
   try {
     await fetch("/api/comfy/prompts/" + encodeURIComponent(name), { method: "DELETE" });
     await refreshPromptLib();
-    cInfo("cLoraStatus", `Usunięto "${name}".`, "ok");
-  } catch (e) { cInfo("cLoraStatus", "Błąd: " + e.message, "err"); }
+    cInfo("cLoraStatus", `Deleted "${name}".`, "ok");
+  } catch (e) { cInfo("cLoraStatus", "Error: " + e.message, "err"); }
 });
 
 // ---- LoRA list + search + stack ---- //
 async function refreshLoras() {
-  cInfo("cLoraStatus", "Pobieram listę LoRA z ComfyUI…");
+  cInfo("cLoraStatus", "Fetching the LoRA list from ComfyUI…");
   try {
     const r = await api("/api/comfy/loras");
     comfyLoras = r.loras || [];
@@ -872,17 +872,17 @@ async function refreshLoras() {
       opt.value = name;
       dl.appendChild(opt);
     }
-    $("cLoraCount").textContent = `(${comfyLoras.length} dostępnych)`;
+    $("cLoraCount").textContent = `(${comfyLoras.length} available)`;
     cInfo("cLoraStatus", `Znaleziono ${comfyLoras.length} LoRA.`, "ok");
     // Re-bind datalist to all rows.
     document.querySelectorAll(".lora-row input").forEach((i) =>
       i.setAttribute("list", "cLoraDatalist")
     );
-  } catch (e) { cInfo("cLoraStatus", "Błąd listy LoRA: " + e.message, "err"); }
+  } catch (e) { cInfo("cLoraStatus", "LoRA list error: " + e.message, "err"); }
 }
 $("cLoraRefresh").addEventListener("click", refreshLoras);
 
-// Wyszukiwarka filtruje datalist (tylko pasujące nazwy).
+// The search box filters the datalist (matching names only).
 $("cLoraSearch").addEventListener("input", () => {
   const q = $("cLoraSearch").value.toLowerCase();
   const dl = $("cLoraDatalist");
@@ -903,15 +903,15 @@ function loraRowsCount() {
 function addLoraRow(initial = "") {
   if (loraRowsCount() >= Math.max(comfyLoraSlots, 1)) {
     cInfo("cLoraStatus",
-      `Workflow ma tylko ${comfyLoraSlots} LoRA-loader(ów). Dodaj więcej LoRA-loaderów w ComfyUI, żeby stackować więcej.`,
+      `The workflow has only ${comfyLoraSlots} LoRA loader(s). Add more LoRA loaders in ComfyUI to stack more.`,
       "err");
     return;
   }
   const row = document.createElement("div");
   row.className = "lora-row";
   row.innerHTML = `
-    <input type="text" list="cLoraDatalist" placeholder="wybierz lub wpisz nazwę…" value="${initial}" />
-    <button class="lora-del danger" title="Usuń ten slot">−</button>`;
+    <input type="text" list="cLoraDatalist" placeholder="pick or type a name…" value="${initial}" />
+    <button class="lora-del danger" title="Remove this slot">−</button>`;
   row.querySelector(".lora-del").addEventListener("click", () => row.remove());
   $("cLoraRows").appendChild(row);
 }
@@ -929,7 +929,7 @@ function collectLoras() {
     .map((i) => i.value.trim());
 }
 
-// ---- Progress formatting: prędkość (it/s) + ETA ---- //
+// ---- Progress formatting: speed (it/s) + ETA ---- //
 function fmtEta(sec) {
   sec = Math.round(sec);
   if (sec < 60) return sec + "s";
@@ -943,7 +943,7 @@ function fmtProgress(p) {
   const parts = [];
   if (p.max) parts.push(`${p.value || 0}/${p.max}`);
   if (p.speed > 0) parts.push(`${p.speed.toFixed(2)} it/s`);
-  if (p.eta > 0) parts.push(`~${fmtEta(p.eta)} do końca`);
+  if (p.eta > 0) parts.push(`~${fmtEta(p.eta)} left`);
   return parts.length ? "  ·  " + parts.join("  ·  ") : "";
 }
 
@@ -974,14 +974,14 @@ function startJobPolling(jobId, onDone) {
         comfyJobTimer = null;
         comfyJobId = null;
         setJobUi(false);
-        if (j.state === "error") cInfo("cLoraStatus", "Błąd: " + j.error, "err");
+        if (j.state === "error") cInfo("cLoraStatus", "Error: " + j.error, "err");
         else if (j.state === "cancelled") cInfo("cLoraStatus", "Anulowano.", "");
-        else cInfo("cLoraStatus", `Gotowe: ${j.images.length} obraz(ów).`, "ok");
+        else cInfo("cLoraStatus", `Done: ${j.images.length} image(s).`, "ok");
         await refreshGallery();
         onDone?.(j);
       }
     } catch (e) {
-      cInfo("cLoraStatus", "Błąd odpytywania: " + e.message, "err");
+      cInfo("cLoraStatus", "Polling error: " + e.message, "err");
       clearInterval(comfyJobTimer); comfyJobTimer = null;
       setJobUi(false);
     }
@@ -1006,7 +1006,7 @@ $("cGenLoraBtn").addEventListener("click", async () => {
     cInfo("cLoraStatus", "Zakolejkowano w ComfyUI — czekam na obrazy…", "");
     startJobPolling(job_id);
   } catch (e) {
-    cInfo("cLoraStatus", "Błąd: " + e.message, "err");
+    cInfo("cLoraStatus", "Error: " + e.message, "err");
   }
 });
 
@@ -1031,7 +1031,7 @@ $("cGenRefBtn").addEventListener("click", async () => {
   refCancel = false;
 
   for (let i = 0; i < lines.length && !refCancel; i++) {
-    cInfo("cRefStatus", `Generuję ${i + 1}/${lines.length}: "${lines[i].slice(0, 60)}…"`);
+    cInfo("cRefStatus", `Generating ${i + 1}/${lines.length}: "${lines[i].slice(0, 60)}…"`);
     try {
       const { job_id } = await api("/api/comfy/generate", {
         prompt: lines[i], width: w, height: h, steps, cfg, batch: 1,
@@ -1052,20 +1052,20 @@ $("cGenRefBtn").addEventListener("click", async () => {
       }
       await refreshGallery();
     } catch (e) {
-      cInfo("cRefStatus", `Błąd: ${e.message}`, "err");
+      cInfo("cRefStatus", `Error: ${e.message}`, "err");
       $("cGenRefBtn").disabled = false;
       $("cGenRefCancel").classList.add("hidden");
       return;
     }
   }
-  cInfo("cRefStatus", refCancel ? "Anulowano." : `Gotowe: ${lines.length}.`, "ok");
+  cInfo("cRefStatus", refCancel ? "Cancelled." : `Done: ${lines.length}.`, "ok");
   $("cGenRefBtn").disabled = false;
   $("cGenRefCancel").classList.add("hidden");
 });
 
 $("cGenRefCancel").addEventListener("click", () => { refCancel = true; });
 
-// ---- Galeria (akumulująca, z dysku przez /api/comfy/gallery) ---- //
+// ---- Gallery (accumulating, from disk via /api/comfy/gallery) ---- //
 async function refreshGallery() {
   try {
     const r = await api("/api/comfy/gallery");
@@ -1078,15 +1078,15 @@ async function refreshGallery() {
       const img = document.createElement("img");
       img.src = im.url;
       img.loading = "lazy";
-      img.title = "Kliknij, aby zobaczyć prompt";
+      img.title = "Click to see the prompt";
       img.addEventListener("click", () => openGalModal(im));
       const del = document.createElement("button");
       del.className = "del";
-      del.title = "Usuń";
+      del.title = "Delete";
       del.textContent = "✕";
       del.addEventListener("click", async (ev) => {
         ev.stopPropagation();
-        if (!confirm("Usunąć ten obraz?")) return;
+        if (!confirm("Delete this image?")) return;
         await fetch("/api/comfy/gallery/" + im.id, { method: "DELETE" });
         refreshGallery();
       });
@@ -1105,7 +1105,7 @@ async function refreshGallery() {
 }
 $("cGalRefresh").addEventListener("click", refreshGallery);
 
-// ---- Lightbox: pełny obraz + prompt + pobieranie ---- //
+// ---- Lightbox: full image + prompt + download ---- //
 let galCurrent = null;
 function openGalModal(im) {
   galCurrent = im;
@@ -1134,11 +1134,11 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("galModal").classList.contains("hidden")) closeGalModal();
 });
 $("galCopy").addEventListener("click", async () => {
-  try { await navigator.clipboard.writeText($("galPrompt").value); $("galCopy").textContent = "✓ skopiowano"; setTimeout(() => $("galCopy").textContent = "📋 kopiuj", 1500); }
+  try { await navigator.clipboard.writeText($("galPrompt").value); $("galCopy").textContent = "✓ copied"; setTimeout(() => $("galCopy").textContent = "📋 copy", 1500); }
   catch { $("galPrompt").select(); document.execCommand("copy"); }
 });
 $("galDelete").addEventListener("click", async () => {
-  if (!galCurrent || !confirm("Usunąć ten obraz?")) return;
+  if (!galCurrent || !confirm("Delete this image?")) return;
   await fetch("/api/comfy/gallery/" + galCurrent.id, { method: "DELETE" });
   closeGalModal();
   refreshGallery();
@@ -1150,7 +1150,7 @@ $("galDelete").addEventListener("click", async () => {
 const editor = {
   workflow: null,        // {id: {class_type, inputs: {...}}}
   objectInfo: null,      // {class_type: {input: {required, optional}, ...}}
-  knownEnums: null,      // {field_name: [choices...]} — union enumów ze wszystkich node'ów
+  knownEnums: null,      // {field_name: [choices...]} — union of enums across all nodes
   mode: "list",          // "list" | "hybrid"
   jobId: null,
   jobTimer: null,
@@ -1184,17 +1184,17 @@ async function fetchObjectInfo({ force = false } = {}) {
     editor.objectInfo = await api("/api/comfy/object_info");
     editor.knownEnums = buildKnownEnums(editor.objectInfo);
     cInfo("cEdInfo",
-      `Schemy z ComfyUI: ${Object.keys(editor.objectInfo).length} typów node'ów, ${Object.keys(editor.knownEnums).length} pól z dropdownami.`,
+      `ComfyUI schemas: ${Object.keys(editor.objectInfo).length} node types, ${Object.keys(editor.knownEnums).length} fields with dropdowns.`,
       "ok");
   } catch (e) {
     cInfo("cEdInfo",
-      "Uwaga: /object_info niedostępne (" + e.message + "). Uruchom ComfyUI i kliknij ↻ Schemy, by mieć dropdowny dla lora/model/sampler.",
+      "Note: /object_info unavailable (" + e.message + "). Start ComfyUI and click ↻ Schemas to get dropdowns for lora/model/sampler.",
       "");
   }
 }
 
-// Zbiera union enumów z całego /object_info — pole o tej samej nazwie w wielu
-// node'ach często ma podobny zbiór dozwolonych wartości (np. lora_name).
+// Collects the union of enums from the whole /object_info — a field with the
+// same name across nodes usually shares the allowed values (e.g. lora_name).
 function buildKnownEnums(info) {
   const map = {};
   for (const node of Object.values(info || {})) {
@@ -1244,7 +1244,7 @@ async function loadEditorWorkflowFromServer() {
       editor.workflow = r.workflow;
       await fetchObjectInfo();
       renderEditorAll();
-      cInfo("cEdInfo", `Wczytano workflow z ostatniej sesji: ${r.node_count} węzłów.`, "");
+      cInfo("cEdInfo", `Loaded the workflow from the last session: ${r.node_count} nodes.`, "");
     }
   } catch (e) {
     console.error(e);
@@ -1253,7 +1253,7 @@ async function loadEditorWorkflowFromServer() {
 
 async function uploadEditorWorkflow(file) {
   if (!file) return;
-  cInfo("cEdInfo", `Wczytuję ${file.name}…`);
+  cInfo("cEdInfo", `Loading ${file.name}…`);
   const fd = new FormData();
   fd.append("file", file);
   try {
@@ -1264,9 +1264,9 @@ async function uploadEditorWorkflow(file) {
     await fetchObjectInfo();
     renderEditorAll();
     const src = r.source === "png" ? "z metadanych PNG" : "z pliku JSON";
-    cInfo("cEdInfo", `Wczytano workflow ${src}: ${r.node_count} węzłów.`, "ok");
+    cInfo("cEdInfo", `Loaded workflow ${src}: ${r.node_count} nodes.`, "ok");
   } catch (e) {
-    cInfo("cEdInfo", "Błąd: " + e.message, "err");
+    cInfo("cEdInfo", "Error: " + e.message, "err");
   }
 }
 
@@ -1294,7 +1294,7 @@ function renderEditorNodes() {
   const container = $("cEdNodes");
   container.innerHTML = "";
   if (!editor.workflow) return;
-  // Stabilne sortowanie po numerycznym ID jeśli można, inaczej alfabetycznie.
+  // Stable sort by numeric ID when possible, alphabetically otherwise.
   const ids = Object.keys(editor.workflow).sort((a, b) => {
     const na = parseInt(a, 10), nb = parseInt(b, 10);
     if (!isNaN(na) && !isNaN(nb)) return na - nb;
@@ -1327,7 +1327,7 @@ function renderNodeCard(id, node) {
   card.appendChild(body);
 
   const inputs = node.inputs || {};
-  // Najpierw pokaż wszystkie pola edytowalne (literalne), potem linki/CONNECTION.
+  // Show all editable (literal) fields first, then links/CONNECTION.
   const fields = Object.entries(inputs);
   const editable = fields.filter(([, v]) => !isLinkValue(v));
   const links = fields.filter(([, v]) => isLinkValue(v));
@@ -1338,7 +1338,7 @@ function renderNodeCard(id, node) {
   for (const [fname, value] of links) {
     body.appendChild(renderLinkField(id, fname, value));
   }
-  // Schema-only "CONNECTION" inputs niewpięte w workflow → pomijamy (nic do edycji).
+  // Schema-only "CONNECTION" inputs not wired in the workflow → skip (nothing to edit).
   return card;
 }
 
@@ -1350,7 +1350,7 @@ function renderEditableField(id, classType, fname, value) {
   row.appendChild(lab);
 
   // Dict-input (np. rgthree Power Lora Loader: lora_1 = {on, lora, strength, ...}).
-  // Renderujemy każdy klucz jako pod-pole z własną kontrolką + nested commit.
+  // Render every key as a sub-field with its own control + nested commit.
   if (isDictValue(value)) {
     const wrap = document.createElement("div");
     wrap.className = "ed-dict";
@@ -1369,7 +1369,7 @@ function renderEditableField(id, classType, fname, value) {
       sub.appendChild(sl);
       const subVal = value[k];
       if (isDictValue(subVal) || (Array.isArray(subVal) && !isLinkValue(subVal))) {
-        // głębszy dict / lista — fallback tekstowy w JSON
+        // deeper dict / list — JSON text fallback
         const ta = document.createElement("textarea");
         ta.value = JSON.stringify(subVal, null, 2);
         ta.addEventListener("change", () => {
@@ -1398,7 +1398,7 @@ function renderEditableField(id, classType, fname, value) {
   return row;
 }
 
-// Tworzy kontrolkę edycji jednej wartości. schema = jeden ze spec'ów z /object_info
+// Builds the edit control for one value. schema = one of the /object_info specs
 // (np. ["INT", {min,max,step}], [["a","b"], {}]) albo null = wnioskuj z typu.
 function makeControl(value, schema, onChange) {
   let ctrl, parser;
@@ -1408,9 +1408,9 @@ function makeControl(value, schema, onChange) {
     ctrl = document.createElement("select");
     const choices = schema[0];
     let sval = value == null ? "" : String(value);
-    // ComfyUI listuje ścieżki z ukośnikiem "/"; workflow zapisany na Windows
+    // ComfyUI lists paths with forward slashes; a workflow saved on Windows
     // bywa z "\" (np. LORA-flux2\plik.safetensors) → ComfyUI go nie znajdzie.
-    // Jeśli po zamianie na "/" wartość pasuje do listy, użyj poprawionej i zapisz.
+    // If the value matches the list after switching to "/", use the fixed one and save.
     if (sval && !choices.includes(sval) && choices.includes(sval.replace(/\\/g, "/"))) {
       sval = sval.replace(/\\/g, "/");
       onChange(sval);
@@ -1423,8 +1423,8 @@ function makeControl(value, schema, onChange) {
       if (String(opt) === sval) { o.selected = true; hasCurrent = true; }
       ctrl.appendChild(o);
     }
-    // Jeśli wartość z workflow nie jest w aktualnej liście (np. lora którą usunąłeś
-    // z dysku), zachowaj ją na górze listy, żeby się nie zgubiła.
+    // If the workflow value is missing from the current list (e.g. a lora you
+    // deleted from disk), keep it at the top of the list so it doesn't get lost.
     if (!hasCurrent && sval) {
       const o = document.createElement("option");
       o.value = sval;
@@ -1511,7 +1511,7 @@ function renderLinkField(id, fname, value) {
   const srcNode = editor.workflow?.[srcId];
   const srcType = srcNode ? srcNode.class_type : "?";
   ref.textContent = `→ #${srcId} (${srcType}) · output ${value[1]}`;
-  ref.title = "Kliknij, by przeskoczyć do źródła";
+  ref.title = "Click to jump to the source";
   ref.addEventListener("click", () => focusNode(srcId));
   row.appendChild(ref);
   return row;
@@ -1557,7 +1557,7 @@ function layoutGraph(wf) {
       if (isLinkValue(v) && wf[String(v[0])]) incoming[id].push(String(v[0]));
     }
   }
-  // Najdłuższa ścieżka od źródeł = warstwa.
+  // Longest path from the sources = layer.
   const layer = {};
   function depth(id, stack) {
     if (layer[id] !== undefined) return layer[id];
@@ -1571,7 +1571,7 @@ function layoutGraph(wf) {
   for (const id of ids) depth(id, new Set());
   const byLayer = {};
   for (const id of ids) (byLayer[layer[id]] ||= []).push(id);
-  // Sort wewnątrz warstwy: po numerze ID, dla stabilności.
+  // Sort within a layer by numeric ID, for stability.
   for (const k in byLayer) byLayer[k].sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0));
   const NODE_W = 170, NODE_H = 36, COL_GAP = 60, ROW_GAP = 24, MARGIN = 12;
   const pos = {};
@@ -1602,7 +1602,7 @@ function renderEditorGraph() {
   svg.setAttribute("height", H);
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
 
-  // Linki najpierw, żeby były pod nodami.
+  // Links first, so they sit under the nodes.
   for (const [id, node] of Object.entries(editor.workflow)) {
     const ins = node.inputs || {};
     for (const v of Object.values(ins)) {
@@ -1658,13 +1658,13 @@ function setEdJobUi(active) {
 }
 
 $("cEdGenBtn").addEventListener("click", async () => {
-  if (!editor.workflow) { cInfo("cEdStatus", "Brak wczytanego workflow.", "err"); return; }
+  if (!editor.workflow) { cInfo("cEdStatus", "No workflow loaded.", "err"); return; }
   try {
     const { job_id } = await api("/api/comfy/editor/generate", { workflow: editor.workflow });
     cInfo("cEdStatus", "Zakolejkowano w ComfyUI — czekam na obrazy…", "");
     startEditorJobPolling(job_id);
   } catch (e) {
-    cInfo("cEdStatus", "Błąd: " + e.message, "err");
+    cInfo("cEdStatus", "Error: " + e.message, "err");
   }
 });
 
@@ -1681,7 +1681,7 @@ $("cEdSchemas").addEventListener("click", async () => {
   if (editor.workflow) renderEditorAll();   // przerenderuj z dropdownami
 });
 
-// ---- Zapis workflow: plik .json + biblioteka serwerowa ---- //
+// ---- Saving workflows: .json file + server-side library ---- //
 $("cEdSaveFile").addEventListener("click", () => {
   if (!editor.workflow) { cInfo("cEdStatus", "Brak workflow.", "err"); return; }
   const blob = new Blob([JSON.stringify(editor.workflow, null, 2)], { type: "application/json" });
@@ -1690,7 +1690,7 @@ $("cEdSaveFile").addEventListener("click", () => {
   a.href = url;
   a.download = ($("cEdSaveName").value.trim() || "workflow_api") + ".json";
   a.style.display = "none";
-  document.body.appendChild(a);   // niektóre przeglądarki wymagają anchora w DOM
+  document.body.appendChild(a);   // some browsers require the anchor to be in the DOM
   a.click();
   // revoke + remove dopiero po starcie pobierania
   setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
@@ -1702,11 +1702,11 @@ async function refreshEdLib() {
     const r = await api("/api/comfy/workflows");
     const sel = $("cEdLibSel");
     const prev = sel.value;
-    sel.innerHTML = '<option value="">— zapisane workflow —</option>';
+    sel.innerHTML = '<option value="">— saved workflows —</option>';
     for (const it of r.items || []) {
       const o = document.createElement("option");
       o.value = it.name;
-      o.textContent = it.node_count ? `${it.name} (${it.node_count} węzłów)` : it.name;
+      o.textContent = it.node_count ? `${it.name} (${it.node_count} nodes)` : it.name;
       sel.appendChild(o);
     }
     if (prev) sel.value = prev;
@@ -1716,14 +1716,14 @@ async function refreshEdLib() {
 $("cEdSaveLib").addEventListener("click", async () => {
   if (!editor.workflow) { cInfo("cEdStatus", "Brak workflow.", "err"); return; }
   const name = $("cEdSaveName").value.trim();
-  if (!name) { cInfo("cEdStatus", "Podaj nazwę workflow.", "err"); return; }
+  if (!name) { cInfo("cEdStatus", "Enter a workflow name.", "err"); return; }
   try {
     await api("/api/comfy/workflows", { name, value: editor.workflow });
     $("cEdSaveName").value = "";
     await refreshEdLib();
     $("cEdLibSel").value = name;
-    cInfo("cEdStatus", `Zapisano workflow „${name}" w bibliotece.`, "ok");
-  } catch (e) { cInfo("cEdStatus", "Błąd zapisu: " + e.message, "err"); }
+    cInfo("cEdStatus", `Saved workflow "${name}" to the library.`, "ok");
+  } catch (e) { cInfo("cEdStatus", "Save error: " + e.message, "err"); }
 });
 
 $("cEdImportBtn").addEventListener("click", () => $("cEdImportFile").click());
@@ -1735,19 +1735,19 @@ $("cEdImportFile").addEventListener("change", async (e) => {
   const nm = $("cEdSaveName").value.trim();
   if (nm) fd.append("name", nm);
   try {
-    cInfo("cEdStatus", "Importuję workflow…");
+    cInfo("cEdStatus", "Importing workflow…");
     const res = await fetch("/api/comfy/workflows/import", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     const r = await res.json();
-    editor.workflow = r.workflow;     // od razu wczytaj do edytora
+    editor.workflow = r.workflow;     // load straight into the editor
     renderEditorAll();
     await refreshEdLib();
     $("cEdLibSel").value = r.name;
-    cInfo("cEdStatus", `Zaimportowano „${r.name}" (${r.node_count} węzłów) i zapisano w bibliotece.`, "ok");
+    cInfo("cEdStatus", `Imported "${r.name}" (${r.node_count} nodes) and saved to the library.`, "ok");
   } catch (err) {
-    cInfo("cEdStatus", "Błąd importu: " + err.message, "err");
+    cInfo("cEdStatus", "Import error: " + err.message, "err");
   } finally {
-    e.target.value = "";   // pozwól zaimportować ten sam plik ponownie
+    e.target.value = "";   // allow importing the same file again
   }
 });
 
@@ -1758,19 +1758,19 @@ $("cEdLibLoad").addEventListener("click", async () => {
     const r = await api("/api/comfy/workflows/" + encodeURIComponent(name));
     editor.workflow = r.workflow;
     renderEditorAll();
-    cInfo("cEdStatus", `Wczytano „${name}" (${Object.keys(r.workflow).length} węzłów).`, "ok");
-  } catch (e) { cInfo("cEdStatus", "Błąd wczytania: " + e.message, "err"); }
+    cInfo("cEdStatus", `Loaded "${name}" (${Object.keys(r.workflow).length} nodes).`, "ok");
+  } catch (e) { cInfo("cEdStatus", "Load error: " + e.message, "err"); }
 });
 
 $("cEdLibDel").addEventListener("click", async () => {
   const name = $("cEdLibSel").value;
   if (!name) return;
-  if (!confirm(`Usunąć workflow „${name}" z biblioteki?`)) return;
+  if (!confirm(`Delete workflow "${name}" from the library?`)) return;
   try {
     await fetch("/api/comfy/workflows/" + encodeURIComponent(name), { method: "DELETE" });
     await refreshEdLib();
-    cInfo("cEdStatus", `Usunięto „${name}".`, "");
-  } catch (e) { cInfo("cEdStatus", "Błąd: " + e.message, "err"); }
+    cInfo("cEdStatus", `Deleted "${name}".`, "");
+  } catch (e) { cInfo("cEdStatus", "Error: " + e.message, "err"); }
 });
 
 function startEditorJobPolling(jobId) {
@@ -1785,7 +1785,7 @@ function startEditorJobPolling(jobId) {
       const pct = p.max > 0 ? Math.round((p.value / p.max) * 100) : 0;
       $("cEdJobBar").style.width = pct + "%";
       if (j.current_node) {
-        // Podświetl aktualnie wykonywany node na grafie.
+        // Highlight the currently executing node on the graph.
         document.querySelectorAll(".ed-graph-node.active").forEach((n) => n.classList.remove("active"));
         const gn = document.querySelector(`.ed-graph-node[data-node-id="${j.current_node}"]`);
         if (gn) gn.classList.add("active");
@@ -1797,13 +1797,13 @@ function startEditorJobPolling(jobId) {
       if (j.state === "done" || j.state === "error" || j.state === "cancelled") {
         clearInterval(editor.jobTimer); editor.jobTimer = null; editor.jobId = null;
         setEdJobUi(false);
-        if (j.state === "error") cInfo("cEdStatus", "Błąd: " + j.error, "err");
+        if (j.state === "error") cInfo("cEdStatus", "Error: " + j.error, "err");
         else if (j.state === "cancelled") cInfo("cEdStatus", "Anulowano.", "");
-        else cInfo("cEdStatus", `Gotowe: ${j.images.length} obraz(ów). Sprawdź galerię.`, "ok");
+        else cInfo("cEdStatus", `Done: ${j.images.length} image(s). Check the gallery.`, "ok");
         await refreshGallery();
       }
     } catch (e) {
-      cInfo("cEdStatus", "Błąd odpytywania: " + e.message, "err");
+      cInfo("cEdStatus", "Polling error: " + e.message, "err");
       clearInterval(editor.jobTimer); editor.jobTimer = null;
       setEdJobUi(false);
     }
@@ -1811,7 +1811,7 @@ function startEditorJobPolling(jobId) {
 }
 
 // --------------------------------------------------------------------------- //
-// Własny model: klik "Dodaj" -> OD RAZU systemowe okno wyboru folderu.
+// Custom model: clicking "Add" opens the system folder picker right away.
 // --------------------------------------------------------------------------- //
 async function pickModelFolder() {
   try {
@@ -1827,13 +1827,13 @@ async function pickModelFolder() {
   }
 }
 
-// Usuń aktualnie wybrany WŁASNY model (klucz = ścieżka, zaczyna się od "/").
+// Remove the currently selected CUSTOM model (key = path, starts with "/").
 async function removeCustomModel(selId) {
   const sel = $(selId);
   if (!sel || !sel.value) return;
   const id = sel.value;
   if (!id.startsWith("/")) { alert("To wbudowany model — nie usuwam."); return; }
-  if (!confirm("Usunąć z listy: " + sel.options[sel.selectedIndex].textContent + " ?")) return;
+  if (!confirm("Remove from the list: " + sel.options[sel.selectedIndex].textContent + " ?")) return;
   try {
     const res = await fetch("/api/models/custom", {
       method: "DELETE",
@@ -1843,7 +1843,7 @@ async function removeCustomModel(selId) {
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     populateModels(data.models, data.default);
-  } catch (e) { alert("Błąd usuwania: " + e.message); }
+  } catch (e) { alert("Delete error: " + e.message); }
 }
 
 if ($("addModelBtn")) $("addModelBtn").onclick = pickModelFolder;
@@ -1853,9 +1853,9 @@ async function refreshModels() {
     if ($("lmstudioUrl")) await api("/api/lmstudio", { url: $("lmstudioUrl").value.trim() });
     const { models, default: def } = await api("/api/models");
     populateModels(models, def);
-    alert("Odświeżono listę modeli.");
+    alert("Model list refreshed.");
   } catch (e) {
-    alert("Błąd odświeżania: " + e.message);
+    alert("Refresh error: " + e.message);
   }
 }
 if ($("refreshModelsBtn")) $("refreshModelsBtn").onclick = refreshModels;

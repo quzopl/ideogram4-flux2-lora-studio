@@ -116,10 +116,10 @@ app = FastAPI(title="FLUX LoRA Dataset Prep")
 
 @app.middleware("http")
 async def _no_cache_frontend(request, call_next):
-    """Frontend bez cache przeglądarki — po aktualizacji appki UI zawsze świeże.
+    """No browser caching for the frontend — the UI is always fresh after updates.
 
-    'no-cache' wymusza rewalidację (ETag/Last-Modified), więc niezmienione
-    pliki i tak lecą jako 304 — bez kosztu, bez czerstwego app.js.
+    'no-cache' forces revalidation (ETag/Last-Modified), so unchanged files
+    still go out as 304 — no cost, no stale app.js.
     """
     response = await call_next(request)
     path = request.url.path
@@ -166,7 +166,7 @@ class ExportRequest(BaseModel):
 
 class PromptRequest(BaseModel):
     text: str
-    action: str = "expand"   # "expand" (rozbuduj) | "refine" (popraw)
+    action: str = "expand"   # "expand" | "refine"
     subject: str = "auto"    # auto | person | product | landscape | architecture
     model: str = captioner.DEFAULT_MODEL
     quant: str = "4bit"      # "4bit" | "none"
@@ -189,7 +189,7 @@ class LibrarySaveRequest(BaseModel):
 def _list_images(folder: str) -> list[Path]:
     p = Path(folder).expanduser()
     if not p.is_dir():
-        raise HTTPException(400, f"Folder nie istnieje: {folder}")
+        raise HTTPException(400, f"Folder does not exist: {folder}")
     files = [
         f for f in sorted(p.iterdir())
         if f.is_file() and f.suffix.lower() in image_utils.SUPPORTED_EXT
@@ -209,9 +209,9 @@ def _final_caption(req: ExportRequest, result: dict) -> str:
 
 
 def _caption_output_files(base_name: str, caption: str, fmt: str) -> list[tuple[str, str]]:
-    """Zwróć listę (nazwa_pliku, treść) do zapisania dla danego opisu.
+    """Return the (filename, content) list to write for a given caption.
 
-    Zawsze .txt; dla "ideogram" dodatkowo ładny .json. "aitoolkit" = sam .txt.
+    Always .txt; "ideogram" additionally gets a pretty .json. "aitoolkit" = .txt only.
     """
     files: list[tuple[str, str]] = [(f"{base_name}.txt", caption + "\n")]
     if fmt == "ideogram":
@@ -263,7 +263,7 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
         lm_url = _lmstudio_url() if lm_id is not None else None
         if req.do_caption and lm_id is None:
             job["state"] = "loading_model"
-            job["current"] = "Ładowanie modelu VLM (pierwsze uruchomienie pobiera wagi)…"
+            job["current"] = "Loading the VLM model (first run downloads the weights)…"
             quant = req.quant if req.quant in ("4bit", "none") else "4bit"
             captioner.ensure_loaded(req.model, quant)
 
@@ -313,7 +313,7 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
                     "out_name": "",
                     "width": 0,
                     "height": 0,
-                    "caption": f"[BŁĄD: {e}]",
+                    "caption": f"[ERROR: {e}]",
                 })
             job["processed"] = i + 1
 
@@ -328,7 +328,7 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
 # API
 # --------------------------------------------------------------------------- #
 def _list_subdirs(path: Path) -> list[str]:
-    """Posortowane (case-insensitive) nazwy podkatalogów; nieczytelne pomijane."""
+    """Sorted (case-insensitive) subfolder names; unreadable ones skipped."""
     out: list[str] = []
     try:
         for entry in path.iterdir():
@@ -349,18 +349,18 @@ def _model_dir_info(path: Path) -> dict:
     cfg = path / "config.json"
     if not cfg.is_file():
         return {"ok": False,
-                "reason": "To nie jest folder modelu (brak config.json).",
+                "reason": "This is not a model folder (config.json missing).",
                 "label": ""}
     try:
         data = json.loads(cfg.read_text(encoding="utf-8"))
     except Exception:
-        return {"ok": False, "reason": "Nie można odczytać config.json.", "label": ""}
+        return {"ok": False, "reason": "Cannot read config.json.", "label": ""}
     model_type = str(data.get("model_type", "")).lower()
     arch = " ".join(data.get("architectures", []) or [])
     if "qwen2_5_vl" in model_type or "Qwen2_5_VL" in arch:
-        return {"ok": True, "reason": "", "label": f"{path.name} (własny)"}
+        return {"ok": True, "reason": "", "label": f"{path.name} (custom)"}
     return {"ok": False,
-            "reason": "Obsługiwane są tylko modele Qwen2.5-VL.",
+            "reason": "Only Qwen2.5-VL models are supported.",
             "label": ""}
 
 
@@ -376,13 +376,13 @@ def _set_lmstudio_url(url: str) -> str:
 
 
 def _lmstudio_model_id(model: str) -> str | None:
-    """Zwróć id modelu LM Studio (część po 'lmstudio:'), inaczej None."""
+    """Return the LM Studio model id (the part after 'lmstudio:'), else None."""
     prefix = "lmstudio:"
     return model[len(prefix):] if model.startswith(prefix) else None
 
 
 def _all_models() -> dict:
-    """Wbudowane + własne + (jeśli dostępne) modele z LM Studio."""
+    """Built-in + custom + (when reachable) LM Studio models."""
     models = {**captioner.AVAILABLE_MODELS, **_load_named(CUSTOM_MODELS_PATH)}
     for mid in lmstudio.list_models(_lmstudio_url()):
         models[f"lmstudio:{mid}"] = f"LM Studio: {mid}"
@@ -390,7 +390,7 @@ def _all_models() -> dict:
 
 
 def _add_custom_model(path: str) -> dict:
-    """Zwaliduj i zapisz własny model. Rzuca ValueError z czytelnym powodem."""
+    """Validate and save a custom model. Raises ValueError with a readable reason."""
     resolved = Path(path).expanduser().resolve()
     info = _model_dir_info(resolved)
     if not info["ok"]:
@@ -451,10 +451,10 @@ def api_models_custom_remove(req: CustomModel):
 
 @app.get("/api/fs/pick")
 def api_fs_pick():
-    """Otwórz natywne systemowe okno wyboru folderu (zenity/WSLg) i zwróć ścieżkę.
+    """Open the native system folder picker (zenity/WSLg) and return the path.
 
-    Przeglądarka nie udostępnia bezwzględnej ścieżki, więc używamy standardowego
-    okna systemowego — działa, bo aplikacja jest lokalna.
+    The browser does not expose absolute paths, so we use the standard system
+    dialog — it works because the app is local.
     """
     import subprocess
 
@@ -465,12 +465,12 @@ def api_fs_pick():
             capture_output=True, text=True, timeout=300,
         )
     except FileNotFoundError:
-        raise HTTPException(500, "Brak 'zenity' — natywne okno wyboru niedostępne.")
+        raise HTTPException(500, "'zenity' missing — the native folder picker is unavailable.")
     except subprocess.TimeoutExpired:
         return {"cancelled": True}
     path = proc.stdout.strip()
     if proc.returncode != 0 or not path:
-        return {"cancelled": True}  # użytkownik anulował
+        return {"cancelled": True}  # the user cancelled
     return {"path": path}
 
 
@@ -517,7 +517,7 @@ async def api_upload(files: list[UploadFile]):
 def api_process(req: ProcessRequest):
     files = _list_images(req.folder)
     if not files:
-        raise HTTPException(400, "Brak obsługiwanych obrazów w folderze.")
+        raise HTTPException(400, "No supported images in the folder.")
 
     job_id = uuid.uuid4().hex
     with JOBS_LOCK:
@@ -540,7 +540,7 @@ def api_process(req: ProcessRequest):
 def api_job(job_id: str):
     job = JOBS.get(job_id)
     if not job:
-        raise HTTPException(404, "Nieznane zadanie.")
+        raise HTTPException(404, "Unknown job.")
     return _job_public(job)
 
 
@@ -548,7 +548,7 @@ def api_job(job_id: str):
 def api_thumb(job_id: str, idx: int):
     path = WORK / job_id / "thumbs" / f"{idx:04d}.jpg"
     if not path.exists():
-        raise HTTPException(404, "Brak miniatury.")
+        raise HTTPException(404, "No thumbnail.")
     return FileResponse(str(path))
 
 
@@ -556,12 +556,12 @@ def api_thumb(job_id: str, idx: int):
 def api_export(req: ExportRequest):
     job = JOBS.get(req.job_id)
     if not job:
-        raise HTTPException(404, "Nieznane zadanie.")
+        raise HTTPException(404, "Unknown job.")
     if job["state"] != "done":
-        raise HTTPException(400, "Zadanie nie jest zakończone.")
+        raise HTTPException(400, "The job is not finished.")
 
     if not req.output_folder.strip():
-        raise HTTPException(400, "Podaj folder docelowy.")
+        raise HTTPException(400, "Enter a destination folder.")
     out_dir = Path(req.output_folder).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     proc_dir = WORK / req.job_id / "processed"
@@ -601,7 +601,7 @@ def api_gpu():
 @app.post("/api/unload")
 def api_unload():
     if _busy():
-        raise HTTPException(409, "Trwa przetwarzanie — poczekaj na zakończenie.")
+        raise HTTPException(409, "Processing in progress — wait for it to finish.")
     captioner.unload()
     florence.unload()
     return captioner.gpu_status()
@@ -667,12 +667,12 @@ async def api_comfy_workflow(file: UploadFile):
     """Upload a workflow file (JSON or ComfyUI-generated PNG) and auto-detect slots."""
     raw = await file.read()
     if not raw:
-        raise HTTPException(400, "Pusty plik.")
+        raise HTTPException(400, "Empty file.")
     try:
         workflow = comfy_workflows.extract_auto(file.filename or "", raw)
         mapping = comfy_workflows.autodetect_mapping(workflow)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(400, f"Nie udało się odczytać workflow: {e}")
+        raise HTTPException(400, f"Failed to read the workflow: {e}")
 
     cfg = _load_comfy_config()
     cfg["workflow"] = workflow
@@ -826,16 +826,16 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
             )
 
             client_id = _uuid.uuid4().hex
-            job["current"] = f"Próbka {i + 1}/{batch}: kolejkuję…"
+            job["current"] = f"Sample {i + 1}/{batch}: queueing…"
             job["progress"] = {"value": 0, "max": req.steps or 0, "speed": 0.0, "eta": 0.0}
             job["_spd_lv"] = None  # re-anchor speed tracker for this sample
 
-            patched = _normalize_paths(patched)  # napraw ścieżki \ -> / (lora/ckpt)
+            patched = _normalize_paths(patched)  # fix \ -> / paths (lora/ckpt)
             try:
                 pid = comfy_client.queue_prompt(url, patched, client_id=client_id)
             except comfy_client.ComfyError as e:
                 job["state"] = "error"
-                job["error"] = f"Błąd kolejkowania: {e}"
+                job["error"] = f"Queueing error: {e}"
                 return
 
             # Drive the WS until the prompt is done.
@@ -844,7 +844,7 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
                     _progress_update(
                         job, payload.get("value"), payload.get("max") or (req.steps or 0)
                     )
-                    job["current"] = f"Próbka {i + 1}/{batch}: krok {payload.get('value')}/{payload.get('max')}"
+                    job["current"] = f"Sample {i + 1}/{batch}: step {payload.get('value')}/{payload.get('max')}"
                 elif kind == "executing":
                     if payload.get("node"):
                         job["current_node"] = payload["node"]
@@ -858,7 +858,7 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
                 comfy_client.stream_events(url, client_id, pid, on_event)
             except Exception as e:  # noqa: BLE001
                 # WS hiccup — fall back to polling /history.
-                job["current"] = f"Próbka {i + 1}/{batch}: WS niedostępny ({e}), odpytuję history…"
+                job["current"] = f"Sample {i + 1}/{batch}: WS unavailable ({e}), polling history…"
 
             # Fetch outputs from history (no timeout — wait as long as it takes).
             while True:
@@ -869,7 +869,7 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
                     hist = comfy_client.history(url, pid)
                 except comfy_client.ComfyError as e:
                     job["state"] = "error"
-                    job["error"] = f"Błąd /history: {e}"
+                    job["error"] = f"/history error: {e}"
                     return
                 outs = comfy_client.collect_output_images(hist, pid)
                 if outs:
@@ -881,7 +881,7 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
                                 url, o["filename"], o["subfolder"], o["type"]
                             )
                         except comfy_client.ComfyError as e:
-                            job["error"] = f"Błąd /view: {e}"
+                            job["error"] = f"/view error: {e}"
                             continue
                         item_id = _uuid.uuid4().hex[:12]
                         out_path = COMFY_GALLERY_DIR / f"{item_id}.png"
@@ -907,7 +907,7 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
 
         job["preview"] = None
         job["state"] = "done"
-        job["current"] = f"Zakończono ({job['done_count']}/{batch})"
+        job["current"] = f"Finished ({job['done_count']}/{batch})"
     except Exception as e:  # noqa: BLE001
         job["state"] = "error"
         job["error"] = f"{e}\n{traceback.format_exc()}"
@@ -926,7 +926,7 @@ def api_comfy_generate(req: ComfyGenerateRequest):
             "state": "pending",
             "total": req.batch,
             "done_count": 0,
-            "current": "Start…",
+            "current": "Starting…",
             "current_node": "",
             "progress": {"value": 0, "max": req.steps or 0},
             "preview": None,
@@ -960,7 +960,7 @@ def _comfy_job_public(job: dict) -> dict:
 def api_comfy_job(job_id: str):
     job = COMFY_JOBS.get(job_id)
     if not job:
-        raise HTTPException(404, "Nieznane zadanie.")
+        raise HTTPException(404, "Unknown job.")
     return _comfy_job_public(job)
 
 
@@ -968,7 +968,7 @@ def api_comfy_job(job_id: str):
 def api_comfy_job_preview(job_id: str):
     job = COMFY_JOBS.get(job_id)
     if not job or job.get("preview") is None:
-        raise HTTPException(404, "Brak podglądu.")
+        raise HTTPException(404, "No preview.")
     return Response(content=job["preview"], media_type="image/png")
 
 
@@ -976,7 +976,7 @@ def api_comfy_job_preview(job_id: str):
 def api_comfy_job_cancel(job_id: str):
     job = COMFY_JOBS.get(job_id)
     if not job:
-        raise HTTPException(404, "Nieznane zadanie.")
+        raise HTTPException(404, "Unknown job.")
     job["cancel"] = True
     return {"ok": True}
 
@@ -985,7 +985,7 @@ def api_comfy_job_cancel(job_id: str):
 def api_comfy_gallery_item(item_id: str):
     p = COMFY_GALLERY_DIR / f"{item_id}.png"
     if not p.exists():
-        raise HTTPException(404, "Brak obrazu.")
+        raise HTTPException(404, "No image.")
     return FileResponse(str(p), media_type="image/png")
 
 
@@ -1037,9 +1037,9 @@ def api_comfy_mappings_list():
 def api_comfy_mappings_save(req: NamedSave):
     name = req.name.strip()
     if not name:
-        raise HTTPException(400, "Podaj nazwę.")
+        raise HTTPException(400, "Enter a name.")
     if not isinstance(req.value, dict):
-        raise HTTPException(400, "Mapowanie musi być obiektem JSON.")
+        raise HTTPException(400, "The mapping must be a JSON object.")
     data = _load_named(COMFY_MAPPINGS_PATH)
     data[name] = req.value
     _save_named(COMFY_MAPPINGS_PATH, data)
@@ -1064,7 +1064,7 @@ def api_comfy_prompts_list():
 def api_comfy_prompts_save(req: NamedSave):
     name = req.name.strip()
     if not name:
-        raise HTTPException(400, "Podaj nazwę.")
+        raise HTTPException(400, "Enter a name.")
     data = _load_named(COMFY_PROMPTS_PATH)
     data[name] = req.value if isinstance(req.value, str) else json.dumps(req.value)
     _save_named(COMFY_PROMPTS_PATH, data)
@@ -1125,9 +1125,9 @@ def api_comfy_workflows_get(name: str):
 def api_comfy_workflows_save(req: NamedSave):
     name = req.name.strip()
     if not name:
-        raise HTTPException(400, "Podaj nazwę.")
+        raise HTTPException(400, "Enter a name.")
     if not isinstance(req.value, dict) or not req.value:
-        raise HTTPException(400, "Workflow musi być niepustym obiektem JSON.")
+        raise HTTPException(400, "The workflow must be a non-empty JSON object.")
     _wf_upsert(name, req.value)
     return {"ok": True, "names": _wf_names()}
 
@@ -1137,11 +1137,11 @@ async def api_comfy_workflows_import(file: UploadFile, name: str = Form("")):
     """Import a workflow from an uploaded .json or ComfyUI .png into the library."""
     raw = await file.read()
     if not raw:
-        raise HTTPException(400, "Pusty plik.")
+        raise HTTPException(400, "Empty file.")
     try:
         wf = comfy_workflows.extract_auto(file.filename or "", raw)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(400, f"Nie udało się odczytać workflow: {e}")
+        raise HTTPException(400, f"Failed to read the workflow: {e}")
     nm = (name or "").strip() or Path(file.filename or "workflow").stem or "workflow"
     _wf_upsert(nm, wf)
     return {
@@ -1162,7 +1162,7 @@ def api_comfy_workflows_delete(name: str):
 # ---- Editor workflow: surowy workflow + parametry per node ---- #
 @app.get("/api/comfy/object_info")
 def api_comfy_object_info():
-    """Cached passthrough of ComfyUI's /object_info (schemy node'ów)."""
+    """Cached passthrough of ComfyUI's /object_info (node schemas)."""
     import time as _t
     cfg = _load_comfy_config()
     url = cfg.get("url") or comfy_client.DEFAULT_URL
@@ -1185,11 +1185,11 @@ def api_comfy_object_info():
 async def api_comfy_editor_load(file: UploadFile):
     raw = await file.read()
     if not raw:
-        raise HTTPException(400, "Pusty plik.")
+        raise HTTPException(400, "Empty file.")
     try:
         workflow = comfy_workflows.extract_auto(file.filename or "", raw)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(400, f"Nie udało się odczytać workflow: {e}")
+        raise HTTPException(400, f"Failed to read the workflow: {e}")
     cfg = _load_comfy_config()
     cfg["editor_workflow"] = workflow
     _save_comfy_config(cfg)
@@ -1238,13 +1238,13 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
 
     try:
         client_id = _uuid.uuid4().hex
-        job["current"] = "Kolejkuję workflow…"
-        workflow = _normalize_paths(workflow)  # napraw ścieżki \ -> / (lora/ckpt)
+        job["current"] = "Queueing the workflow…"
+        workflow = _normalize_paths(workflow)  # fix \ -> / paths (lora/ckpt)
         try:
             pid = comfy_client.queue_prompt(url, workflow, client_id=client_id)
         except comfy_client.ComfyError as e:
             job["state"] = "error"
-            job["error"] = f"Błąd kolejkowania: {e}"
+            job["error"] = f"Queueing error: {e}"
             return
 
         def on_event(kind: str, payload):
@@ -1263,7 +1263,7 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
         try:
             comfy_client.stream_events(url, client_id, pid, on_event)
         except Exception as e:  # noqa: BLE001
-            job["current"] = f"WS niedostępny ({e}), odpytuję history…"
+            job["current"] = f"WS unavailable ({e}), polling history…"
 
         while True:
             if job.get("cancel"):
@@ -1273,7 +1273,7 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
                 hist = comfy_client.history(url, pid)
             except comfy_client.ComfyError as e:
                 job["state"] = "error"
-                job["error"] = f"Błąd /history: {e}"
+                job["error"] = f"/history error: {e}"
                 return
             outs = comfy_client.collect_output_images(hist, pid)
             if outs:
@@ -1283,7 +1283,7 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
                             url, o["filename"], o["subfolder"], o["type"]
                         )
                     except comfy_client.ComfyError as e:
-                        job["error"] = f"Błąd /view: {e}"
+                        job["error"] = f"/view error: {e}"
                         continue
                     item_id = _uuid.uuid4().hex[:12]
                     out_path = COMFY_GALLERY_DIR / f"{item_id}.png"
@@ -1308,7 +1308,7 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
         job["done_count"] = 1
         job["preview"] = None
         job["state"] = "done"
-        job["current"] = "Zakończono"
+        job["current"] = "Finished"
     except Exception as e:  # noqa: BLE001
         job["state"] = "error"
         job["error"] = f"{e}\n{traceback.format_exc()}"
@@ -1317,7 +1317,7 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
 @app.post("/api/comfy/editor/generate")
 def api_comfy_editor_generate(req: ComfyEditorGenerate):
     if not req.workflow:
-        raise HTTPException(400, "Pusty workflow.")
+        raise HTTPException(400, "Empty workflow.")
     # Persist edits as the editor's current workflow.
     cfg = _load_comfy_config()
     cfg["editor_workflow"] = req.workflow
@@ -1330,7 +1330,7 @@ def api_comfy_editor_generate(req: ComfyEditorGenerate):
             "state": "pending",
             "total": 1,
             "done_count": 0,
-            "current": "Start…",
+            "current": "Starting…",
             "current_node": "",
             "progress": {"value": 0, "max": 0},
             "preview": None,
@@ -1345,17 +1345,17 @@ def api_comfy_editor_generate(req: ComfyEditorGenerate):
 
 
 # --------------------------------------------------------------------------- #
-# Biblioteka promptów (SQLite) — każdy wygenerowany prompt trafia do bazy.
+# Prompt library (SQLite) — every generated prompt lands in the database.
 # --------------------------------------------------------------------------- #
 def _prompt_category(caption_format: str) -> str:
-    """Format studia -> kategoria biblioteki. ai-toolkit to też JSON Ideogram."""
+    """Studio format -> library category. ai-toolkit is Ideogram JSON too."""
     return "ideogram" if caption_format in ("ideogram", "aitoolkit") else "flux"
 
 
 def _save_prompt_to_library(category: str, action: str, input_text: str, prompt: str) -> int:
-    """Zapisz prompt do biblioteki; zwraca id wiersza.
+    """Save a prompt to the library; returns the row id.
 
-    Kategoria "ideogram" przyjmuje wyłącznie poprawny JSON (obiekt).
+    The "ideogram" category accepts valid JSON objects only.
     """
     if category == "ideogram":
         try:
@@ -1363,7 +1363,7 @@ def _save_prompt_to_library(category: str, action: str, input_text: str, prompt:
         except (json.JSONDecodeError, ValueError):
             obj = None
         if not isinstance(obj, dict):
-            raise ValueError("Prompt Ideogram musi być poprawnym obiektem JSON.")
+            raise ValueError("An Ideogram prompt must be a valid JSON object.")
     conn = sqlite3.connect(str(DB_PATH))
     try:
         cur = conn.execute(
@@ -1379,11 +1379,11 @@ def _save_prompt_to_library(category: str, action: str, input_text: str, prompt:
 
 @app.post("/api/prompts/library")
 def api_prompt_library_save(req: LibrarySaveRequest):
-    """Ręczny zapis promptu do biblioteki (np. z edytora bbox)."""
+    """Manual prompt save to the library (e.g. from the bbox editor)."""
     if req.category not in ("flux", "ideogram"):
-        raise HTTPException(400, "Kategoria musi być 'flux' albo 'ideogram'.")
+        raise HTTPException(400, "The category must be 'flux' or 'ideogram'.")
     if not req.prompt.strip():
-        raise HTTPException(400, "Pusty prompt.")
+        raise HTTPException(400, "Empty prompt.")
     try:
         pid = _save_prompt_to_library(
             req.category, req.action, req.input_text, req.prompt.strip())
@@ -1395,7 +1395,7 @@ def api_prompt_library_save(req: LibrarySaveRequest):
 
 @app.get("/api/prompts/library")
 def api_prompt_library(category: str = "all"):
-    """Lista zapisanych promptów, najnowsze pierwsze; opcjonalny filtr kategorii."""
+    """Saved prompts, newest first; optional category filter."""
     if category in ("flux", "ideogram"):
         rows = _db_query(
             "SELECT id, category, action, input_text, prompt, created "
@@ -1414,7 +1414,7 @@ def api_prompt_library(category: str = "all"):
 @app.delete("/api/prompts/library/{pid}")
 def api_prompt_library_delete(pid: int):
     if not _db_query("SELECT 1 FROM prompt_library WHERE id=?", (pid,)):
-        raise HTTPException(404, "Nie ma promptu o takim id.")
+        raise HTTPException(404, "No prompt with that id.")
     _db_query("DELETE FROM prompt_library WHERE id=?", (pid,), write=True)
     return {"ok": True}
 
@@ -1429,8 +1429,8 @@ def api_prompt_library_export(category: str = "all"):
     rows = api_prompt_library(category)["prompts"]
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [
-        f"-- Biblioteka promptów (flux-lora-prep), eksport {stamp}, "
-        f"kategoria: {category}, pozycji: {len(rows)}",
+        f"-- Prompt library (flux-lora-prep), exported {stamp}, "
+        f"category: {category}, items: {len(rows)}",
         "CREATE TABLE IF NOT EXISTS prompt_library (",
         "    id INTEGER PRIMARY KEY AUTOINCREMENT,",
         "    category TEXT NOT NULL CHECK (category IN ('flux','ideogram')),",
@@ -1457,8 +1457,8 @@ def api_prompt_library_export(category: str = "all"):
 
 
 # --------------------------------------------------------------------------- #
-# Render Ideogram 4 — wbudowany workflow (backend/ideogram_workflow.py),
-# joby i galeria współdzielone z resztą integracji ComfyUI.
+# Ideogram 4 render — built-in workflow (backend/ideogram_workflow.py);
+# jobs and gallery shared with the rest of the ComfyUI integration.
 # --------------------------------------------------------------------------- #
 IDEOGRAM_RENDER_CFG_PATH = WORK / "ideogram_render.json"
 
@@ -1470,20 +1470,20 @@ class IdeogramRenderRequest(BaseModel):
 
 @app.get("/api/ideogram/render/config")
 def api_ideogram_render_config():
-    """Ostatnio użyte parametry renderu (zmergowane z domyślnymi)."""
+    """Last-used render parameters (merged with the defaults)."""
     return {"params": ideogram_workflow.merge_params(_load_named(IDEOGRAM_RENDER_CFG_PATH)),
             "presets": list(ideogram_workflow.PRESETS.keys())}
 
 
 @app.post("/api/ideogram/render")
 def api_ideogram_render(req: IdeogramRenderRequest):
-    """Wyrenderuj prompt v15 wbudowanym workflow Ideogram 4 na ComfyUI."""
+    """Render a v15 prompt with the built-in Ideogram 4 workflow on ComfyUI."""
     try:
         obj = json.loads(req.prompt)
     except (json.JSONDecodeError, ValueError):
         obj = None
     if not isinstance(obj, dict):
-        raise HTTPException(400, "Prompt musi być obiektem JSON (v15).")
+        raise HTTPException(400, "The prompt must be a JSON object (v15).")
     params = ideogram_workflow.merge_params(req.params)
     _save_named(IDEOGRAM_RENDER_CFG_PATH, params)
     workflow = ideogram_workflow.build_workflow(req.prompt, params)
@@ -1495,7 +1495,7 @@ def api_ideogram_render(req: IdeogramRenderRequest):
             "state": "pending",
             "total": 1,
             "done_count": 0,
-            "current": "Start…",
+            "current": "Starting…",
             "current_node": "",
             "progress": {"value": 0, "max": 0},
             "preview": None,
@@ -1511,19 +1511,19 @@ def api_ideogram_render(req: IdeogramRenderRequest):
 
 @app.post("/api/ideogram/analyze")
 async def api_ideogram_analyze(file: UploadFile):
-    """Obraz referencyjny -> szkic promptu v15 (Florence-2: opis + realne bboxy + OCR)."""
+    """Reference image -> v15 prompt draft (Florence-2: caption + real bboxes + OCR)."""
     if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(400, "Prześlij plik graficzny.")
+        raise HTTPException(400, "Upload an image file.")
     data = await file.read()
     try:
         from PIL import Image
         image = Image.open(io.BytesIO(data)).convert("RGB")
     except Exception:
-        raise HTTPException(400, "Nie udało się odczytać obrazu.")
+        raise HTTPException(400, "Failed to read the image.")
     try:
         caption, elements = florence.analyze_image(image)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"Analiza Florence-2 nie powiodła się: {e}")
+        raise HTTPException(500, f"Florence-2 analysis failed: {e}")
     draft = florence.build_v15_draft(caption, elements, image.width, image.height)
     return {"json": draft, "elements": len(elements),
             "model": florence.DEFAULT_MODEL, "warnings": v15_lint.lint_v15(draft)}
@@ -1534,7 +1534,7 @@ def api_prompt(req: PromptRequest):
     """Expand or refine a generation prompt (FLUX.2 or Ideogram 4 JSON) using the local LLM."""
     text = req.text.strip()
     if not text:
-        raise HTTPException(400, "Wpisz prompt do rozbudowania lub poprawy.")
+        raise HTTPException(400, "Type a prompt to expand or refine.")
 
     quant = req.quant if req.quant in ("4bit", "none") else "4bit"
     try:
@@ -1561,7 +1561,7 @@ def api_prompt(req: PromptRequest):
     except lmstudio.LMStudioError as e:
         raise HTTPException(502, f"LM Studio: {e}")
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"Błąd generowania: {e}")
+        raise HTTPException(500, f"Generation error: {e}")
 
 
 @app.post("/api/zip")
@@ -1569,9 +1569,9 @@ def api_zip(req: ExportRequest):
     """Build the dataset as an in-memory ZIP and return it as a download."""
     job = JOBS.get(req.job_id)
     if not job:
-        raise HTTPException(404, "Nieznane zadanie.")
+        raise HTTPException(404, "Unknown job.")
     if job["state"] != "done":
-        raise HTTPException(400, "Zadanie nie jest zakończone.")
+        raise HTTPException(400, "The job is not finished.")
 
     proc_dir = WORK / req.job_id / "processed"
     exclude = set(req.exclude_idx)
@@ -1593,7 +1593,7 @@ def api_zip(req: ExportRequest):
             written += 1
 
     if written == 0:
-        raise HTTPException(400, "Brak zdjęć do spakowania.")
+        raise HTTPException(400, "No images to package.")
 
     buf.seek(0)
     fname = f"dataset_{job['config'].get('mode', 'lora')}_{req.job_id[:8]}.zip"

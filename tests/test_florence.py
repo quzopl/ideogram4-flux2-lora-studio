@@ -10,7 +10,7 @@ def test_nearest_aspect_snaps_to_standard():
 
 
 def test_norm_bbox_to_v15_order():
-    # piksele xyxy -> [y1,x1,y2,x2] na 0-1000
+    # pixel xyxy -> [y1,x1,y2,x2] on 0-1000
     assert florence.norm_bbox_xyxy([100, 50, 300, 150], 1000, 500) == [100, 100, 300, 300]
 
 
@@ -21,7 +21,7 @@ def test_norm_bbox_clamps_and_swaps():
 
 
 def test_quad_to_xyxy():
-    quad = [10, 20, 110, 25, 108, 80, 12, 78]  # 4 punkty x,y
+    quad = [10, 20, 110, 25, 108, 80, 12, 78]  # 4 x,y points
     assert florence.quad_to_xyxy(quad) == [10, 20, 110, 80]
 
 
@@ -43,8 +43,8 @@ def test_merge_detections_enriches_and_dedupes():
     els = florence.merge_detections(od, dense, ocr, 1000, 1000)
     objs = [e for e in els if e["type"] == "obj"]
     texts = [e for e in els if e["type"] == "text"]
-    assert len(objs) == 1                      # duplikat po IoU odcięty
-    assert objs[0]["desc"] == "a tabby cat sleeping"  # wzbogacone z dense
+    assert len(objs) == 1                      # duplicate cut by IoU
+    assert objs[0]["desc"] == "a tabby cat sleeping"  # enriched from dense regions
     assert len(texts) == 1 and texts[0]["text"] == "HELLO"
 
 
@@ -67,7 +67,7 @@ def test_build_v15_draft_shape():
     out_els = obj["compositional_deconstruction"]["elements"]
     assert out_els[0] == {"type": "obj", "bbox": [100, 100, 900, 500], "desc": "a tabby cat"}
     assert out_els[1]["text"] == "HELLO"
-    assert "\n" not in draft  # zminifikowany
+    assert "\n" not in draft  # minified
 
 
 def test_build_v15_draft_caps_hld_at_sentence():

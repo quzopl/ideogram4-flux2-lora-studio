@@ -1,22 +1,22 @@
-"""Workflow ComfyUI dla Ideogram 4 — budowany w Pythonie, bez plików .json.
+"""ComfyUI workflow for Ideogram 4 — built in Python, no .json files.
 
-Graf odtworzony z analizy działającego setupu (Ideogram4Scheduler +
-DualModelGuider + presety jakości); wymiary i parametry presetów liczymy
-tutaj, więc graf nie potrzebuje nodów matematycznych. Tekst promptu dostaje
-na początku jawną wskazówkę orientacji + dokładne wymiary — bez niej model
-potrafi obrócić wynik o 90° albo zgnieść layout.
+Graph reconstructed from analyzing a working setup (Ideogram4Scheduler +
+DualModelGuider + quality presets); dimensions and preset math are computed
+here, so the graph needs no math nodes. The prompt text is prefixed with an
+explicit orientation cue + exact dimensions — without it the model tends to
+rotate the result by 90° or squash the layout.
 
-Wariant "ideogram4" = oryginalny scheduler; "simple" = społecznościowy
+Variant "ideogram4" = the original scheduler; "simple" = the community one
 (ModelSamplingAuraFlow shift + BasicScheduler "simple" + euler).
-Wymaga ComfyUI z nodami Ideogram 4 (Ideogram4Scheduler, DualModelGuider,
-CFGOverride, EmptyFlux2LatentImage).
+Requires a ComfyUI with the Ideogram 4 nodes (Ideogram4Scheduler,
+DualModelGuider, CFGOverride, EmptyFlux2LatentImage).
 """
 from __future__ import annotations
 import json
 import math
 import re
 
-# Presety jakości Ideogram 4 (kroki + parametry mu/std schedulera).
+# Ideogram 4 quality presets (steps + scheduler mu/std parameters).
 PRESETS = {
     "Quality": {"steps": 48, "mu": 0.0, "std": 1.5},
     "Default": {"steps": 20, "mu": 0.0, "std": 1.75},
@@ -32,7 +32,7 @@ DEFAULTS = {
     "cfg_override": 3.0,
     "start_percent": 0.9,
     "end_percent": 1.0,
-    "sampler": "",                # puste = domyślny dla wariantu
+    "sampler": "",                # empty = the variant's default
     "batch_size": 1,
     "shift": 5.0,
     "lora_enabled": False,
@@ -57,7 +57,7 @@ def _clampf(v, lo: float, hi: float, dflt: float) -> float:
 
 
 def merge_params(params: dict | None) -> dict:
-    """DEFAULTS + parametry użytkownika, z sanityzacją zakresów."""
+    """DEFAULTS + user parameters, with range sanitization."""
     p = dict(DEFAULTS)
     p.update({k: v for k, v in (params or {}).items() if k in DEFAULTS})
     if p["preset"] not in PRESETS:
@@ -84,8 +84,8 @@ def merge_params(params: dict | None) -> dict:
 
 
 def compute_dims(aspect_ratio: str, megapixels: float) -> tuple[int, int]:
-    """Wymiary wyjściowe: area=MP*1024^2, boki ~sqrt(area*ar) do wielokrotności
-    8, potem latent zaokrągla w górę do 16 (podłoga 256). 3:2 @ 2MP -> 1776x1184."""
+    """Output dimensions: area=MP*1024^2, sides ~sqrt(area*ar) rounded to a
+    multiple of 8, then the latent rounds up to 16 (floor 256). 3:2 @ 2MP -> 1776x1184."""
     m = _RATIO_RE.match(aspect_ratio or "")
     ar = (int(m.group(1)) / int(m.group(2))) if m and int(m.group(2)) else 1.0
     area = megapixels * 1024 * 1024
@@ -95,7 +95,7 @@ def compute_dims(aspect_ratio: str, megapixels: float) -> tuple[int, int]:
 
 
 def orientation_lead(ratio: str, width: int, height: int) -> str:
-    """Jawna deklaracja orientacji + układu współrzędnych przed JSON-em."""
+    """Explicit orientation + coordinate-system statement before the JSON."""
     coord = (
         f" Element bboxes are [ymin,xmin,ymax,xmax] on a 0-1000 normalized grid "
         f"(each axis 0-1000 independent of the {width}x{height} pixel size), "
@@ -125,14 +125,14 @@ def _prompt_ratio(prompt_json: str) -> str:
 
 
 def build_render_text(prompt_json: str, megapixels: float = 2.0) -> str:
-    """Tekst do CLIPTextEncode: wskazówka orientacji + JSON v15 bez zmian."""
+    """Text for CLIPTextEncode: orientation cue + the v15 JSON unchanged."""
     ratio = _prompt_ratio(prompt_json)
     w, h = compute_dims(ratio, megapixels)
     return orientation_lead(ratio, w, h) + "\n\n" + prompt_json
 
 
 def build_workflow(prompt_json: str, params: dict | None) -> dict:
-    """Zbuduj graf API ComfyUI renderujący prompt v15."""
+    """Build the ComfyUI API graph rendering a v15 prompt."""
     p = merge_params(params)
     ratio = _prompt_ratio(prompt_json)
     width, height = compute_dims(ratio, p["megapixels"])
@@ -195,8 +195,8 @@ def build_workflow(prompt_json: str, params: dict | None) -> dict:
                         "class_type": "Ideogram4Scheduler",
                         "_meta": {"title": "Ideogram 4 Scheduler"}}
 
-    # LoRA (model-only): wpięta między model dyfuzyjny a jego konsumenta;
-    # ścieżka bezwarunkowa (uncond) zostaje nietknięta.
+    # LoRA (model-only): spliced between the diffusion model and its consumer;
+    # the unconditional (uncond) path stays untouched.
     if p["lora_enabled"] and p["lora_name"]:
         for node in wf.values():
             m = node["inputs"].get("model")

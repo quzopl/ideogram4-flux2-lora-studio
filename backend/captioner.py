@@ -132,7 +132,7 @@ def caption_image(
     model = _state["model"]
     processor = _state["processor"]
     if model is None or processor is None:
-        raise RuntimeError("Model nie jest załadowany — wywołaj ensure_loaded() najpierw.")
+        raise RuntimeError("Model not loaded — call ensure_loaded() first.")
 
     instruction = prompts.caption_instruction(mode, style, fmt)
     messages = [
@@ -182,7 +182,7 @@ def generate_text(
     model = _state["model"]
     processor = _state["processor"]
     if model is None or processor is None:
-        raise RuntimeError("Model nie jest załadowany — wywołaj ensure_loaded() najpierw.")
+        raise RuntimeError("Model not loaded — call ensure_loaded() first.")
 
     messages = [
         {"role": "system", "content": system},

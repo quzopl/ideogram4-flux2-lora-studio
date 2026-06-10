@@ -29,12 +29,12 @@ def test_model_dir_info_qwen_ok(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "qwen2_5_vl"}))
     info = server._model_dir_info(tmp_path)
     assert info["ok"] is True
-    assert info["label"].endswith("(własny)")
+    assert info["label"].endswith("(custom)")
 
 
 def test_all_models_merges_custom(tmp_path, monkeypatch):
     cm = tmp_path / "cm.json"
-    cm.write_text(json.dumps({"/models/qwen": "qwen (własny)"}))
+    cm.write_text(json.dumps({"/models/qwen": "qwen (custom)"}))
     monkeypatch.setattr(server, "CUSTOM_MODELS_PATH", cm)
     models = server._all_models()
     assert "/models/qwen" in models

@@ -1,22 +1,22 @@
 /* =========================================================================== //
-// Dodatki studia promptów — osobny moduł (wzór: Ideogrammar):
-//  - kontrolki szczegółowości (liczba elementów / gęstość desc) dla Ideogram,
-//  - presety stylów (epoka / styl / gatunek) doklejające instrukcję do wejścia,
-//  - współdzielony renderer znalezisk lintera v15 (studio + edytor bbox).
+// Prompt studio extras — standalone module (pattern: Ideogrammar):
+//  - detail controls (element count / desc density) for Ideogram formats,
+//  - style presets (era / style / genre) appending an instruction to the input,
+//  - shared renderer for v15 lint findings (studio + bbox editor).
 // =========================================================================== */
 "use strict";
 
 (function () {
   const byId = (id) => document.getElementById(id);
 
-  /* ---- współdzielony renderer znalezisk v15 ---- */
+  /* ---- shared v15 findings renderer ---- */
   window.renderV15Findings = function (box, findings) {
     if (!box) return;
     box.innerHTML = "";
     if (!findings || !findings.length) {
       const d = document.createElement("div");
       d.className = "v15item ok";
-      d.innerHTML = '<span class="ico">&#10003;</span><span>Brak ostrzeżeń — zgodne z wytycznymi v15</span>';
+      d.innerHTML = '<span class="ico">&#10003;</span><span>No warnings — compliant with the v15 guidelines</span>';
       box.appendChild(d);
       return;
     }
@@ -34,7 +34,7 @@
     }
   };
 
-  // Ostrzeżenia z /api/prompt pod wynikiem studia (tylko dla formatów JSON).
+  // Warnings from /api/prompt under the studio result (JSON formats only).
   window.renderStudioWarnings = function (warnings) {
     const box = byId("pWarnBox");
     if (!box) return;
@@ -48,25 +48,25 @@
     window.renderV15Findings(box, warnings || []);
   };
 
-  /* ---- presety stylów (zachowują kompozycję, zmieniają treść) ---- */
+  /* ---- style presets (preserve composition, change content) ---- */
   const PRESETS = {
     era: {
-      label: "Epoka",
-      options: ["Mezopotamia", "Starożytny Egipt", "Starożytny Rzym", "Średniowiecze",
-        "Renesans", "Wiktoriańska (1890s)", "Lata 20.", "Lata 50. (Americana)",
-        "Lata 70.", "Lata 80.", "Lata 90.", "Cyberpunk (bliska przyszłość)", "Daleka przyszłość / sci-fi"],
+      label: "Era",
+      options: ["Mesopotamia", "Ancient Egypt", "Ancient Rome", "Medieval",
+        "Renaissance", "Victorian (1890s)", "Roaring 1920s", "1950s Americana",
+        "1970s", "1980s", "1990s", "Cyberpunk near-future", "Far future / sci-fi"],
       guide: (v) => `Time travel: keep the exact same composition, framing and element positions, but depict the scene as a period-accurate ${v} version — adjust clothing, technology, vehicles, architecture and materials to that era.`,
     },
     style: {
-      label: "Styl",
-      options: ["Obraz olejny", "Akwarela", "Anime", "Pixel art", "Komiks",
-        "Render 3D", "Szkic ołówkiem", "Pop art", "Low-poly", "Claymation"],
+      label: "Style",
+      options: ["Oil painting", "Watercolor", "Anime", "Pixel art", "Comic book",
+        "3D render", "Pencil sketch", "Pop art", "Low-poly", "Claymation"],
       guide: (v) => `Re-render the scene in this medium/style: ${v}. Keep the exact same composition and layout; only change the rendering style.`,
     },
     genre: {
-      label: "Gatunek / nastrój",
-      options: ["Cyberpunk", "Film noir", "High fantasy", "Postapokalipsa", "Vaporwave",
-        "Steampunk", "Horror", "Solarpunk", "Western", "Baśń"],
+      label: "Genre / mood",
+      options: ["Cyberpunk", "Film noir", "High fantasy", "Post-apocalyptic", "Vaporwave",
+        "Steampunk", "Horror", "Solarpunk", "Western", "Fairy tale"],
       guide: (v) => `Re-theme the scene as ${v}. Keep the exact same composition and layout; restyle the content, lighting and mood to match the theme.`,
     },
   };
@@ -84,7 +84,7 @@
     for (const key of Object.keys(PRESETS)) {
       const p = PRESETS[key];
       const sel = document.createElement("select");
-      sel.title = "Dokleja do promptu instrukcję zachowującą kompozycję";
+      sel.title = "Appends a composition-preserving instruction to the prompt";
       const first = document.createElement("option");
       first.value = "";
       first.textContent = p.label + "…";
@@ -104,7 +104,7 @@
     }
   }
 
-  /* ---- widoczność kontrolek zależna od formatu ---- */
+  /* ---- control visibility depends on the format ---- */
   function updateDetailVisibility() {
     const fmt = byId("promptFormat") ? byId("promptFormat").value : "flux";
     const ideo = fmt === "ideogram" || fmt === "aitoolkit";

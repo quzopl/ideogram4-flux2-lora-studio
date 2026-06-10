@@ -1,8 +1,8 @@
 /* =========================================================================== //
-// Obraz -> szkic promptu v15 — osobny moduł. Wysyła zdjęcie referencyjne do
-// /api/ideogram/analyze (Florence-2: opis sceny + realne bboxy + OCR) i ładuje
-// zwrócony szkic do edytora bbox, gdzie można go poprawić i wysłać do studia
-// ("Popraw") albo od razu wyrenderować.
+// Image -> v15 prompt draft — standalone module. Sends a reference photo to
+// /api/ideogram/analyze (Florence-2: scene caption + real bboxes + OCR) and
+// loads the returned draft into the bbox editor, where it can be cleaned up,
+// refined in the studio or rendered right away.
 // =========================================================================== */
 "use strict";
 
@@ -18,7 +18,7 @@
     if (!file || !window.BboxEditor) return;
     const btn = byId("bxFromImage");
     btn.disabled = true;
-    setStatus("Analizuję obraz (Florence-2)… Pierwsze użycie pobiera i ładuje model — to może potrwać.", "");
+    setStatus("Analyzing the image (Florence-2)… First use downloads and loads the model — this can take a while.", "");
     try {
       const form = new FormData();
       form.append("file", file);
@@ -26,10 +26,10 @@
       if (!res.ok) throw new Error((await res.text()) || res.statusText);
       const out = await res.json();
       window.BboxEditor.open(out.json);
-      setStatus(`Szkic gotowy: ${out.elements} elementów (${out.model}). ` +
-        "Popraw opisy na kanwie albo przepuść przez studio („Popraw”) po pełne descy v15.", "ok");
+      setStatus(`Draft ready: ${out.elements} elements (${out.model}). ` +
+        "Fix the descriptions on the canvas or run it through the studio (Refine) for full v15 descs.", "ok");
     } catch (e) {
-      setStatus("Błąd analizy: " + e.message, "err");
+      setStatus("Analysis error: " + e.message, "err");
     } finally {
       btn.disabled = false;
     }
@@ -43,7 +43,7 @@
       if (input.files && input.files[0]) analyze(input.files[0]);
       input.value = "";
     });
-    // drag&drop obrazka wprost na kanwę
+    // drag&drop an image straight onto the canvas
     const host = document.querySelector("#view-bbox .bxhost");
     if (host) {
       host.addEventListener("dragover", (ev) => ev.preventDefault());
