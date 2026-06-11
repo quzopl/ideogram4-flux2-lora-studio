@@ -23,11 +23,13 @@ prompting:
   resize element boxes on an aspect-ratio-true 0–1000 grid, edit obj/text
   cards with live word counters and a live v15 linter, import old/broken/
   double-encoded JSONs (they get unwrapped and converted), or start from a
-  **reference photo** — **Florence-2** drafts the scene caption, real object
-  bboxes and OCR text regions. The current canvas renders directly on your
-  ComfyUI server with a **built-in Ideogram 4 workflow** (quality presets,
-  both scheduler variants, optional LoRA), with an explicit orientation cue
-  that stops the model from rotating or squashing the layout.
+  **reference photo** with a choice of three analysis engines: **Florence-2**
+  (fast, measured bboxes + OCR), **VLM only** (Qwen2.5-VL or any LM Studio
+  vision model drafts the whole JSON) or **Hybrid** (Florence's measured
+  bboxes + the VLM's rich v15 prose). The current canvas renders directly on
+  your ComfyUI server with a **built-in Ideogram 4 workflow** (quality
+  presets, both scheduler variants, optional LoRA), with an explicit
+  orientation cue that stops the model from rotating or squashing the layout.
 - **🎨 ComfyUI** — generic ComfyUI integration: LoRA testing with any uploaded
   workflow, reference-image batches, a node/parameter workflow editor with a
   graph view and a SQLite workflow library, plus a persistent gallery.
@@ -111,10 +113,23 @@ holds the `aspect_ratio` / HLD / background fields and one card per element
 with live word counters (50 for the HLD, 60 per desc) and the v15 linter.
 Get a starting point three ways: **📥 Paste JSON** (any format — legacy
 `style_description` schemas, `caption`/`data` wrappers and double-encoded
-JSONs are unwrapped and converted), **📷 From image** (Florence-2 drafts
-caption + real bboxes + OCR), or **🧩 Edit on canvas** from the studio result
-or any library entry. Then **💾 Save to library**, copy/download the JSON, or
-**🎨 Render canvas** straight on ComfyUI.
+JSONs are unwrapped and converted), **📷 From image**, or **🧩 Edit on
+canvas** from the studio result or any library entry. Then **💾 Save to
+library**, copy/download the JSON, or **🎨 Render canvas** straight on
+ComfyUI.
+
+**From image** offers three analysis engines:
+
+| Engine | Bboxes | Descriptions | Cost |
+|--------|--------|--------------|------|
+| **Florence-2** (default) | measured (object detection + OCR) | terse labels | ~1 GB VRAM, fast |
+| **VLM only** | estimated by the vision model | full v15 prose | the chosen VLM |
+| **Hybrid** | measured by Florence-2, kept verbatim | rewritten by the VLM to full v15 prose | both models |
+
+The VLM is picked from the same list as the captioner/studio: local
+Qwen2.5-VL (3B/7B), custom model folders, or any vision model served by
+LM Studio. Hybrid gives the best drafts: real geometry and literal OCR text
+with identity-first 30–60-word descriptions.
 
 ### Ideogram 4 rendering
 
