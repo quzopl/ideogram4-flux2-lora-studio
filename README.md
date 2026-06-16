@@ -1,4 +1,4 @@
-# FLUX LoRA — dataset & prompt studio
+# Ideogram4 FLUX2 LoRA — dataset & prompt studio
 
 A browser-based, fully local toolbox for FLUX LoRA training and Ideogram 4
 prompting:

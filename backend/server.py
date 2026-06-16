@@ -111,7 +111,7 @@ COMFY_JOBS_LOCK = threading.Lock()
 _OBJECT_INFO_CACHE: dict = {"url": None, "data": None, "ts": 0.0}
 _OBJECT_INFO_TTL = 300.0  # seconds
 
-app = FastAPI(title="FLUX LoRA Dataset Prep")
+app = FastAPI(title="Ideogram4 FLUX2 LoRA — dataset & prompt studio")
 
 
 @app.middleware("http")
