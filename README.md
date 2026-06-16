@@ -6,9 +6,10 @@ prompting:
 - **📸 Dataset (captions)** — prepares a LoRA training dataset: unifies
   **sizes** (bucketing / square crop), **format** (PNG/JPG) and **file names**,
   and captions the photos with a local vision model (Qwen2.5-VL) in one of the
-  modes: **person**, **person — details**, **architecture**, **landscape** or
-  **generic**. Captions can be plain FLUX.2 prose, Ideogram 4 JSON or
-  ai-toolkit JSON.
+  modes: **person**, **person — details**, **style** (content-only, for a style
+  LoRA), **architecture**, **landscape** or **generic**. Captions can be plain
+  FLUX.2 prose, Ideogram 4 JSON or ai-toolkit JSON; Ideogram captions use the
+  v15 framework and carry per-element **bboxes**, exactly like the bbox editor.
 - **✨ Prompt studio** — writes generation prompts for you. *Expand* turns a
   short idea into a full layered prompt; *Refine* cleans up an existing or
   tag-style prompt. Targets **FLUX.2** (natural prose) or **Ideogram 4 JSON**

@@ -149,21 +149,65 @@ def test_person_detail_mode_covers_marks():
 
 
 def test_caption_instruction_routes_by_fmt():
+    # FLUX captions stay natural prose; Ideogram/ai-toolkit use the v15 builder.
     assert prompts.caption_instruction("person", "concise", "flux") == prompts.get_prompt("person", "concise")
-    assert prompts.caption_instruction("person", "concise", "ideogram") == prompts.get_ideogram_prompt("person")
-    assert prompts.caption_instruction("person", "concise", "aitoolkit") == prompts.get_ideogram_prompt("person")
+    assert prompts.caption_instruction("person", "concise", "ideogram") == prompts.get_ideogram_caption_v15("person")
+    assert prompts.caption_instruction("person", "concise", "aitoolkit") == prompts.get_ideogram_caption_v15("person")
 
 
-def test_postprocess_caption_routes_by_fmt():
+def test_postprocess_caption_routes_to_v15():
+    # Dataset Ideogram captions are now normalized to v15 (three keys, bbox-aware).
     ideo = prompts.postprocess_caption('{"high_level_description":"x"}', "ideogram")
-    assert _loads(ideo)["high_level_description"] == "x"
+    obj = _loads(ideo)
+    assert list(obj.keys()) == ["aspect_ratio", "high_level_description",
+                                "compositional_deconstruction"]
+    assert obj["high_level_description"] == "x"
     flux = prompts.postprocess_caption("The image shows a cat.", "flux")
     assert not flux.lower().startswith("the image shows")
 
 
-def test_postprocess_caption_aitoolkit():
+def test_postprocess_caption_aitoolkit_v15():
     out = prompts.postprocess_caption('{"high_level_description":"y"}', "aitoolkit")
     assert _loads(out)["high_level_description"] == "y"
+    assert "aspect_ratio" in _loads(out)
+
+
+def test_dataset_ideogram_caption_keeps_bbox():
+    # A model returning bbox-tagged elements -> bbox preserved through postprocess.
+    raw = ('{"aspect_ratio":"3:4","high_level_description":"the man waves",'
+           '"compositional_deconstruction":{"background":"a sunlit park",'
+           '"elements":[{"type":"obj","bbox":[120,250,990,760],'
+           '"desc":"the man in a blue jacket waving"}]}}')
+    el = _loads(prompts.postprocess_caption(raw, "ideogram"))[
+        "compositional_deconstruction"]["elements"][0]
+    assert el["bbox"] == [120, 250, 990, 760]
+
+
+def test_get_ideogram_caption_v15_is_bbox_aware():
+    for mode in ("person", "person_detail", "architecture", "landscape",
+                 "style", "generic"):
+        instr = prompts.get_ideogram_caption_v15(mode)
+        low = instr.lower()
+        assert "bbox" in low and "0-1000" in instr
+        assert "aspect_ratio" in instr and "compositional_deconstruction" in instr
+        # caption mode must NOT carry the generation-only "populate" planning rules
+        assert "population bonus" not in low
+
+
+def test_style_mode_skips_style_description():
+    # Style LoRA: describe content, not the art style/medium.
+    for instr in (prompts.get_prompt("style"),
+                  prompts.get_ideogram_caption_v15("style"),
+                  prompts.get_ideogram_prompt("style")):
+        low = instr.lower()
+        assert "style lora" in low
+        assert "content" in low
+
+
+def test_person_caption_v15_skips_identity():
+    low = prompts.get_ideogram_caption_v15("person").lower()
+    assert "trigger word absorbs it" in low or "absorbs it" in low
+    assert "varies between photos" in low
 
 
 # --------------------------------------------------------------------------- #

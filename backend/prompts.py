@@ -83,6 +83,15 @@ _FOCUS = {
         "colors, the composition (foreground to background), and the lighting and "
         "mood."
     ),
+    "style": (
+        "Caption this image for training a FLUX style LoRA — a LoRA meant to absorb "
+        "a consistent visual STYLE. Describe ONLY the content and composition: the "
+        "main subject and what it is doing, the important secondary objects, the "
+        "setting and the framing. Do NOT name or describe the art style itself — "
+        "skip the medium, rendering technique, brushwork, line work, color grading, "
+        "palette, film stock and overall mood — so the trigger word can absorb the "
+        "style. Refer to subjects concretely but plainly."
+    ),
     "generic": (
         "Caption this image for FLUX LoRA training. State the main subject and its "
         "key attributes, the important secondary objects, the colors and setting, "
@@ -390,6 +399,12 @@ _IDEOGRAM_FOCUS = {
         "scenery, terrain and landforms, vegetation and water, sky and weather, time "
         "of day and season, dominant colors and lighting."
     ),
+    "style": (
+        "Describe this image as an Ideogram structured caption for a STYLE LoRA: "
+        "cover only the content and composition (subjects, objects, setting, layout) "
+        "and do NOT name or describe the art style, medium, rendering or palette, so "
+        "the trigger word can absorb the style."
+    ),
     "generic": (
         "Describe this image as an Ideogram structured caption: the main subject and "
         "its key attributes, important secondary objects, colors and setting, framing, "
@@ -434,16 +449,20 @@ def build_ideogram_studio_system(action: str = "expand", subject: str = "auto") 
 
 
 def caption_instruction(mode: str, style: str, fmt: str) -> str:
-    """Captioning instruction shared by both engines (local and LM Studio)."""
+    """Captioning instruction shared by both engines (local and LM Studio).
+
+    Ideogram/ai-toolkit captions use the v15 framework (bbox-aware, same schema
+    as the bbox editor and the prompt studio); FLUX captions use natural prose.
+    """
     if fmt in ("ideogram", "aitoolkit"):
-        return get_ideogram_prompt(mode)
+        return get_ideogram_caption_v15(mode)
     return get_prompt(mode, style)
 
 
 def postprocess_caption(text: str, fmt: str) -> str:
     """Raw-caption post-processing by format (shared by both engines)."""
     if fmt in ("ideogram", "aitoolkit"):
-        return normalize_ideogram(text)
+        return normalize_ideogram_v15(text)
     return clean_caption(text)
 
 
@@ -835,6 +854,60 @@ def build_image_v15_instruction() -> str:
             + _IDEOGRAM_V15_ASPECT + _IDEOGRAM_V15_HLD + _IDEOGRAM_V15_ELEMENTS
             + _IDEOGRAM_V15_BACKGROUND + _IDEOGRAM_V15_BBOX + _IDEOGRAM_V15_SPECIFIC
             + _IDEOGRAM_V15_TEXT)
+
+
+# --- Dataset captioning in Ideogram v15 (bbox-aware, per-mode focus) -------- #
+# Reuses the IMAGE-mode rules (describe what's actually there, estimate a bbox
+# per element) so dataset captions carry bboxes just like the bbox editor.
+_IDEOGRAM_V15_FOCUS = {
+    "person": (
+        " FOCUS: a dataset image of a specific person for LoRA training. Refer to the "
+        "subject generically ('the person'/'the man'/'the woman') and describe ONLY "
+        "what VARIES between photos — pose, action, expression, gaze, all clothing and "
+        "accessories, framing and background. Do NOT describe the permanent identity "
+        "(face shape, eye/hair color, skin tone, body build, age) so the trigger word "
+        "absorbs it."
+    ),
+    "person_detail": (
+        " FOCUS: describe the person in rich physical detail — approximate age and "
+        "build; the face and EVERY distinguishing mark (scars, moles, freckles, "
+        "tattoos, piercings) and roughly where each sits; hair length, color, texture "
+        "and style and any facial hair; skin tone — plus pose, expression, clothing, "
+        "framing and background."
+    ),
+    "architecture": (
+        " FOCUS: a building or structure — its type and architectural style, main "
+        "materials and colors, notable features, surroundings, time of day and viewpoint."
+    ),
+    "landscape": (
+        " FOCUS: a landscape — terrain and landforms, vegetation and water, sky and "
+        "weather, time of day and season, dominant colors."
+    ),
+    "style": (
+        " FOCUS: a dataset image for a STYLE LoRA. Describe ONLY the content and "
+        "composition (subjects, objects, setting, layout); do NOT name or describe the "
+        "art style, medium, rendering, brushwork, palette or grading, so the trigger "
+        "word can absorb the style."
+    ),
+    "generic": (
+        " FOCUS: the main subject and its key attributes, important secondary objects, "
+        "the setting and the framing."
+    ),
+}
+
+
+def get_ideogram_caption_v15(mode: str) -> str:
+    """Ideogram v15 captioning instruction for a dataset image (bbox-aware).
+
+    Same schema as the bbox editor and prompt studio, so every element gets a
+    bbox. The per-mode FOCUS line is injected; the generation-only PLANNING
+    rules are omitted — a caption must describe what is actually in the image.
+    """
+    focus = _IDEOGRAM_V15_FOCUS.get(mode, _IDEOGRAM_V15_FOCUS["generic"])
+    return (_IDEOGRAM_V15_BASE + _IDEOGRAM_V15_IMAGE_ACTION + focus
+            + _IDEOGRAM_V15_CONTRACT + _IDEOGRAM_V15_ASPECT + _IDEOGRAM_V15_HLD
+            + _IDEOGRAM_V15_ELEMENTS + _IDEOGRAM_V15_BACKGROUND
+            + _IDEOGRAM_V15_BBOX + _IDEOGRAM_V15_SPECIFIC + _IDEOGRAM_V15_TEXT)
 
 
 def build_hybrid_v15_instruction(draft_json: str) -> str:

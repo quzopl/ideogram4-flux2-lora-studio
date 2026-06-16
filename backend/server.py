@@ -150,7 +150,7 @@ class ProcessRequest(BaseModel):
     jpg_quality: int = 95
     model: str = captioner.DEFAULT_MODEL
     quant: str = "4bit"  # "4bit" | "none"
-    max_tokens: int = 256
+    max_tokens: int = 512
     do_caption: bool = True
     caption_format: str = "flux"  # "flux" | "ideogram"
 
