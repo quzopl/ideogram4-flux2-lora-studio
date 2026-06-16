@@ -167,13 +167,37 @@ dataset/
 Any OpenAI-compatible local server also works for text/caption generation via
 **LM Studio** (set its URL in the dataset tab and pick a `lmstudio:` model).
 
+## Caption modes
+
+| Mode | Describes | Skips (so the trigger absorbs it) |
+|------|-----------|-----------------------------------|
+| **Person** | what varies between photos: pose, expression, clothing, framing, background, lighting | the fixed face/identity |
+| **Person — details** | rich physical detail: age, build, marks (scars/moles/tattoos), hair, skin | — (full likeness, for non-trigger use) |
+| **Style** | only the content & composition (subjects, objects, layout) | the art style, medium, palette and grading — for a **style LoRA** |
+| **Architecture / Landscape / Generic** | subject, materials, setting, framing, light | — |
+
+The same modes drive both the FLUX.2 prose captions and the Ideogram 4 JSON
+captions.
+
 ## Caption style (FLUX.2)
 
 Captions are written as full natural sentences (FLUX.2 has an LLM text
 encoder), focused on spatial relationships and actions, with no judgemental
-words. In **person** mode only the variable things are described (pose,
-clothing, background, framing, lighting, expression) and the fixed
-face/identity is skipped — the trigger word is meant to absorb the likeness.
+words. The **person** and **style** modes use the same residual trick: they
+describe everything *except* the thing the trigger word should learn (the
+person's likeness, or the art style), so that signal is attributed to the
+trigger during training.
+
+## Ideogram 4 dataset captions (v15 + bboxes)
+
+When the target format is **Ideogram 4 JSON** (or ai-toolkit), dataset captions
+use the same v15 framework as the prompt studio and the bbox editor, so every
+element carries a measured `[y1,x1,y2,x2]` bbox on the 0–1000 grid. The VLM is
+asked to estimate each element's position from the photo; the result is
+structurally normalized in Python (key order, aspect ratio from the image,
+bbox sanity) and the trigger word is injected into `high_level_description` at
+export. Each image yields a minified `.txt` plus a pretty `.json`. Load any of
+these straight into the **bbox editor** to fine-tune the boxes.
 
 ## Ideogram v15 in one paragraph
 
