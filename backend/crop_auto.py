@@ -53,7 +53,11 @@ def suggest_crop(image, mode: str, target: int, step: int, square: bool,
     if mode in NO_AUTO_MODES:
         return None
     detect = detect or detect_boxes
-    box = largest_box(detect(image, mode))
+    try:
+        boxes = detect(image, mode)
+    except Exception:  # noqa: BLE001 - a failed detection must fall back to centring
+        return None
+    box = largest_box(boxes)
     if box is None:
         return None
     ar = 1.0 if square else (image.width / image.height)
