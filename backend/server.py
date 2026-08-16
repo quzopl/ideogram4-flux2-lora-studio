@@ -8,6 +8,7 @@ Flow:
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -154,6 +155,14 @@ class ProcessRequest(BaseModel):
     do_caption: bool = True
     caption_format: str = "flux"  # "flux" | "ideogram"
 
+    # Cropping
+    crop_mode: str = "center"        # "center" | "auto" | "manual"
+    fit: str = "cover"               # "cover" (crop) | "contain" (pad)
+    pad_color: str = "#000000"
+    centering_x: str = "center"      # left | center | right
+    centering_y: str = "center"      # top | center | bottom
+    crops: dict[str, list[int]] = {} # source file name -> [x, y, w, h]
+
 
 class ExportRequest(BaseModel):
     job_id: str
@@ -195,6 +204,33 @@ def _list_images(folder: str) -> list[Path]:
         if f.is_file() and f.suffix.lower() in image_utils.SUPPORTED_EXT
     ]
     return files
+
+
+def _safe_source_path(folder: str, name: str) -> Path:
+    """Resolve ``name`` inside ``folder``, rejecting traversal and missing files."""
+    if not name or name != Path(name).name:
+        raise HTTPException(400, "Invalid file name.")
+    base = Path(folder).expanduser().resolve()
+    target = (base / name).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(404, "No such source image.")
+    return target
+
+
+def _crop_for(req: "ProcessRequest", name: str) -> list[int] | None:
+    """Crop box for a source file, or None when the mode has no per-file box."""
+    if req.crop_mode == "manual":
+        box = req.crops.get(name)
+        return list(box) if box and len(box) == 4 else None
+    return None
+
+
+SRC_THUMBS = WORK / "srcthumbs"
+
+
+def _src_thumb_path(folder: str, name: str) -> Path:
+    key = hashlib.sha1(str(Path(folder).expanduser().resolve()).encode()).hexdigest()[:16]
+    return SRC_THUMBS / key / (name + ".jpg")
 
 
 def _final_caption(req: ExportRequest, result: dict) -> str:
@@ -274,7 +310,11 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
             job["current"] = src.name
             try:
                 img, (w, h) = image_utils.process_image(
-                    str(src), req.resolution, req.step, req.square
+                    str(src), req.resolution, req.step, req.square,
+                    crop=_crop_for(req, src.name),
+                    centering=image_utils.centering_pair(req.centering_x, req.centering_y),
+                    fit=req.fit,
+                    pad_color=req.pad_color,
                 )
                 out_name = f"{prefix}_{i:04d}.{ext}"
                 image_utils.save_image(
@@ -498,19 +538,48 @@ def api_scan(req: ScanRequest):
     }
 
 
+@app.get("/api/src/thumb")
+def api_src_thumb(folder: str, name: str):
+    """Cached JPEG thumbnail of a source image (for the crop grid)."""
+    src = _safe_source_path(folder, name)
+    cache = _src_thumb_path(folder, name)
+    if not cache.exists() or cache.stat().st_mtime < src.stat().st_mtime:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        img = image_utils.load_source(str(src))
+        thumb = image_utils.make_thumbnail(img, 480)
+        thumb.save(str(cache), format="JPEG", quality=80)
+    return FileResponse(str(cache), media_type="image/jpeg")
+
+
+@app.get("/api/src/image")
+def api_src_image(folder: str, name: str):
+    """Down-scaled source image for the crop editor, with the true source size."""
+    src = _safe_source_path(folder, name)
+    img = image_utils.load_source(str(src))
+    full_w, full_h = img.width, img.height
+    preview = image_utils.make_thumbnail(img, 1600)
+    buf = io.BytesIO()
+    preview.save(buf, format="JPEG", quality=88)
+    return Response(
+        content=buf.getvalue(),
+        media_type="image/jpeg",
+        headers={"X-Src-Width": str(full_w), "X-Src-Height": str(full_h)},
+    )
+
+
 @app.post("/api/upload")
 async def api_upload(files: list[UploadFile]):
     dest = WORK / "uploads" / uuid.uuid4().hex
     dest.mkdir(parents=True, exist_ok=True)
-    saved = 0
+    saved_names: list[str] = []
     for f in files:
         if Path(f.filename).suffix.lower() not in image_utils.SUPPORTED_EXT:
             continue
         target = dest / Path(f.filename).name
         with open(target, "wb") as out:
             shutil.copyfileobj(f.file, out)
-        saved += 1
-    return {"folder": str(dest), "count": saved}
+        saved_names.append(target.name)
+    return {"folder": str(dest), "count": len(saved_names), "files": sorted(saved_names)}
 
 
 @app.post("/api/process")
