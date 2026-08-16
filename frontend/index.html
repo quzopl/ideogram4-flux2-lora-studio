@@ -6,6 +6,7 @@
   <title>Ideogram4 FLUX2 LoRA — dataset & prompt studio</title>
   <link rel="stylesheet" href="/style.css" />
   <link rel="stylesheet" href="/bbox_editor.css" />
+  <link rel="stylesheet" href="/crop_editor.css" />
 </head>
 <body>
   <header>
@@ -48,6 +49,12 @@
       </div>
 
       <p id="srcInfo" class="info"></p>
+      <div id="cropBar" class="row hidden">
+        <button type="button" id="autoCropBtn" class="mini">✂ Auto-crop all</button>
+        <button type="button" id="clearCropsBtn" class="mini">Clear crops</button>
+        <span id="cropInfo" class="info"></span>
+      </div>
+      <div id="srcGrid" class="srcgrid"></div>
     </section>
 
     <!-- STEP 2: SETTINGS -->
@@ -108,6 +115,44 @@
             <option value="false" selected>Buckets (keep aspect ratio)</option>
             <option value="true">Square (crop to 1:1)</option>
           </select>
+        </div>
+
+        <div class="field">
+          <label>Crop source</label>
+          <select id="cropMode">
+            <option value="center" selected>Centre (whole frame)</option>
+            <option value="auto">Auto (Florence-2 subject)</option>
+            <option value="manual">Manual (per-image crops)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Fit</label>
+          <select id="fitMode">
+            <option value="cover" selected>Cover (crop to fill)</option>
+            <option value="contain">Contain (pad with colour)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Pad colour</label>
+          <input type="color" id="padColor" value="#000000" />
+        </div>
+
+        <div class="field">
+          <label>Centering (horizontal / vertical)</label>
+          <div class="row">
+            <select id="centeringX">
+              <option value="left">Left</option>
+              <option value="center" selected>Centre</option>
+              <option value="right">Right</option>
+            </select>
+            <select id="centeringY">
+              <option value="top">Top</option>
+              <option value="center" selected>Centre</option>
+              <option value="bottom">Bottom</option>
+            </select>
+          </div>
         </div>
 
         <div class="field">
@@ -616,5 +661,6 @@
   <script src="/ideogram_render.js"></script>
   <script src="/image_to_prompt.js"></script>
   <script src="/app.js"></script>
+  <script src="/crop_editor.js"></script>
 </body>
 </html>
