@@ -60,7 +60,11 @@ def scan_folder(folder: str) -> list[dict]:
     if not p.is_dir():
         return []
     out: list[dict] = []
-    for f in sorted(p.iterdir()):
+    try:
+        entries = sorted(p.iterdir())
+    except OSError:  # PermissionError, etc.
+        return []
+    for f in entries:
         if f.is_file() and f.suffix.lower() in WEIGHT_EXT:
             out.append({
                 "id": f"local:{f}",
@@ -75,13 +79,15 @@ def scan_folder(folder: str) -> list[dict]:
 
 
 def load_config(path) -> dict:
-    """Read .work/upscaler.json ({} defaults when the file is missing)."""
+    """Read .work/upscaler.json; defaults to {"folder": "", "custom": []} when missing or invalid."""
     p = Path(path)
     if not p.exists():
         return {"folder": "", "custom": []}
     try:
         cfg = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return {"folder": "", "custom": []}
+    if not isinstance(cfg, dict):
         return {"folder": "", "custom": []}
     cfg.setdefault("folder", "")
     cfg.setdefault("custom", [])
