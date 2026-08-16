@@ -190,6 +190,36 @@
         </div>
 
         <div class="field">
+          <label>Upscale model (used when the crop is smaller than the target)</label>
+          <select id="upscaleModel"></select>
+          <button type="button" id="upDownloadBtn" class="mini">⬇ Download weights</button>
+          <span id="upModelInfo" class="info"></span>
+        </div>
+
+        <div class="field">
+          <label>Local upscale model folder</label>
+          <div class="row">
+            <input type="text" id="upFolder" placeholder="/home/user/ComfyUI/models/upscale_models" />
+            <button type="button" id="upScanBtn" class="mini">Scan</button>
+          </div>
+          <div class="row">
+            <input type="text" id="upCustomRepo" placeholder="HF repo id, e.g. me/my-upscaler" />
+            <input type="text" id="upCustomFile" placeholder="file.pth" />
+            <button type="button" id="upCustomAddBtn" class="mini">Add</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Hugging Face token (for gated repos)</label>
+          <div class="row">
+            <input type="password" id="hfToken" placeholder="hf_…" />
+            <button type="button" id="hfSaveBtn" class="mini">Save</button>
+            <button type="button" id="hfClearBtn" class="mini">Remove</button>
+          </div>
+          <span id="hfInfo" class="info"></span>
+        </div>
+
+        <div class="field">
           <label>Max caption length (tokens)</label>
           <input type="number" id="maxTokens" value="512" min="64" max="2048" step="32" />
         </div>
