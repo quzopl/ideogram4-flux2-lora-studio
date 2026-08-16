@@ -28,7 +28,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence,
-               ideogram_workflow, image_utils, lmstudio, prompts, v15_lint)
+               hf_auth, ideogram_workflow, image_utils, lmstudio, prompts, upscaler,
+               v15_lint)
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -41,10 +42,14 @@ COMFY_PROMPTS_PATH = WORK / "comfy_prompts.json"
 COMFY_WORKFLOWS_PATH = WORK / "comfy_workflows.json"
 CUSTOM_MODELS_PATH = WORK / "custom_models.json"
 LMSTUDIO_CONFIG_PATH = WORK / "lmstudio.json"
+HF_TOKEN_PATH = WORK / "hf.json"
+UPSCALER_CONFIG_PATH = WORK / "upscaler.json"
 COMFY_GALLERY_DIR = WORK / "comfy_gallery"
 COMFY_GALLERY_DIR.mkdir(exist_ok=True)
 
 DB_PATH = WORK / "flux_prep.db"
+
+hf_auth.apply_env(hf_auth.load_token(HF_TOKEN_PATH))
 
 
 def _db_query(sql: str, params: tuple = (), *, many: bool = False, write: bool = False):
@@ -199,6 +204,10 @@ class LibrarySaveRequest(BaseModel):
     prompt: str
     input_text: str = ""
     action: str = "manual"
+
+
+class HFTokenRequest(BaseModel):
+    token: str
 
 
 # --------------------------------------------------------------------------- #
@@ -535,6 +544,25 @@ def api_lmstudio_get():
 @app.post("/api/lmstudio")
 def api_lmstudio_set(req: LmStudioConfig):
     return {"url": _set_lmstudio_url(req.url)}
+
+
+@app.get("/api/hf/token")
+def api_hf_token_get():
+    return hf_auth.status(hf_auth.load_token(HF_TOKEN_PATH))
+
+
+@app.post("/api/hf/token")
+def api_hf_token_set(req: HFTokenRequest):
+    hf_auth.save_token(HF_TOKEN_PATH, req.token)
+    hf_auth.apply_env(req.token)
+    return hf_auth.status(req.token)
+
+
+@app.delete("/api/hf/token")
+def api_hf_token_clear():
+    hf_auth.clear_token(HF_TOKEN_PATH)
+    hf_auth.apply_env("")
+    return {"set": False, "tail": ""}
 
 
 @app.post("/api/scan")
