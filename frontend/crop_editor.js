@@ -124,15 +124,29 @@ window.CropEditor = (function () {
   let cur = { folder: null, name: null, srcW: 0, srcH: 0, viewW: 0, viewH: 0 };
   let box = { x: 0, y: 0, w: 0, h: 0 };   // in SOURCE pixels
   let drag = null;
+  let curObjectUrl = null;   // blob: URL currently assigned to #cropImg
 
   const scale = () => cur.viewW / cur.srcW;          // source px -> screen px
   const forcedRatio = () =>
     $("square").value === "true" ? 1 : ($("cropRatio").value === "free"
       ? null : parseFloat($("cropRatio").value));
 
+  function releaseObjectUrl() {
+    if (curObjectUrl) { URL.revokeObjectURL(curObjectUrl); curObjectUrl = null; }
+  }
+
   function clampBox() {
-    box.w = Math.max(16, Math.min(box.w, cur.srcW));
-    box.h = Math.max(16, Math.min(box.h, cur.srcH));
+    const r = forcedRatio();
+    if (r) {
+      // Ratio-locked: shrink to whichever dimension the image constrains
+      // first, then re-derive the other from the ratio so the box never
+      // drifts off-ratio while being fitted back inside the frame.
+      box.w = Math.max(16, Math.min(box.w, cur.srcW, cur.srcH * r));
+      box.h = box.w / r;
+    } else {
+      box.w = Math.max(16, Math.min(box.w, cur.srcW));
+      box.h = Math.max(16, Math.min(box.h, cur.srcH));
+    }
     box.x = Math.max(0, Math.min(box.x, cur.srcW - box.w));
     box.y = Math.max(0, Math.min(box.y, cur.srcH - box.h));
   }
@@ -217,7 +231,10 @@ window.CropEditor = (function () {
     if (e.key === "Escape") close();
   }
 
-  function close() { $("cropModal").classList.add("hidden"); }
+  function close() {
+    $("cropModal").classList.add("hidden");
+    releaseObjectUrl();
+  }
 
   async function open(folder, name) {
     cur.folder = folder;
@@ -230,10 +247,20 @@ window.CropEditor = (function () {
     cur.srcH = parseInt(res.headers.get("X-Src-Height"), 10);
     const blob = await res.blob();
     const img = $("cropImg");
-    await new Promise((resolve) => {
-      img.onload = resolve;
-      img.src = URL.createObjectURL(blob);
-    });
+    releaseObjectUrl();
+    try {
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error("could not decode the image"));
+        curObjectUrl = URL.createObjectURL(blob);
+        img.src = curObjectUrl;
+      });
+    } catch (e) {
+      alert("Cannot display the image: " + e.message);
+      releaseObjectUrl();
+      img.src = "";
+      return;
+    }
     // The modal must be visible (not display:none) before measuring the
     // rendered image, otherwise clientWidth/clientHeight both read 0.
     $("cropModal").classList.remove("hidden");
@@ -265,10 +292,10 @@ window.CropEditor = (function () {
     const ar = cur.srcW / cur.srcH;
     const jobs = CropPlan.files().map(async (name) => {
       const url = `/api/src/image?folder=${encodeURIComponent(CropPlan.folder())}&name=${encodeURIComponent(name)}`;
-      const res = await fetch(url, { method: "HEAD" }).catch(() => null);
-      const head = res && res.ok ? res : await fetch(url);
-      const w = parseInt(head.headers.get("X-Src-Width"), 10);
-      const h = parseInt(head.headers.get("X-Src-Height"), 10);
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const w = parseInt(res.headers.get("X-Src-Width"), 10);
+      const h = parseInt(res.headers.get("X-Src-Height"), 10);
       if (!w || !h || Math.abs(w / h - ar) > 0.02) return;
       CropPlan.set(name, [Math.round(fx * w), Math.round(fy * h),
                           Math.round(fw * w), Math.round(fh * h)]);
