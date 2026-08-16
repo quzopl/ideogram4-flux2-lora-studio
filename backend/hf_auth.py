@@ -15,14 +15,22 @@ def load_token(path) -> str:
     if not p.exists():
         return ""
     try:
-        return str(json.loads(p.read_text(encoding="utf-8")).get("token", "")).strip()
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return ""
+        token = data.get("token", "")
+        if not isinstance(token, str):
+            return ""
+        return token.strip()
     except (OSError, json.JSONDecodeError):
         return ""
 
 
 def save_token(path, token: str) -> None:
-    Path(path).write_text(
+    p = Path(path)
+    p.write_text(
         json.dumps({"token": (token or "").strip()}, indent=2), encoding="utf-8")
+    p.chmod(0o600)
 
 
 def clear_token(path) -> None:
