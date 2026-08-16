@@ -10,6 +10,12 @@ prompting:
   LoRA), **architecture**, **landscape** or **generic**. Captions can be plain
   FLUX.2 prose, Ideogram 4 JSON or ai-toolkit JSON; Ideogram captions use the
   v15 framework and carry per-element **bboxes**, exactly like the bbox editor.
+  Cropping has four modes: **centre** (with left/right/top/bottom centring
+  choices), **auto** (Florence-2 finds the subject), **manual** (drag a crop
+  rectangle per photo) and **batch** (apply auto-crop to every remaining
+  image at once); either **cover** (crop to fill) or **contain** (pad with a
+  colour) fit, and photos smaller than the target resolution are upscaled
+  automatically through the selected upscale model before cropping.
 - **✨ Prompt studio** — writes generation prompts for you. *Expand* turns a
   short idea into a full layered prompt; *Refine* cleans up an existing or
   tag-style prompt. Targets **FLUX.2** (natural prose) or **Ideogram 4 JSON**
@@ -34,6 +40,14 @@ prompting:
 - **🎨 ComfyUI** — generic ComfyUI integration: LoRA testing with any uploaded
   workflow, reference-image batches, a node/parameter workflow editor with a
   graph view and a SQLite workflow library, plus a persistent gallery.
+- **🔍 Upscale** — a standalone tab for batch super-resolution: pick a
+  built-in Hugging Face model (Real-ESRGAN x2/x4, 4x-UltraSharp) or add your
+  own by **HF repo id + filename**, or point at a **local folder** of weights
+  (e.g. ComfyUI's `models/upscale_models`) which is scanned for `.pth` /
+  `.safetensors` files. Target either the model's **native scale**, a fixed
+  **x2**, or a **long-side pixel count** (the pipeline runs extra passes and
+  downsamples to hit it); export the results to a folder or a `.zip`, same as
+  the dataset tab.
 
 The top bar shows the GPU status (loaded model and VRAM usage) and a
 **⏏ Release GPU** button that unloads the models from the card.
@@ -59,14 +73,24 @@ and gallery:
 
 ![ComfyUI view](docs/screenshots/04-comfy.png)
 
+**🔍 Upscale** — the standalone batch super-resolution tab: source folder,
+model + target-size picker and export:
+
+![Upscale view](docs/screenshots/05-upscale.png)
+
 ## Requirements
 
 - Linux / WSL2 (tested: WSL2 + RTX 4070 Ti, 12 GB VRAM)
 - [`uv`](https://docs.astral.sh/uv/) (manages Python and the dependencies)
 - An NVIDIA GPU with CUDA (CPU works too, but captioning is very slow)
+- `spandrel` (installed by `requirements.txt`) loads the super-resolution
+  weights for auto-crop upscaling and the **🔍 Upscale** tab
 - For rendering: a ComfyUI server with the Ideogram 4 nodes
   (`Ideogram4Scheduler`, `DualModelGuider`, `CFGOverride`,
   `EmptyFlux2LatentImage`) and the Ideogram 4 / FLUX.2 model files
+- A Hugging Face token (set it in the Dataset settings or the Upscale tab) is
+  only needed for **gated** upscale repos; the built-in models download
+  anonymously
 
 ## Running
 
@@ -84,14 +108,19 @@ downloads Florence-2 (~0.7 GB). Later runs are fast.
 ### Dataset
 
 1. **Source** — point at a folder of photos *or* upload files (HEIC included).
-2. **Settings** — pick the caption mode and target format, resolution
+2. **Cropping** — click any thumbnail to drag a manual crop, use
+   **✂ Auto-crop all** to let Florence-2 find the subject in the rest, or
+   leave everything on **centre** crop with a left/right/top/bottom centring
+   choice; **cover**/**contain** fit and the upscale model that kicks in for
+   undersized photos are also set here.
+3. **Settings** — pick the caption mode and target format, resolution
    (768/1024/1280/1536), bucket step, output format, the VLM model
    (3B fast / 7B best, or any model via LM Studio), quantization and an
    optional *trigger word*.
-3. **Process** — the tool resizes and (optionally) captions; you watch the
+4. **Process** — the tool resizes and (optionally) captions; you watch the
    progress live.
-4. **Review** — check the thumbnails and edit any caption by hand.
-5. **Export** — to a folder or a `.zip`. You get `person_0000.png` +
+5. **Review** — check the thumbnails and edit any caption by hand.
+6. **Export** — to a folder or a `.zip`. You get `person_0000.png` +
    `person_0000.txt` pairs ready for kohya_ss, ai-toolkit, SimpleTuner etc.
    (Ideogram format additionally writes a pretty `person_0000.json`.)
 
