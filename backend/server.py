@@ -701,7 +701,11 @@ def api_process(req: ProcessRequest):
 @app.get("/api/job/{job_id}")
 def api_job(job_id: str):
     job = JOBS.get(job_id)
-    if not job:
+    # This endpoint only knows how to render dataset jobs (_job_public expects
+    # "caption" on each result). Upscale jobs mark themselves via "kind"; the
+    # crop-auto job has no "results"/"caption" at all and uses "crops"
+    # instead — both must 404 here rather than raising a KeyError.
+    if not job or job.get("kind") == "upscale" or "crops" in job:
         raise HTTPException(404, "Unknown job.")
     return _job_public(job)
 
@@ -918,6 +922,14 @@ def _upscale_target(size, mode: str, value: int, scale: int) -> tuple[int, int]:
     return (max(w, int(round(w * factor))), max(h, int(round(h * factor))))
 
 
+def _upscale_out_name(idx: int, src: Path, ext: str) -> str:
+    """Output filename for one result; the index keeps same-stem sources unique
+
+    (e.g. photo.jpg and photo.png in the same folder must not collide).
+    """
+    return f"{idx:04d}_{src.stem}_up.{ext}"
+
+
 def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> None:
     job = JOBS[job_id]
     out_dir = WORK / job_id / "upscaled"
@@ -946,7 +958,7 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> 
                 big = upscaler.upscale(img, entry, passes, token=token)
                 if (big.width, big.height) != target:
                     big = big.resize(target, Image.LANCZOS)
-                out_name = f"{src.stem}_up.{ext}"
+                out_name = _upscale_out_name(i, src, ext)
                 image_utils.save_image(big, str(out_dir / out_name),
                                        req.fmt, req.jpg_quality)
                 image_utils.make_thumbnail(big, 480).save(
@@ -1009,6 +1021,10 @@ def api_upscale_export(req: UpscaleExportRequest):
     job = JOBS.get(req.job_id)
     if not job or job.get("kind") != "upscale":
         raise HTTPException(404, "Unknown job.")
+    if job["state"] != "done":
+        raise HTTPException(400, "The job is not finished.")
+    if not req.output_folder.strip():
+        raise HTTPException(400, "Enter a destination folder.")
     dest = Path(req.output_folder).expanduser()
     dest.mkdir(parents=True, exist_ok=True)
     src_dir = WORK / req.job_id / "upscaled"
