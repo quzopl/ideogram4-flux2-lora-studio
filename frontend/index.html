@@ -631,6 +631,36 @@
         <div id="cGallery" class="results"></div>
       </section>
     </div><!-- /view-comfy -->
+
+    <div id="cropModal" class="cropmodal hidden">
+      <div class="cropbox">
+        <div class="crophead">
+          <strong id="cropTitle">crop</strong>
+          <select id="cropRatio">
+            <option value="free" selected>Free</option>
+            <option value="1">1:1</option>
+            <option value="0.75">3:4</option>
+            <option value="1.3333">4:3</option>
+            <option value="1.7778">16:9</option>
+          </select>
+          <span id="cropSize" class="info"></span>
+          <span class="spacer"></span>
+          <button type="button" id="cropAutoBtn" class="mini">Auto (Florence)</button>
+          <button type="button" id="cropResetBtn" class="mini">Reset</button>
+          <button type="button" id="cropApplyAllBtn" class="mini">Apply to same ratio</button>
+          <button type="button" id="cropSaveBtn" class="primary">Save</button>
+          <button type="button" id="cropCancelBtn" class="mini">Cancel</button>
+        </div>
+        <div class="cropstage" id="cropStage">
+          <img id="cropImg" alt="" />
+          <div id="cropRect" class="croprect">
+            <i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i>
+            <i data-h="w"></i><i data-h="e"></i>
+            <i data-h="sw"></i><i data-h="s"></i><i data-h="se"></i>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <!-- Gallery lightbox: full image + prompt + actions -->
