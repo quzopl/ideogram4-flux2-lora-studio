@@ -17,6 +17,7 @@
       <button class="navtab" data-view="prompts">✨ Prompt studio</button>
       <button class="navtab" data-view="bbox">🧩 Bbox editor</button>
       <button class="navtab" data-view="comfy">🎨 ComfyUI</button>
+      <button class="navtab" data-view="upscale">🔍 Upscale</button>
       <div class="gpubar">
         <span id="gpuStatus" class="info">GPU: …</span>
         <button id="unloadBtn" title="Release models from GPU memory" disabled>⏏ Release GPU</button>
@@ -662,6 +663,68 @@
       </section>
     </div><!-- /view-comfy -->
 
+    <!-- VIEW: UPSCALE -->
+    <div id="view-upscale" class="hidden">
+      <section class="card">
+        <h2><span class="num">1</span> Images to upscale</h2>
+        <div class="row">
+          <input type="text" id="uFolder" placeholder="/home/user/photos/small" />
+          <button id="uScanBtn">Scan</button>
+        </div>
+        <div class="dropzone" id="uDropzone">Drop images…</div>
+        <input type="file" id="uFileInput" multiple accept="image/*,.heic,.heif" hidden />
+        <p id="uSrcInfo" class="info"></p>
+      </section>
+
+      <section class="card">
+        <h2><span class="num">2</span> Model and target size</h2>
+        <div class="grid">
+          <div class="field">
+            <label>Upscale model</label>
+            <select id="uModel"></select>
+          </div>
+          <div class="field">
+            <label>Target</label>
+            <select id="uMode">
+              <option value="native" selected>Model's native scale</option>
+              <option value="x2">x2</option>
+              <option value="long_side">Long side = N px</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Long side (px)</label>
+            <input type="number" id="uLongSide" value="2048" min="256" max="8192" step="64" />
+          </div>
+          <div class="field">
+            <label>Output format</label>
+            <select id="uFmt">
+              <option value="png" selected>PNG (lossless)</option>
+              <option value="jpg">JPG</option>
+            </select>
+          </div>
+        </div>
+        <button id="uRunBtn" class="primary" disabled>Upscale images</button>
+      </section>
+
+      <section class="card hidden" id="uProgressCard">
+        <h2><span class="num">3</span> Progress</h2>
+        <div class="progress"><div id="uProgressBar"></div></div>
+        <p id="uProgressText" class="info"></p>
+        <div id="uResults" class="srcgrid"></div>
+      </section>
+
+      <section class="card hidden" id="uExportCard">
+        <h2><span class="num">4</span> Save</h2>
+        <div class="row">
+          <input type="text" id="uOutFolder" placeholder="/home/user/photos/upscaled" />
+          <button id="uExportBtn" class="primary">Save to folder</button>
+        </div>
+        <div class="orline"><span>or</span></div>
+        <button id="uZipBtn" class="primary">⬇ Download .zip</button>
+        <p id="uExportInfo" class="info"></p>
+      </section>
+    </div><!-- /view-upscale -->
+
     <div id="cropModal" class="cropmodal hidden">
       <div class="cropbox">
         <div class="crophead">
@@ -722,5 +785,6 @@
   <script src="/image_to_prompt.js"></script>
   <script src="/app.js"></script>
   <script src="/crop_editor.js"></script>
+  <script src="/upscale.js"></script>
 </body>
 </html>
