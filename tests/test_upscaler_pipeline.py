@@ -44,13 +44,45 @@ def test_upscale_hook_falls_back_on_error():
     assert "CUDA out of memory" in hook.error
 
 
-def test_job_public_exposes_upscaled_flag():
-    job = {
+def test_upscale_hook_contain_fit_needs_no_pass():
+    # 1000x500 into a 1024x1024 bucket: "cover" would need x4, but "contain"
+    # letterboxes, so only the smaller ratio (1.024) matters -> no pass at all.
+    calls = []
+    hook = server._UpscaleHook({"id": "x", "scale": 4}, min_ratio=1.05,
+                               fit="contain",
+                               run=lambda img, entry, passes: calls.append(passes) or img)
+    img = Image.new("RGB", (1000, 500))
+    assert hook(img, (1024, 1024)) is img
+    assert calls == []
+    assert hook.used is False
+
+
+def _dataset_job(result: dict) -> dict:
+    return {
         "id": "j", "state": "done", "total": 1, "processed": 1, "current": "",
-        "error": "", "config": {},
-        "results": [{"idx": 0, "src_name": "a.png", "out_name": "person_0000.png",
-                     "width": 1024, "height": 1024, "caption": "x",
-                     "upscaled": True}],
+        "error": "", "config": {}, "results": [result],
     }
-    pub = server._job_public(job)
+
+
+def test_job_public_exposes_upscaled_flag():
+    pub = server._job_public(_dataset_job(
+        {"idx": 0, "src_name": "a.png", "out_name": "person_0000.png",
+         "width": 1024, "height": 1024, "caption": "x", "upscaled": True}))
     assert pub["results"][0]["upscaled"] is True
+
+
+def test_job_public_forwards_upscale_error():
+    # Without this the job reports "done" while every image quietly got plain
+    # LANCZOS; the only symptom would be a missing ✨ badge.
+    pub = server._job_public(_dataset_job(
+        {"idx": 0, "src_name": "a.png", "out_name": "person_0000.png",
+         "width": 1024, "height": 1024, "caption": "x", "upscaled": False,
+         "upscale_error": "CUDA out of memory"}))
+    assert pub["results"][0]["upscale_error"] == "CUDA out of memory"
+
+
+def test_job_public_upscale_error_defaults_to_empty():
+    pub = server._job_public(_dataset_job(
+        {"idx": 0, "src_name": "a.png", "out_name": "", "width": 0, "height": 0,
+         "caption": "[ERROR: boom]"}))
+    assert pub["results"][0]["upscale_error"] == ""

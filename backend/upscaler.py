@@ -8,12 +8,15 @@ architecture and scale on its own.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
 
 WEIGHT_EXT = {".pth", ".safetensors"}
 MAX_PASSES = 2
+
+log = logging.getLogger(__name__)
 
 # NOTE: repo ids are verified by an actual download in the last task of the
 # plan; an entry that cannot be fetched is removed from this list.
@@ -30,19 +33,27 @@ BUILTIN_MODELS = [
 ]
 
 _LOCK = threading.Lock()
-_RUNTIME: dict | None = None      # {"model", "torch", "device", "key", "scale"}
+# {"model", "torch", "device", "dtype", "key", "scale"}
+_RUNTIME: dict | None = None
+_NOTE = ""                        # last non-fatal event (e.g. the CPU fallback)
 
 
 # --------------------------------------------------------------------------- #
 # Pure helpers (no torch, no network)
 # --------------------------------------------------------------------------- #
-def plan_passes(src_size, target_size, scale: int, min_ratio: float = 1.05) -> int:
-    """How many model passes to reach ``target_size`` (0 = skip the upscaler)."""
+def plan_passes(src_size, target_size, scale: int, min_ratio: float = 1.05,
+                fit: str = "cover") -> int:
+    """How many model passes to reach ``target_size`` (0 = skip the upscaler).
+
+    ``fit="cover"`` needs the *larger* of the two axis ratios (the image is
+    cropped afterwards); ``fit="contain"`` only needs the smaller one, because
+    the fit letterboxes what is left over.
+    """
     sw, sh = src_size
     tw, th = target_size
     if sw <= 0 or sh <= 0 or scale <= 1:
         return 0
-    ratio = max(tw / sw, th / sh)
+    ratio = min(tw / sw, th / sh) if fit == "contain" else max(tw / sw, th / sh)
     if ratio <= min_ratio:
         return 0
     passes, cur = 0, 1.0
@@ -170,20 +181,28 @@ def _load(entry: dict, token: str = "") -> dict:
         if not isinstance(model, ImageModelDescriptor):
             raise RuntimeError(f"{entry['filename']} is not an image upscaler.")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        model.to(device).eval()
+        # fp16 halves both the weights and the activations, but only where the
+        # architecture says it is safe (spandrel knows which ones overflow).
+        half = device == "cuda" and bool(getattr(model, "supports_half", False))
+        dtype = torch.float16 if half else torch.float32
+        model.to(device)
+        if half:
+            model.to(dtype=dtype)
+        model.eval()
         _RUNTIME = {"model": model, "torch": torch, "device": device,
-                    "key": entry["id"], "scale": int(model.scale)}
+                    "dtype": dtype, "key": entry["id"], "scale": int(model.scale)}
         return _RUNTIME
 
 
 def unload() -> None:
     """Release the upscaler from memory (wired to the 'Release GPU' button)."""
-    global _RUNTIME
+    global _RUNTIME, _NOTE
     with _LOCK:
         if _RUNTIME is None:
             return
         torch = _RUNTIME["torch"]
         _RUNTIME = None
+        _NOTE = ""
         import gc
         gc.collect()
         if torch.cuda.is_available():
@@ -196,6 +215,17 @@ def is_loaded() -> bool:
 
 def loaded_key() -> str:
     return _RUNTIME["key"] if _RUNTIME else ""
+
+
+def status() -> dict:
+    """Topbar-friendly view of the upscaler runtime."""
+    rt = _RUNTIME
+    return {
+        "loaded": rt is not None,
+        "key": rt["key"] if rt else "",
+        "device": rt["device"] if rt else "",
+        "note": _NOTE,
+    }
 
 
 def _to_tensor(img, torch):
@@ -212,38 +242,95 @@ def _to_image(tensor, torch):
 
 
 def _run_once(rt: dict, img, tile: int = 512, overlap: int = 32):
-    """One model pass, tiled so a 12 GB card survives x4 on large photos."""
+    """One model pass, tiled so a 12 GB card survives x4 on large photos.
+
+    The source stays on the CPU and only one padded tile at a time reaches the
+    device, so VRAM depends on ``tile`` and not on the size of the photo. Each
+    tile is run with ``overlap`` pixels of context on every side, then trimmed
+    back to its own block before being pasted into the output canvas: every
+    output pixel is written exactly once, by the tile that had context around
+    it — no accumulator, no seam.
+    """
+    from PIL import Image as PILImage
+
     torch = rt["torch"]
     model, device, scale = rt["model"], rt["device"], rt["scale"]
-    src = _to_tensor(img, torch).to(device)
+    dtype = rt.get("dtype")
+    src = _to_tensor(img, torch)                    # CPU, fp32
     _, _, h, w = src.shape
-    out = torch.zeros((1, 3, h * scale, w * scale), device=device)
-    weight = torch.zeros_like(out)
-    step = max(16, tile - overlap)
+    canvas = PILImage.new("RGB", (w * scale, h * scale))
+    step = max(16, tile)
     with torch.no_grad():
         for y in range(0, h, step):
             for x in range(0, w, step):
-                y2, x2 = min(y + tile, h), min(x + tile, w)
-                patch = src[:, :, y:y2, x:x2]
+                y2, x2 = min(y + step, h), min(x + step, w)
+                # Block grown by the context margin, clamped to the image.
+                py, px = max(0, y - overlap), max(0, x - overlap)
+                py2, px2 = min(h, y2 + overlap), min(w, x2 + overlap)
+                patch = src[:, :, py:py2, px:px2].to(device=device, dtype=dtype)
                 res = model(patch)
-                out[:, :, y * scale:y2 * scale, x * scale:x2 * scale] += res
-                weight[:, :, y * scale:y2 * scale, x * scale:x2 * scale] += 1.0
-    out = out / weight.clamp(min=1.0)
-    return _to_image(out, torch)
+                top, left = (y - py) * scale, (x - px) * scale
+                res = res[:, :, top:top + (y2 - y) * scale,
+                          left:left + (x2 - x) * scale]
+                canvas.paste(_to_image(res, torch), (x * scale, y * scale))
+                del patch, res
+    return canvas
+
+
+def _to_cpu(rt: dict) -> None:
+    """Move the loaded model to the CPU (last-resort fallback after an OOM)."""
+    torch = rt["torch"]
+    rt["model"].to("cpu")
+    if rt.get("dtype") is not None and rt["dtype"] != torch.float32:
+        rt["model"].to(dtype=torch.float32)
+    rt["device"] = "cpu"
+    rt["dtype"] = torch.float32
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _is_oom(e: Exception) -> bool:
+    return "out of memory" in str(e).lower()
+
+
+def _empty_cache(rt: dict) -> None:
+    torch = rt["torch"]
+    # A CPU-only torch build has no working cuda allocator; calling into it
+    # here would mask the error we are actually trying to recover from.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def upscale(img, entry: dict, passes: int, token: str = ""):
-    """Run ``passes`` model passes over the image, shrinking tiles on OOM."""
+    """Run ``passes`` model passes over the image, shrinking tiles on OOM.
+
+    Ladder: tile 512 -> 256 -> 128, and if even the smallest tile runs out of
+    memory the model is moved to the CPU and the pass is retried there. The
+    fallback is slow, so it is logged and reported through ``status()``.
+    """
     if passes <= 0:
         return img
     rt = _load(entry, token)
     for _ in range(passes):
-        for tile in (512, 256, 128):
-            try:
-                img = _run_once(rt, img, tile=tile)
-                break
-            except Exception as e:  # noqa: BLE001 - OOM -> smaller tile, then CPU
-                if "out of memory" not in str(e).lower() or tile == 128:
-                    raise
-                rt["torch"].cuda.empty_cache()
+        img = _run_pass(rt, img)
     return img
+
+
+def _run_pass(rt: dict, img):
+    global _NOTE
+    for tile in (512, 256, 128):
+        try:
+            return _run_once(rt, img, tile=tile)
+        except Exception as e:  # noqa: BLE001 - OOM -> smaller tile, then CPU
+            if not _is_oom(e):
+                raise
+            _empty_cache(rt)
+            if tile == 128:
+                if rt["device"] == "cpu":
+                    raise
+                _NOTE = ("Ran out of VRAM even at tile 128 — this pass ran on "
+                         "the CPU (slow).")
+                log.warning("upscaler: %s", _NOTE)
+                _to_cpu(rt)
+                return _run_once(rt, img, tile=128)
+    raise RuntimeError("unreachable")  # pragma: no cover

@@ -34,9 +34,22 @@ def test_crop_for_manual_missing_entry_is_none():
     assert server._crop_for(r, "a.jpg") is None
 
 
+def test_crop_for_auto_returns_box():
+    # Auto boxes are computed by /api/crop/auto and land in the same plan, so
+    # "auto" must read it too — otherwise the mode silently means "centre".
+    r = _req(crop_mode="auto", crops={"a.jpg": [1, 2, 30, 40]})
+    assert server._crop_for(r, "a.jpg") == [1, 2, 30, 40]
+
+
 def test_crop_for_center_mode_ignores_plan():
     r = _req(crop_mode="center", crops={"a.jpg": [1, 2, 30, 40]})
     assert server._crop_for(r, "a.jpg") is None
+
+
+def test_crop_for_rejects_malformed_box():
+    for mode in ("auto", "manual"):
+        r = _req(crop_mode=mode, crops={"a.jpg": [1, 2, 30]})
+        assert server._crop_for(r, "a.jpg") is None
 
 
 def test_safe_source_path_rejects_traversal(tmp_path):

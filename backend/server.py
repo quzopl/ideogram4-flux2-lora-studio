@@ -241,11 +241,31 @@ def _safe_source_path(folder: str, name: str) -> Path:
 
 
 def _crop_for(req: "ProcessRequest", name: str) -> list[int] | None:
-    """Crop box for a source file, or None when the mode has no per-file box."""
-    if req.crop_mode == "manual":
+    """Crop box for a source file, or None when the mode has no per-file box.
+
+    Both ``auto`` and ``manual`` read the plan that travels with the request —
+    auto boxes are computed by ``/api/crop/auto`` and land in the very same
+    plan, so the only difference between the two modes is who drew the box.
+    ``center`` is the explicit "ignore the plan" mode.
+    """
+    if req.crop_mode in ("auto", "manual"):
         box = req.crops.get(name)
         return list(box) if box and len(box) == 4 else None
     return None
+
+
+def _job_of_kind(job_id: str, kind: str) -> dict:
+    """Job with this id, or 404 when it is missing or of a different kind.
+
+    Every job in ``JOBS`` is stamped with ``kind``
+    (``dataset`` | ``crop_auto`` | ``upscale``) at creation, because the three
+    shapes are not interchangeable: only dataset results carry ``caption``,
+    only crop-auto jobs carry ``crops``, and each kind has its own routes.
+    """
+    job = JOBS.get(job_id)
+    if not job or job.get("kind") != kind:
+        raise HTTPException(404, "Unknown job.")
+    return job
 
 
 SRC_THUMBS = WORK / "srcthumbs"
@@ -287,10 +307,12 @@ class _UpscaleHook:
     instead of killing the job.
     """
 
-    def __init__(self, entry: dict, min_ratio: float = 1.05, token: str = "", run=None):
+    def __init__(self, entry: dict, min_ratio: float = 1.05, token: str = "",
+                 fit: str = "cover", run=None):
         self.entry = entry
         self.min_ratio = min_ratio
         self.token = token
+        self.fit = fit
         self.used = False
         self.error = ""
         self._run = run or (lambda img, entry, passes: upscaler.upscale(
@@ -303,7 +325,7 @@ class _UpscaleHook:
     def __call__(self, img, target):
         scale = int(self.entry.get("scale") or 0) or 4
         passes = upscaler.plan_passes(
-            (img.width, img.height), target, scale, self.min_ratio)
+            (img.width, img.height), target, scale, self.min_ratio, fit=self.fit)
         if passes <= 0:
             return img
         try:
@@ -334,6 +356,7 @@ def _job_public(job: dict) -> dict:
                 "height": r["height"],
                 "caption": r["caption"],
                 "upscaled": r.get("upscaled", False),
+                "upscale_error": r.get("upscale_error", ""),
             }
             for r in job["results"]
         ],
@@ -370,7 +393,8 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
                 job["state"] = "loading_model"
                 job["current"] = "Loading the upscale model…"
                 hook = _UpscaleHook(entry, req.upscale_min_ratio,
-                                    hf_auth.load_token(HF_TOKEN_PATH))
+                                    hf_auth.load_token(HF_TOKEN_PATH),
+                                    fit=req.fit)
 
         job["state"] = "processing"
         prefix = (req.mode or "img")
@@ -685,6 +709,7 @@ def api_process(req: ProcessRequest):
     with JOBS_LOCK:
         JOBS[job_id] = {
             "id": job_id,
+            "kind": "dataset",
             "state": "pending",
             "total": len(files),
             "processed": 0,
@@ -700,14 +725,7 @@ def api_process(req: ProcessRequest):
 
 @app.get("/api/job/{job_id}")
 def api_job(job_id: str):
-    job = JOBS.get(job_id)
-    # This endpoint only knows how to render dataset jobs (_job_public expects
-    # "caption" on each result). Upscale jobs mark themselves via "kind"; the
-    # crop-auto job has no "results"/"caption" at all and uses "crops"
-    # instead — both must 404 here rather than raising a KeyError.
-    if not job or job.get("kind") == "upscale" or "crops" in job:
-        raise HTTPException(404, "Unknown job.")
-    return _job_public(job)
+    return _job_public(_job_of_kind(job_id, "dataset"))
 
 
 def _run_crop_auto(job_id: str, req: CropAutoRequest, files: list[Path]) -> None:
@@ -743,8 +761,8 @@ def api_crop_auto(req: CropAutoRequest):
     job_id = uuid.uuid4().hex
     with JOBS_LOCK:
         JOBS[job_id] = {
-            "id": job_id, "state": "pending", "total": len(files),
-            "processed": 0, "current": "", "error": "",
+            "id": job_id, "kind": "crop_auto", "state": "pending",
+            "total": len(files), "processed": 0, "current": "", "error": "",
             "crops": {}, "skipped": [],
         }
     threading.Thread(target=_run_crop_auto, args=(job_id, req, files),
@@ -754,9 +772,7 @@ def api_crop_auto(req: CropAutoRequest):
 
 @app.get("/api/crop/auto/{job_id}")
 def api_crop_auto_job(job_id: str):
-    job = JOBS.get(job_id)
-    if not job or "crops" not in job:
-        raise HTTPException(404, "Unknown job.")
+    job = _job_of_kind(job_id, "crop_auto")
     return {
         "state": job["state"], "total": job["total"],
         "processed": job["processed"], "current": job["current"],
@@ -774,9 +790,7 @@ def api_thumb(job_id: str, idx: int):
 
 @app.post("/api/export")
 def api_export(req: ExportRequest):
-    job = JOBS.get(req.job_id)
-    if not job:
-        raise HTTPException(404, "Unknown job.")
+    job = _job_of_kind(req.job_id, "dataset")
     if job["state"] != "done":
         raise HTTPException(400, "The job is not finished.")
 
@@ -813,9 +827,26 @@ def _busy() -> bool:
     )
 
 
+def _gpu_status() -> dict:
+    """Captioner status extended with the upscaler runtime.
+
+    Composed here rather than inside ``captioner`` so the two model modules
+    stay independent; the topbar needs a single "is anything holding VRAM"
+    flag, otherwise ⏏ Release GPU stays disabled while the upscaler is loaded.
+    """
+    info = captioner.gpu_status()
+    up = upscaler.status()
+    info["upscale_loaded"] = up["loaded"]
+    info["upscale_model"] = up["key"]
+    info["upscale_device"] = up["device"]
+    info["upscale_note"] = up["note"]
+    info["loaded"] = bool(info.get("loaded")) or up["loaded"]
+    return info
+
+
 @app.get("/api/gpu")
 def api_gpu():
-    return captioner.gpu_status()
+    return _gpu_status()
 
 
 @app.post("/api/unload")
@@ -825,7 +856,7 @@ def api_unload():
     captioner.unload()
     florence.unload()
     upscaler.unload()
-    return captioner.gpu_status()
+    return _gpu_status()
 
 
 class UpscaleScanRequest(BaseModel):
@@ -988,9 +1019,9 @@ def api_upscale_run(req: UpscaleRunRequest):
     job_id = uuid.uuid4().hex
     with JOBS_LOCK:
         JOBS[job_id] = {
-            "id": job_id, "state": "pending", "total": len(files),
-            "processed": 0, "current": "", "error": "", "config": req.model_dump(),
-            "results": [], "kind": "upscale",
+            "id": job_id, "kind": "upscale", "state": "pending",
+            "total": len(files), "processed": 0, "current": "", "error": "",
+            "config": req.model_dump(), "results": [],
         }
     threading.Thread(target=_run_upscale_job, args=(job_id, req, files),
                      daemon=True).start()
@@ -999,9 +1030,7 @@ def api_upscale_run(req: UpscaleRunRequest):
 
 @app.get("/api/upscale/job/{job_id}")
 def api_upscale_job(job_id: str):
-    job = JOBS.get(job_id)
-    if not job or job.get("kind") != "upscale":
-        raise HTTPException(404, "Unknown job.")
+    job = _job_of_kind(job_id, "upscale")
     return {
         "state": job["state"], "total": job["total"], "processed": job["processed"],
         "current": job["current"], "error": job["error"], "results": job["results"],
@@ -1018,9 +1047,7 @@ def api_upscale_thumb(job_id: str, idx: int):
 
 @app.post("/api/upscale/export")
 def api_upscale_export(req: UpscaleExportRequest):
-    job = JOBS.get(req.job_id)
-    if not job or job.get("kind") != "upscale":
-        raise HTTPException(404, "Unknown job.")
+    job = _job_of_kind(req.job_id, "upscale")
     if job["state"] != "done":
         raise HTTPException(400, "The job is not finished.")
     if not req.output_folder.strip():
@@ -1039,9 +1066,9 @@ def api_upscale_export(req: UpscaleExportRequest):
 
 @app.get("/api/upscale/zip/{job_id}")
 def api_upscale_zip(job_id: str):
-    job = JOBS.get(job_id)
-    if not job or job.get("kind") != "upscale":
-        raise HTTPException(404, "Unknown job.")
+    job = _job_of_kind(job_id, "upscale")
+    if job["state"] != "done":
+        raise HTTPException(400, "The job is not finished.")
     src_dir = WORK / job_id / "upscaled"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -2056,9 +2083,7 @@ def api_prompt(req: PromptRequest):
 @app.post("/api/zip")
 def api_zip(req: ExportRequest):
     """Build the dataset as an in-memory ZIP and return it as a download."""
-    job = JOBS.get(req.job_id)
-    if not job:
-        raise HTTPException(404, "Unknown job.")
+    job = _job_of_kind(req.job_id, "dataset")
     if job["state"] != "done":
         raise HTTPException(400, "The job is not finished.")
 
