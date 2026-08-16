@@ -52,6 +52,13 @@ window.UpscaleView = (function () {
 
   $("uRunBtn").addEventListener("click", async () => {
     if (!folder) return;
+    const mode = $("uMode").value;
+    const longSide = parseInt($("uLongSide").value, 10);
+    if (mode === "long_side" && !(longSide > 0)) {
+      $("uProgressCard").classList.remove("hidden");
+      $("uProgressText").textContent = "Error: enter a positive long side (px).";
+      return;
+    }
     $("uRunBtn").disabled = true;
     $("uProgressCard").classList.remove("hidden");
     $("uExportCard").classList.add("hidden");
@@ -60,8 +67,8 @@ window.UpscaleView = (function () {
       const { job_id, total } = await api("/api/upscale/run", {
         folder,
         model_id: $("uModel").value,
-        mode: $("uMode").value,
-        long_side: parseInt($("uLongSide").value, 10),
+        mode,
+        long_side: longSide,
         fmt: $("uFmt").value,
       });
       jobId = job_id;
@@ -127,8 +134,31 @@ window.UpscaleView = (function () {
     }
   });
 
-  $("uZipBtn").addEventListener("click", () => {
-    if (jobId) window.location.href = "/api/upscale/zip/" + jobId;
+  $("uZipBtn").addEventListener("click", async () => {
+    if (!jobId) return;
+    $("uExportInfo").textContent = "Packaging into .zip…";
+    $("uExportInfo").className = "info";
+    try {
+      const res = await fetch("/api/upscale/zip/" + jobId);
+      if (!res.ok) throw new Error((await res.text()) || res.statusText);
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="?([^"]+)"?/);
+      const fname = m ? m[1] : "upscaled.zip";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      $("uExportInfo").textContent = `Downloaded: ${fname}`;
+      $("uExportInfo").className = "info ok";
+    } catch (e) {
+      $("uExportInfo").textContent = "Packaging error: " + e.message;
+      $("uExportInfo").className = "info err";
+    }
   });
 
   return {
