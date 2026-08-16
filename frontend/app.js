@@ -90,34 +90,58 @@ async function loadUpscaleModels(selected) {
 window.loadUpscaleModels = loadUpscaleModels;
 
 async function refreshHfToken() {
-  const st = await api("/api/hf/token");
-  $("hfInfo").textContent = st.set ? `Token set (…${st.tail})` : "No token.";
+  try {
+    const st = await api("/api/hf/token");
+    $("hfInfo").textContent = st.set ? `Token set (…${st.tail})` : "No token.";
+  } catch (e) {
+    $("hfInfo").textContent = "Error: " + e.message;
+  }
 }
 
 $("hfSaveBtn").addEventListener("click", async () => {
-  await api("/api/hf/token", { token: $("hfToken").value });
-  $("hfToken").value = "";
-  refreshHfToken();
+  try {
+    await api("/api/hf/token", { token: $("hfToken").value });
+    $("hfToken").value = "";
+    refreshHfToken();
+  } catch (e) {
+    $("hfInfo").textContent = "Error: " + e.message;
+  }
 });
 
 $("hfClearBtn").addEventListener("click", async () => {
-  await fetch("/api/hf/token", { method: "DELETE" });
-  refreshHfToken();
+  try {
+    const res = await fetch("/api/hf/token", { method: "DELETE" });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt || res.statusText);
+    }
+    refreshHfToken();
+  } catch (e) {
+    $("hfInfo").textContent = "Error: " + e.message;
+  }
 });
 
 $("upScanBtn").addEventListener("click", async () => {
-  await api("/api/upscale/models/scan", { folder: $("upFolder").value.trim() });
-  loadUpscaleModels();
+  try {
+    await api("/api/upscale/models/scan", { folder: $("upFolder").value.trim() });
+    loadUpscaleModels();
+  } catch (e) {
+    $("upModelInfo").textContent = "Error: " + e.message;
+  }
 });
 
 $("upCustomAddBtn").addEventListener("click", async () => {
-  await api("/api/upscale/models/custom", {
-    repo_id: $("upCustomRepo").value.trim(),
-    filename: $("upCustomFile").value.trim(),
-  });
-  $("upCustomRepo").value = "";
-  $("upCustomFile").value = "";
-  loadUpscaleModels();
+  try {
+    await api("/api/upscale/models/custom", {
+      repo_id: $("upCustomRepo").value.trim(),
+      filename: $("upCustomFile").value.trim(),
+    });
+    $("upCustomRepo").value = "";
+    $("upCustomFile").value = "";
+    loadUpscaleModels();
+  } catch (e) {
+    $("upModelInfo").textContent = "Error: " + e.message;
+  }
 });
 
 $("upDownloadBtn").addEventListener("click", async () => {
