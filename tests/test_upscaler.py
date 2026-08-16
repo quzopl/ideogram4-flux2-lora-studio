@@ -1,4 +1,7 @@
 import json
+import stat
+from pathlib import Path
+from unittest.mock import patch
 
 from backend import upscaler
 
@@ -69,3 +72,32 @@ def test_resolve_finds_model(tmp_path):
     m = upscaler.resolve(upscaler.BUILTIN_MODELS[0]["id"], cfg)
     assert m and m["filename"] == upscaler.BUILTIN_MODELS[0]["filename"]
     assert upscaler.resolve("nope", cfg) is None
+
+
+def test_scan_folder_handles_permission_denied(tmp_path):
+    """scan_folder gracefully returns [] when directory is not readable."""
+    d = tmp_path / "no_read"
+    d.mkdir()
+    d.chmod(0o000)
+    try:
+        assert upscaler.scan_folder(str(d)) == []
+    finally:
+        d.chmod(0o755)
+
+
+def test_load_config_handles_invalid_json_shapes(tmp_path):
+    """load_config returns default dict when JSON is valid but not an object."""
+    # Test with JSON array
+    p_array = tmp_path / "array.json"
+    p_array.write_text("[]")
+    assert upscaler.load_config(p_array) == {"folder": "", "custom": []}
+
+    # Test with JSON null
+    p_null = tmp_path / "null.json"
+    p_null.write_text("null")
+    assert upscaler.load_config(p_null) == {"folder": "", "custom": []}
+
+    # Test with JSON number
+    p_num = tmp_path / "number.json"
+    p_num.write_text("42")
+    assert upscaler.load_config(p_num) == {"folder": "", "custom": []}
