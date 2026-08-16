@@ -1,4 +1,5 @@
 import os
+import stat
 
 from backend import hf_auth
 
@@ -36,9 +37,46 @@ def test_clear_token(tmp_path):
     assert hf_auth.load_token(p) == ""
 
 
-def test_apply_env_sets_and_unsets(monkeypatch):
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    hf_auth.apply_env("hf_secret")
-    assert os.environ["HF_TOKEN"] == "hf_secret"
-    hf_auth.apply_env("")
-    assert "HF_TOKEN" not in os.environ
+def test_apply_env_sets_and_unsets():
+    prev = os.environ.get("HF_TOKEN")
+    try:
+        hf_auth.apply_env("hf_secret")
+        assert os.environ["HF_TOKEN"] == "hf_secret"
+        hf_auth.apply_env("")
+        assert "HF_TOKEN" not in os.environ
+    finally:
+        if prev is not None:
+            os.environ["HF_TOKEN"] = prev
+        else:
+            os.environ.pop("HF_TOKEN", None)
+
+
+def test_load_token_handles_malformed_json_array(tmp_path):
+    p = tmp_path / "hf.json"
+    p.write_text("[]", encoding="utf-8")
+    assert hf_auth.load_token(p) == ""
+
+
+def test_load_token_handles_malformed_json_null(tmp_path):
+    p = tmp_path / "hf.json"
+    p.write_text("null", encoding="utf-8")
+    assert hf_auth.load_token(p) == ""
+
+
+def test_load_token_handles_malformed_json_number(tmp_path):
+    p = tmp_path / "hf.json"
+    p.write_text("123", encoding="utf-8")
+    assert hf_auth.load_token(p) == ""
+
+
+def test_load_token_handles_non_string_token_value(tmp_path):
+    p = tmp_path / "hf.json"
+    p.write_text('{"token": 123}', encoding="utf-8")
+    assert hf_auth.load_token(p) == ""
+
+
+def test_save_token_file_permissions(tmp_path):
+    p = tmp_path / "hf.json"
+    hf_auth.save_token(p, "hf_secret")
+    mode = stat.S_IMODE(os.stat(p).st_mode)
+    assert mode == 0o600
