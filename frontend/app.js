@@ -146,6 +146,7 @@ $("scanBtn").addEventListener("click", async () => {
     const r = await api("/api/scan", { folder });
     state.folder = r.folder;
     state.count = r.count;
+    CropPlan.setSource(r.folder, r.files);
     setSrcInfo(`Found ${r.count} images in: ${r.folder}`, "ok");
     $("processBtn").disabled = r.count === 0;
   } catch (e) {
@@ -178,6 +179,7 @@ async function uploadFiles(fileList) {
     const r = await res.json();
     state.folder = r.folder;
     state.count = r.count;
+    CropPlan.setSource(r.folder, r.files || []);
     setSrcInfo(`Uploaded ${r.count} images.`, "ok");
     $("processBtn").disabled = r.count === 0;
   } catch (e) {
@@ -210,6 +212,8 @@ $("processBtn").addEventListener("click", async () => {
     max_tokens: parseInt($("maxTokens").value, 10),
     do_caption: $("doCaption").checked,
     caption_format: $("captionFormat").value,
+    ...CropPlan.settings(),
+    crops: CropPlan.all(),
   };
 
   $("processBtn").disabled = true;
