@@ -47,10 +47,95 @@ function populateModels(models, def, selectKey) {
     populateModels(models, def);
     const cfg = await api("/api/lmstudio");
     if ($("lmstudioUrl")) $("lmstudioUrl").value = cfg.url;
+    loadUpscaleModels();
+    refreshHfToken();
   } catch (e) {
     console.error(e);
   }
 })();
+
+// --------------------------------------------------------------------------- //
+// Upscale models + Hugging Face token
+// --------------------------------------------------------------------------- //
+// NOTE: declared as a hoisted function declaration (not a `window.x = async
+// function ...` expression as originally drafted) because init() above is an
+// IIFE that runs immediately and calls loadUpscaleModels() before a later
+// assignment would have executed. A hoisted declaration is available
+// throughout the whole script, matching the pattern already used by
+// refreshGpu() below.
+async function loadUpscaleModels(selected) {
+  const { models, folder } = await api("/api/upscale/models");
+  for (const selId of ["upscaleModel", "uModel"]) {
+    const sel = $(selId);
+    if (!sel) continue;
+    const prev = selected || sel.value;
+    sel.innerHTML = "";
+    if (selId === "upscaleModel") {
+      const off = document.createElement("option");
+      off.value = "";
+      off.textContent = "Off (plain LANCZOS)";
+      sel.appendChild(off);
+    }
+    for (const m of models) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = (m.cached ? "✓ " : "⬇ ") + m.label;
+      sel.appendChild(opt);
+    }
+    if (prev) sel.value = prev;
+  }
+  if ($("upFolder") && folder && !$("upFolder").value) $("upFolder").value = folder;
+  return models;
+}
+window.loadUpscaleModels = loadUpscaleModels;
+
+async function refreshHfToken() {
+  const st = await api("/api/hf/token");
+  $("hfInfo").textContent = st.set ? `Token set (…${st.tail})` : "No token.";
+}
+
+$("hfSaveBtn").addEventListener("click", async () => {
+  await api("/api/hf/token", { token: $("hfToken").value });
+  $("hfToken").value = "";
+  refreshHfToken();
+});
+
+$("hfClearBtn").addEventListener("click", async () => {
+  await fetch("/api/hf/token", { method: "DELETE" });
+  refreshHfToken();
+});
+
+$("upScanBtn").addEventListener("click", async () => {
+  await api("/api/upscale/models/scan", { folder: $("upFolder").value.trim() });
+  loadUpscaleModels();
+});
+
+$("upCustomAddBtn").addEventListener("click", async () => {
+  await api("/api/upscale/models/custom", {
+    repo_id: $("upCustomRepo").value.trim(),
+    filename: $("upCustomFile").value.trim(),
+  });
+  $("upCustomRepo").value = "";
+  $("upCustomFile").value = "";
+  loadUpscaleModels();
+});
+
+$("upDownloadBtn").addEventListener("click", async () => {
+  const id = $("upscaleModel").value;
+  if (!id) return;
+  const btn = $("upDownloadBtn");
+  btn.disabled = true;
+  $("upModelInfo").textContent = "Downloading the weights…";
+  try {
+    await api("/api/upscale/download", { model_id: id });
+    $("upModelInfo").textContent = "Weights ready.";
+    loadUpscaleModels(id);
+  } catch (e) {
+    $("upModelInfo").textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // --------------------------------------------------------------------------- //
 // GPU status + releasing models from memory
@@ -209,6 +294,7 @@ $("processBtn").addEventListener("click", async () => {
     jpg_quality: parseInt($("jpgQuality").value, 10),
     model: $("model").value,
     quant: $("quant").value,
+    upscale_model: $("upscaleModel").value,
     max_tokens: parseInt($("maxTokens").value, 10),
     do_caption: $("doCaption").checked,
     caption_format: $("captionFormat").value,
@@ -289,7 +375,7 @@ function renderResults(job) {
         <img src="/api/thumb/${job.id}/${r.idx}" loading="lazy" />
         <div class="meta">
           <span>${r.out_name || r.src_name}</span>
-          <span>${r.width}×${r.height}</span>
+          <span>${r.width}×${r.height}${r.upscaled ? ' <span title="Upscaled with the selected model">✨</span>' : ""}</span>
         </div>
         <div class="trigprefix" data-idx="${r.idx}"></div>
         <textarea data-idx="${r.idx}" placeholder="(opis)"></textarea>`;
