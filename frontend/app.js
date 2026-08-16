@@ -169,16 +169,28 @@ const shortModel = (m) => (m ? m.split("/").pop() : "");
 function applyGpu(g) {
   const el = $("gpuStatus");
   const btn = $("unloadBtn");
+  // "loaded" is the OR of every model that can hold VRAM (captioner and
+  // upscaler), so ⏏ Release GPU is offered whenever there is something to free.
+  const parts = [];
+  if (g.model) parts.push(`Model: ${shortModel(g.model)} (${g.quant})`);
+  if (g.upscale_loaded) {
+    parts.push(
+      `Upscaler: ${shortModel(g.upscale_model)}` +
+      (g.upscale_device === "cpu" ? " (CPU)" : ""));
+  }
   if (!g.cuda) {
-    el.textContent = "GPU: brak CUDA (CPU)";
-    btn.disabled = true;
+    el.textContent = parts.length
+      ? parts.join(" · ") + " · no CUDA (CPU)"
+      : "GPU: no CUDA (CPU)";
+    el.className = "info";
+    btn.disabled = !g.loaded;
     return;
   }
   const vram = g.vram_total_gb
     ? ` · VRAM ${g.vram_used_gb}/${g.vram_total_gb} GB`
     : "";
   if (g.loaded) {
-    el.textContent = `Model: ${shortModel(g.model)} (${g.quant})${vram}`;
+    el.textContent = parts.join(" · ") + vram + (g.upscale_note ? ` · ${g.upscale_note}` : "");
     el.className = "info ok";
     btn.disabled = false;
   } else {
@@ -416,8 +428,26 @@ function renderResults(job) {
       });
     }
   }
+  renderUpscaleWarning(job);
   updateTriggerPreviews();
   updateExportCount();
+}
+
+// A failing upscaler degrades to plain LANCZOS, which otherwise shows up only
+// as missing ✨ badges — say it out loud instead.
+function renderUpscaleWarning(job) {
+  const el = $("upscaleWarn");
+  if (!el) return;
+  const bad = job.results.filter((r) => r.upscale_error);
+  if (!bad.length) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  const what = bad.length === 1 ? "1 image" : `${bad.length} images`;
+  el.textContent =
+    `Upscaling failed on ${what} (resized without the model): ${bad[0].upscale_error}`;
+  el.classList.remove("hidden");
 }
 
 // Live preview of the trigger word prepended to every caption.

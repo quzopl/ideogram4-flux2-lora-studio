@@ -7,21 +7,36 @@ window.CropPlan = (function () {
   let folder = null;
   let files = [];
   let plan = {};
+  let mode = "";      // the #cropMode selection this plan was drawn for
 
   const storageKey = () => "cropPlan:" + (folder || "");
 
+  // The stored record is {plan, mode}: the plan alone would come back after a
+  // reload with #cropMode reset to its HTML default ("center"), which silently
+  // throws the crops away at Process time.
   function load() {
     plan = {};
+    mode = "";
+    let rec = null;
     try {
-      plan = JSON.parse(localStorage.getItem(storageKey()) || "{}");
+      rec = JSON.parse(localStorage.getItem(storageKey()) || "null");
     } catch (e) {
-      plan = {};
+      rec = null;
     }
+    if (rec && rec.plan) {
+      plan = rec.plan;
+      mode = rec.mode || "";
+    } else if (rec) {
+      plan = rec;               // record written before the mode was stored
+    }
+    if (!mode && Object.keys(plan).length) mode = "manual";
+    if (mode) $("cropMode").value = mode;
   }
 
   function save() {
+    if (folder === null) return;
     try {
-      localStorage.setItem(storageKey(), JSON.stringify(plan));
+      localStorage.setItem(storageKey(), JSON.stringify({ plan, mode }));
     } catch (e) {
       console.warn("Crop plan not saved:", e);
     }
@@ -59,6 +74,7 @@ window.CropPlan = (function () {
     },
     files: () => files.slice(),
     folder: () => folder,
+    setMode(m) { mode = m; $("cropMode").value = m; save(); },
     get: (name) => plan[name] || null,
     set(name, box) { plan[name] = box; save(); render(); },
     remove(name) { delete plan[name]; save(); render(); },
@@ -97,7 +113,7 @@ document.getElementById("autoCropBtn").addEventListener("click", async () => {
       square: document.getElementById("square").value === "true",
     });
     await pollAutoCrop(job_id, total);
-    document.getElementById("cropMode").value = "manual";
+    CropPlan.setMode("manual");
   } catch (e) {
     info.textContent = "Auto-crop error: " + e.message;
   } finally {
@@ -123,6 +139,12 @@ function pollAutoCrop(jobId, total) {
 
 document.getElementById("clearCropsBtn").addEventListener("click", () => {
   CropPlan.clear();
+});
+
+// Remember the crop source the user picked, so a reload restores it together
+// with the plan instead of falling back to the "center" default.
+document.getElementById("cropMode").addEventListener("change", (e) => {
+  CropPlan.setMode(e.target.value);
 });
 
 // ---- Crop editor modal -----------------------------------------------------
@@ -288,7 +310,7 @@ window.CropEditor = (function () {
   $("cropSaveBtn").addEventListener("click", () => {
     CropPlan.set(cur.name, [Math.round(box.x), Math.round(box.y),
                             Math.round(box.w), Math.round(box.h)]);
-    document.getElementById("cropMode").value = "manual";
+    CropPlan.setMode("manual");
     close();
   });
 
@@ -307,7 +329,7 @@ window.CropEditor = (function () {
       CropPlan.set(name, [Math.round(fx * w), Math.round(fy * h),
                           Math.round(fw * w), Math.round(fh * h)]);
     });
-    Promise.all(jobs).then(() => { document.getElementById("cropMode").value = "manual"; close(); });
+    Promise.all(jobs).then(() => { CropPlan.setMode("manual"); close(); });
   });
 
   $("cropAutoBtn").addEventListener("click", async () => {

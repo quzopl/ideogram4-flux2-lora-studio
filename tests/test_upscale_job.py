@@ -85,12 +85,57 @@ def test_api_job_rejects_upscale_kind_job():
 def test_api_job_rejects_crop_auto_job():
     job_id = "test-api-job-crop-auto"
     server.JOBS[job_id] = {
-        "id": job_id, "state": "done", "total": 0, "processed": 0,
-        "current": "", "error": "", "crops": {}, "skipped": [],
+        "id": job_id, "kind": "crop_auto", "state": "done", "total": 0,
+        "processed": 0, "current": "", "error": "", "crops": {}, "skipped": [],
     }
     try:
         with pytest.raises(HTTPException) as exc:
             server.api_job(job_id)
+        assert exc.value.status_code == 404
+    finally:
+        del server.JOBS[job_id]
+
+
+def test_upscale_zip_rejects_unfinished_job():
+    # A mid-run download would silently produce a partial archive.
+    job_id = "test-upscale-zip-not-done"
+    _upscale_job(job_id, state="processing")
+    try:
+        with pytest.raises(HTTPException) as exc:
+            server.api_upscale_zip(job_id)
+        assert exc.value.status_code == 400
+    finally:
+        del server.JOBS[job_id]
+
+
+def test_export_rejects_a_job_of_another_kind(tmp_path):
+    # A crop-auto id used to reach job["results"] and blow up with a KeyError.
+    job_id = "test-export-crop-auto"
+    server.JOBS[job_id] = {
+        "id": job_id, "kind": "crop_auto", "state": "done", "total": 0,
+        "processed": 0, "current": "", "error": "", "crops": {}, "skipped": [],
+    }
+    try:
+        req = server.ExportRequest(job_id=job_id, output_folder=str(tmp_path))
+        with pytest.raises(HTTPException) as exc:
+            server.api_export(req)
+        assert exc.value.status_code == 404
+        with pytest.raises(HTTPException) as exc:
+            server.api_zip(req)
+        assert exc.value.status_code == 404
+    finally:
+        del server.JOBS[job_id]
+
+
+def test_upscale_job_endpoint_rejects_dataset_job():
+    job_id = "test-upscale-endpoint-dataset"
+    server.JOBS[job_id] = {
+        "id": job_id, "kind": "dataset", "state": "done", "total": 0,
+        "processed": 0, "current": "", "error": "", "config": {}, "results": [],
+    }
+    try:
+        with pytest.raises(HTTPException) as exc:
+            server.api_upscale_job(job_id)
         assert exc.value.status_code == 404
     finally:
         del server.JOBS[job_id]

@@ -110,14 +110,16 @@ downloads Florence-2 (~0.7 GB). Later runs are fast.
 
 1. **Source** — point at a folder of photos *or* upload files (HEIC
    included). Click any thumbnail to open the crop editor and drag a manual
-   crop (the cell gets a ✂ badge and the crop is remembered across reloads),
+   crop (the cell gets a ✂ badge; both the crops and the chosen crop source
+   are remembered across reloads),
    or click **✂ Auto-crop all** to let Florence-2 find the subject across
    every photo — it recomputes and replaces existing crops, asking for
    confirmation first if any are already set.
 2. **Settings** — pick the caption mode and target format, resolution
    (768/1024/1280/1536), bucket step, output format, the crop source
-   (**centre** with a left/right/top/bottom centring choice, **auto**, or
-   **manual**), **cover**/**contain** fit, the upscale model used when a
+   (**centre** with a left/right/top/bottom centring choice, or **auto** /
+   **manual** — both apply the saved crop plan, one drawn by Florence-2 and
+   the other by hand), **cover**/**contain** fit, the upscale model used when a
    crop is smaller than the target, the VLM model (3B fast / 7B best, or any
    model via LM Studio), quantization and an optional *trigger word*.
 3. **Process** — the tool resizes and (optionally) captions; you watch the
