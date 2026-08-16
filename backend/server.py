@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (captioner, comfy_client, comfy_workflows, florence,
+from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence,
                ideogram_workflow, image_utils, lmstudio, prompts, v15_lint)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -162,6 +162,15 @@ class ProcessRequest(BaseModel):
     centering_x: str = "center"      # left | center | right
     centering_y: str = "center"      # top | center | bottom
     crops: dict[str, list[int]] = {} # source file name -> [x, y, w, h]
+
+
+class CropAutoRequest(BaseModel):
+    folder: str
+    mode: str = "person"
+    resolution: int = 1024
+    step: int = 64
+    square: bool = False
+    names: list[str] = []       # empty = all images in the folder
 
 
 class ExportRequest(BaseModel):
@@ -611,6 +620,60 @@ def api_job(job_id: str):
     if not job:
         raise HTTPException(404, "Unknown job.")
     return _job_public(job)
+
+
+def _run_crop_auto(job_id: str, req: CropAutoRequest, files: list[Path]) -> None:
+    job = JOBS[job_id]
+    try:
+        job["state"] = "processing"
+        for i, src in enumerate(files):
+            job["current"] = src.name
+            try:
+                img = image_utils.load_source(str(src))
+                box = crop_auto.suggest_crop(
+                    img, req.mode, req.resolution, req.step, req.square)
+                if box:
+                    job["crops"][src.name] = box
+            except Exception as e:  # noqa: BLE001 - one bad file must not kill the job
+                job["skipped"].append(f"{src.name}: {e}")
+            job["processed"] = i + 1
+        job["current"] = ""
+        job["state"] = "done"
+    except Exception as e:  # noqa: BLE001
+        job["state"] = "error"
+        job["error"] = f"{e}\n{traceback.format_exc()}"
+
+
+@app.post("/api/crop/auto")
+def api_crop_auto(req: CropAutoRequest):
+    files = _list_images(req.folder)
+    if req.names:
+        wanted = set(req.names)
+        files = [f for f in files if f.name in wanted]
+    if not files:
+        raise HTTPException(400, "No supported images in the folder.")
+    job_id = uuid.uuid4().hex
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "id": job_id, "state": "pending", "total": len(files),
+            "processed": 0, "current": "", "error": "",
+            "crops": {}, "skipped": [],
+        }
+    threading.Thread(target=_run_crop_auto, args=(job_id, req, files),
+                     daemon=True).start()
+    return {"job_id": job_id, "total": len(files)}
+
+
+@app.get("/api/crop/auto/{job_id}")
+def api_crop_auto_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job or "crops" not in job:
+        raise HTTPException(404, "Unknown job.")
+    return {
+        "state": job["state"], "total": job["total"],
+        "processed": job["processed"], "current": job["current"],
+        "error": job["error"], "crops": job["crops"], "skipped": job["skipped"],
+    }
 
 
 @app.get("/api/thumb/{job_id}/{idx}")
