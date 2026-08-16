@@ -79,6 +79,13 @@ window.CropPlan = (function () {
 document.getElementById("autoCropBtn").addEventListener("click", async () => {
   const btn = document.getElementById("autoCropBtn");
   const info = document.getElementById("cropInfo");
+  const existing = Object.keys(CropPlan.all()).length;
+  if (existing > 0) {
+    const n = existing === 1 ? "1 existing crop" : `${existing} existing crops`;
+    if (!confirm(`Auto-crop all will recompute crops for every photo and replace ${n}. Continue?`)) {
+      return;
+    }
+  }
   btn.disabled = true;
   info.textContent = "Auto-cropping…";
   try {
