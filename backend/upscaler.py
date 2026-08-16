@@ -140,3 +140,110 @@ def resolve(model_id: str, cfg: dict) -> dict | None:
         if m["id"] == model_id:
             return m
     return None
+
+
+# --------------------------------------------------------------------------- #
+# GPU helpers (torch / spandrel imported lazily so this module stays importable
+# without a torch install, and the test suite never triggers a real load)
+# --------------------------------------------------------------------------- #
+def weights_path(entry: dict, token: str = "") -> str:
+    """Local path to the weights, downloading them from HF when needed."""
+    if entry.get("path"):
+        return entry["path"]
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download(
+        repo_id=entry["repo_id"], filename=entry["filename"],
+        token=token or None)
+
+
+def _load(entry: dict, token: str = "") -> dict:
+    """Load (and cache) the spandrel descriptor for one registry entry."""
+    global _RUNTIME
+    with _LOCK:
+        if _RUNTIME is not None and _RUNTIME["key"] == entry["id"]:
+            return _RUNTIME
+        import torch
+        from spandrel import ImageModelDescriptor, ModelLoader
+
+        path = weights_path(entry, token)
+        model = ModelLoader().load_from_file(path)
+        if not isinstance(model, ImageModelDescriptor):
+            raise RuntimeError(f"{entry['filename']} is not an image upscaler.")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model.to(device).eval()
+        _RUNTIME = {"model": model, "torch": torch, "device": device,
+                    "key": entry["id"], "scale": int(model.scale)}
+        return _RUNTIME
+
+
+def unload() -> None:
+    """Release the upscaler from memory (wired to the 'Release GPU' button)."""
+    global _RUNTIME
+    with _LOCK:
+        if _RUNTIME is None:
+            return
+        torch = _RUNTIME["torch"]
+        _RUNTIME = None
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
+def is_loaded() -> bool:
+    return _RUNTIME is not None
+
+
+def loaded_key() -> str:
+    return _RUNTIME["key"] if _RUNTIME else ""
+
+
+def _to_tensor(img, torch):
+    import numpy as np
+    arr = np.asarray(img.convert("RGB"), dtype="float32") / 255.0
+    return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+
+
+def _to_image(tensor, torch):
+    import numpy as np
+    from PIL import Image as PILImage
+    arr = tensor.squeeze(0).clamp(0, 1).permute(1, 2, 0).cpu().float().numpy()
+    return PILImage.fromarray((arr * 255.0 + 0.5).astype(np.uint8))
+
+
+def _run_once(rt: dict, img, tile: int = 512, overlap: int = 32):
+    """One model pass, tiled so a 12 GB card survives x4 on large photos."""
+    torch = rt["torch"]
+    model, device, scale = rt["model"], rt["device"], rt["scale"]
+    src = _to_tensor(img, torch).to(device)
+    _, _, h, w = src.shape
+    out = torch.zeros((1, 3, h * scale, w * scale), device=device)
+    weight = torch.zeros_like(out)
+    step = max(16, tile - overlap)
+    with torch.no_grad():
+        for y in range(0, h, step):
+            for x in range(0, w, step):
+                y2, x2 = min(y + tile, h), min(x + tile, w)
+                patch = src[:, :, y:y2, x:x2]
+                res = model(patch)
+                out[:, :, y * scale:y2 * scale, x * scale:x2 * scale] += res
+                weight[:, :, y * scale:y2 * scale, x * scale:x2 * scale] += 1.0
+    out = out / weight.clamp(min=1.0)
+    return _to_image(out, torch)
+
+
+def upscale(img, entry: dict, passes: int, token: str = ""):
+    """Run ``passes`` model passes over the image, shrinking tiles on OOM."""
+    if passes <= 0:
+        return img
+    rt = _load(entry, token)
+    for _ in range(passes):
+        for tile in (512, 256, 128):
+            try:
+                img = _run_once(rt, img, tile=tile)
+                break
+            except Exception as e:  # noqa: BLE001 - OOM -> smaller tile, then CPU
+                if "out of memory" not in str(e).lower() or tile == 128:
+                    raise
+                rt["torch"].cuda.empty_cache()
+    return img

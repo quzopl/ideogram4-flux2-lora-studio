@@ -168,6 +168,10 @@ class ProcessRequest(BaseModel):
     centering_y: str = "center"      # top | center | bottom
     crops: dict[str, list[int]] = {} # source file name -> [x, y, w, h]
 
+    # Upscaling
+    upscale_model: str = ""          # empty = disabled
+    upscale_min_ratio: float = 1.05
+
 
 class CropAutoRequest(BaseModel):
     folder: str
@@ -275,6 +279,41 @@ def _caption_output_files(base_name: str, caption: str, fmt: str) -> list[tuple[
     return files
 
 
+class _UpscaleHook:
+    """Callable passed to process_image(upscale=...); records what it did.
+
+    Keeps the pipeline honest: a broken upscaler degrades to plain LANCZOS
+    instead of killing the job.
+    """
+
+    def __init__(self, entry: dict, min_ratio: float = 1.05, token: str = "", run=None):
+        self.entry = entry
+        self.min_ratio = min_ratio
+        self.token = token
+        self.used = False
+        self.error = ""
+        self._run = run or (lambda img, entry, passes: upscaler.upscale(
+            img, entry, passes, token=self.token))
+
+    def reset(self) -> None:
+        self.used = False
+        self.error = ""
+
+    def __call__(self, img, target):
+        scale = int(self.entry.get("scale") or 0) or 4
+        passes = upscaler.plan_passes(
+            (img.width, img.height), target, scale, self.min_ratio)
+        if passes <= 0:
+            return img
+        try:
+            out = self._run(img, self.entry, passes)
+        except Exception as e:  # noqa: BLE001 - fall back to plain resizing
+            self.error = str(e)
+            return img
+        self.used = True
+        return out
+
+
 def _job_public(job: dict) -> dict:
     """Strip non-serialisable internals before sending to the client."""
     return {
@@ -293,6 +332,7 @@ def _job_public(job: dict) -> dict:
                 "width": r["width"],
                 "height": r["height"],
                 "caption": r["caption"],
+                "upscaled": r.get("upscaled", False),
             }
             for r in job["results"]
         ],
@@ -321,18 +361,31 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
             quant = req.quant if req.quant in ("4bit", "none") else "4bit"
             captioner.ensure_loaded(req.model, quant)
 
+        hook = None
+        if req.upscale_model:
+            entry = upscaler.resolve(
+                req.upscale_model, upscaler.load_config(UPSCALER_CONFIG_PATH))
+            if entry:
+                job["state"] = "loading_model"
+                job["current"] = "Loading the upscale model…"
+                hook = _UpscaleHook(entry, req.upscale_min_ratio,
+                                    hf_auth.load_token(HF_TOKEN_PATH))
+
         job["state"] = "processing"
         prefix = (req.mode or "img")
 
         for i, src in enumerate(files):
             job["current"] = src.name
             try:
+                if hook:
+                    hook.reset()
                 img, (w, h) = image_utils.process_image(
                     str(src), req.resolution, req.step, req.square,
                     crop=_crop_for(req, src.name),
                     centering=image_utils.centering_pair(req.centering_x, req.centering_y),
                     fit=req.fit,
                     pad_color=req.pad_color,
+                    upscale=hook,
                 )
                 out_name = f"{prefix}_{i:04d}.{ext}"
                 image_utils.save_image(
@@ -363,6 +416,8 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
                     "height": h,
                     "caption": caption,
                     "format": req.caption_format,
+                    "upscaled": bool(hook and hook.used),
+                    "upscale_error": hook.error if hook else "",
                 })
             except Exception as e:  # noqa: BLE001 - record per-file failures, keep going
                 job["results"].append({
@@ -764,7 +819,73 @@ def api_unload():
         raise HTTPException(409, "Processing in progress — wait for it to finish.")
     captioner.unload()
     florence.unload()
+    upscaler.unload()
     return captioner.gpu_status()
+
+
+class UpscaleScanRequest(BaseModel):
+    folder: str
+
+
+class UpscaleCustomRequest(BaseModel):
+    repo_id: str
+    filename: str
+    scale: int = 0
+
+
+class UpscaleDownloadRequest(BaseModel):
+    model_id: str
+
+
+@app.get("/api/upscale/models")
+def api_upscale_models():
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    return {"models": upscaler.registry(cfg), "folder": cfg.get("folder", "")}
+
+
+@app.post("/api/upscale/models/scan")
+def api_upscale_scan(req: UpscaleScanRequest):
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    cfg["folder"] = req.folder.strip()
+    upscaler.save_config(UPSCALER_CONFIG_PATH, cfg)
+    return {"models": upscaler.registry(cfg), "folder": cfg["folder"]}
+
+
+@app.post("/api/upscale/models/custom")
+def api_upscale_custom_add(req: UpscaleCustomRequest):
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    entry = {"repo_id": req.repo_id.strip(), "filename": req.filename.strip(),
+             "scale": req.scale}
+    if not entry["repo_id"] or not entry["filename"]:
+        raise HTTPException(400, "repo_id and filename are required.")
+    cfg["custom"] = [c for c in cfg["custom"]
+                     if (c.get("repo_id"), c.get("filename")) !=
+                     (entry["repo_id"], entry["filename"])] + [entry]
+    upscaler.save_config(UPSCALER_CONFIG_PATH, cfg)
+    return {"models": upscaler.registry(cfg)}
+
+
+@app.delete("/api/upscale/models/custom")
+def api_upscale_custom_del(req: UpscaleCustomRequest):
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    cfg["custom"] = [c for c in cfg["custom"]
+                     if (c.get("repo_id"), c.get("filename")) !=
+                     (req.repo_id, req.filename)]
+    upscaler.save_config(UPSCALER_CONFIG_PATH, cfg)
+    return {"models": upscaler.registry(cfg)}
+
+
+@app.post("/api/upscale/download")
+def api_upscale_download(req: UpscaleDownloadRequest):
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    entry = upscaler.resolve(req.model_id, cfg)
+    if not entry:
+        raise HTTPException(404, "Unknown upscale model.")
+    try:
+        path = upscaler.weights_path(entry, hf_auth.load_token(HF_TOKEN_PATH))
+    except Exception as e:  # noqa: BLE001 - surface a readable message in the UI
+        raise HTTPException(400, f"Download failed: {e}") from e
+    return {"ok": True, "path": path, "models": upscaler.registry(cfg)}
 
 
 # --------------------------------------------------------------------------- #
