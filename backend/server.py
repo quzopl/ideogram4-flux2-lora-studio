@@ -25,6 +25,7 @@ from pathlib import Path
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel
 
 from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence,
@@ -886,6 +887,156 @@ def api_upscale_download(req: UpscaleDownloadRequest):
     except Exception as e:  # noqa: BLE001 - surface a readable message in the UI
         raise HTTPException(400, f"Download failed: {e}") from e
     return {"ok": True, "path": path, "models": upscaler.registry(cfg)}
+
+
+# --------------------------------------------------------------------------- #
+# Standalone "Upscale these photos" tool
+# --------------------------------------------------------------------------- #
+class UpscaleRunRequest(BaseModel):
+    folder: str
+    model_id: str
+    mode: str = "native"     # "native" | "x2" | "long_side"
+    long_side: int = 2048
+    fmt: str = "png"         # "png" | "jpg"
+    jpg_quality: int = 95
+
+
+class UpscaleExportRequest(BaseModel):
+    job_id: str
+    output_folder: str
+
+
+def _upscale_target(size, mode: str, value: int, scale: int) -> tuple[int, int]:
+    """Target pixel size for the standalone upscale tool (never shrinks)."""
+    w, h = size
+    if mode == "x2":
+        factor = 2.0
+    elif mode == "long_side":
+        factor = max(1.0, value / max(w, h))
+    else:
+        factor = float(scale or 4)
+    return (max(w, int(round(w * factor))), max(h, int(round(h * factor))))
+
+
+def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> None:
+    job = JOBS[job_id]
+    out_dir = WORK / job_id / "upscaled"
+    thumb_dir = WORK / job_id / "thumbs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    ext = "jpg" if req.fmt == "jpg" else "png"
+    try:
+        cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+        entry = upscaler.resolve(req.model_id, cfg)
+        if not entry:
+            raise RuntimeError(f"Unknown upscale model: {req.model_id}")
+        token = hf_auth.load_token(HF_TOKEN_PATH)
+        job["state"] = "loading_model"
+        job["current"] = "Loading the upscale model…"
+        scale = int(entry.get("scale") or 0) or 4
+        job["state"] = "processing"
+        for i, src in enumerate(files):
+            job["current"] = src.name
+            try:
+                img = image_utils.load_source(str(src))
+                target = _upscale_target((img.width, img.height), req.mode,
+                                         req.long_side, scale)
+                passes = upscaler.plan_passes((img.width, img.height), target,
+                                              scale, min_ratio=1.0)
+                big = upscaler.upscale(img, entry, passes, token=token)
+                if (big.width, big.height) != target:
+                    big = big.resize(target, Image.LANCZOS)
+                out_name = f"{src.stem}_up.{ext}"
+                image_utils.save_image(big, str(out_dir / out_name),
+                                       req.fmt, req.jpg_quality)
+                image_utils.make_thumbnail(big, 480).save(
+                    str(thumb_dir / f"{i:04d}.jpg"), format="JPEG", quality=80)
+                job["results"].append({
+                    "idx": i, "src_name": src.name, "out_name": out_name,
+                    "width": big.width, "height": big.height, "error": "",
+                })
+            except Exception as e:  # noqa: BLE001 - keep going on per-file errors
+                job["results"].append({
+                    "idx": i, "src_name": src.name, "out_name": "",
+                    "width": 0, "height": 0, "error": str(e),
+                })
+            job["processed"] = i + 1
+        job["current"] = ""
+        job["state"] = "done"
+    except Exception as e:  # noqa: BLE001
+        job["state"] = "error"
+        job["error"] = f"{e}\n{traceback.format_exc()}"
+
+
+@app.post("/api/upscale/run")
+def api_upscale_run(req: UpscaleRunRequest):
+    files = _list_images(req.folder)
+    if not files:
+        raise HTTPException(400, "No supported images in the folder.")
+    job_id = uuid.uuid4().hex
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "id": job_id, "state": "pending", "total": len(files),
+            "processed": 0, "current": "", "error": "", "config": req.model_dump(),
+            "results": [], "kind": "upscale",
+        }
+    threading.Thread(target=_run_upscale_job, args=(job_id, req, files),
+                     daemon=True).start()
+    return {"job_id": job_id, "total": len(files)}
+
+
+@app.get("/api/upscale/job/{job_id}")
+def api_upscale_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job or job.get("kind") != "upscale":
+        raise HTTPException(404, "Unknown job.")
+    return {
+        "state": job["state"], "total": job["total"], "processed": job["processed"],
+        "current": job["current"], "error": job["error"], "results": job["results"],
+    }
+
+
+@app.get("/api/upscale/thumb/{job_id}/{idx}")
+def api_upscale_thumb(job_id: str, idx: int):
+    path = WORK / job_id / "thumbs" / f"{idx:04d}.jpg"
+    if not path.exists():
+        raise HTTPException(404, "No thumbnail.")
+    return FileResponse(str(path), media_type="image/jpeg")
+
+
+@app.post("/api/upscale/export")
+def api_upscale_export(req: UpscaleExportRequest):
+    job = JOBS.get(req.job_id)
+    if not job or job.get("kind") != "upscale":
+        raise HTTPException(404, "Unknown job.")
+    dest = Path(req.output_folder).expanduser()
+    dest.mkdir(parents=True, exist_ok=True)
+    src_dir = WORK / req.job_id / "upscaled"
+    written = 0
+    for r in job["results"]:
+        if not r["out_name"]:
+            continue
+        shutil.copy2(src_dir / r["out_name"], dest / r["out_name"])
+        written += 1
+    return {"written": written, "folder": str(dest)}
+
+
+@app.get("/api/upscale/zip/{job_id}")
+def api_upscale_zip(job_id: str):
+    job = JOBS.get(job_id)
+    if not job or job.get("kind") != "upscale":
+        raise HTTPException(404, "Unknown job.")
+    src_dir = WORK / job_id / "upscaled"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r in job["results"]:
+            if r["out_name"]:
+                zf.write(src_dir / r["out_name"], r["out_name"])
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="upscaled_{job_id[:8]}.zip"'},
+    )
 
 
 # --------------------------------------------------------------------------- #
