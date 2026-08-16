@@ -224,6 +224,7 @@ function switchView(view) {
     div.classList.toggle("hidden", div.id !== "view-" + view));
   if (view === "comfy") { loadComfyConfig(); loadEditorWorkflowFromServer(); }
   if (view === "bbox" && window.BboxEditor) window.BboxEditor.onShow();
+  if (view === "upscale" && window.UpscaleView) window.UpscaleView.onShow();
 }
 window.switchView = switchView;
 
