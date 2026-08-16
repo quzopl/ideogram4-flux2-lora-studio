@@ -16,7 +16,7 @@ def test_largest_box_empty_is_none():
     assert crop_auto.largest_box([]) is None
 
 
-def test_suggest_crop_uses_detection(monkeypatch):
+def test_suggest_crop_uses_detection():
     img = _img()
     box = crop_auto.suggest_crop(
         img, "person", 1024, 64, True, detect=lambda *_: [[900, 300, 1100, 700]])
@@ -62,3 +62,10 @@ def test_suggest_crop_never_smaller_than_target():
     _, _, w, h = crop_auto.suggest_crop(
         img, "generic", 1024, 64, True, detect=lambda *_: [[1490, 1490, 1510, 1510]])
     assert w >= 1024 and h >= 1024
+
+
+def test_suggest_crop_detection_failure_falls_back_to_none():
+    def det(*_):
+        raise RuntimeError("model load failed")
+
+    assert crop_auto.suggest_crop(_img(), "generic", 1024, 64, True, detect=det) is None
