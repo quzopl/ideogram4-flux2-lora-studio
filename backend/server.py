@@ -8,6 +8,7 @@ Flow:
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -24,10 +25,12 @@ from pathlib import Path
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel
 
-from . import (captioner, comfy_client, comfy_workflows, florence,
-               ideogram_workflow, image_utils, lmstudio, prompts, v15_lint)
+from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence,
+               hf_auth, ideogram_workflow, image_utils, lmstudio, prompts, upscaler,
+               v15_lint)
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -40,10 +43,14 @@ COMFY_PROMPTS_PATH = WORK / "comfy_prompts.json"
 COMFY_WORKFLOWS_PATH = WORK / "comfy_workflows.json"
 CUSTOM_MODELS_PATH = WORK / "custom_models.json"
 LMSTUDIO_CONFIG_PATH = WORK / "lmstudio.json"
+HF_TOKEN_PATH = WORK / "hf.json"
+UPSCALER_CONFIG_PATH = WORK / "upscaler.json"
 COMFY_GALLERY_DIR = WORK / "comfy_gallery"
 COMFY_GALLERY_DIR.mkdir(exist_ok=True)
 
 DB_PATH = WORK / "flux_prep.db"
+
+hf_auth.apply_env(hf_auth.load_token(HF_TOKEN_PATH))
 
 
 def _db_query(sql: str, params: tuple = (), *, many: bool = False, write: bool = False):
@@ -154,6 +161,27 @@ class ProcessRequest(BaseModel):
     do_caption: bool = True
     caption_format: str = "flux"  # "flux" | "ideogram"
 
+    # Cropping
+    crop_mode: str = "center"        # "center" | "auto" | "manual"
+    fit: str = "cover"               # "cover" (crop) | "contain" (pad)
+    pad_color: str = "#000000"
+    centering_x: str = "center"      # left | center | right
+    centering_y: str = "center"      # top | center | bottom
+    crops: dict[str, list[int]] = {} # source file name -> [x, y, w, h]
+
+    # Upscaling
+    upscale_model: str = ""          # empty = disabled
+    upscale_min_ratio: float = 1.05
+
+
+class CropAutoRequest(BaseModel):
+    folder: str
+    mode: str = "person"
+    resolution: int = 1024
+    step: int = 64
+    square: bool = False
+    names: list[str] = []       # empty = all images in the folder
+
 
 class ExportRequest(BaseModel):
     job_id: str
@@ -183,6 +211,10 @@ class LibrarySaveRequest(BaseModel):
     action: str = "manual"
 
 
+class HFTokenRequest(BaseModel):
+    token: str
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -195,6 +227,53 @@ def _list_images(folder: str) -> list[Path]:
         if f.is_file() and f.suffix.lower() in image_utils.SUPPORTED_EXT
     ]
     return files
+
+
+def _safe_source_path(folder: str, name: str) -> Path:
+    """Resolve ``name`` inside ``folder``, rejecting traversal and missing files."""
+    if not name or name != Path(name).name:
+        raise HTTPException(400, "Invalid file name.")
+    base = Path(folder).expanduser().resolve()
+    target = (base / name).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(404, "No such source image.")
+    return target
+
+
+def _crop_for(req: "ProcessRequest", name: str) -> list[int] | None:
+    """Crop box for a source file, or None when the mode has no per-file box.
+
+    Both ``auto`` and ``manual`` read the plan that travels with the request —
+    auto boxes are computed by ``/api/crop/auto`` and land in the very same
+    plan, so the only difference between the two modes is who drew the box.
+    ``center`` is the explicit "ignore the plan" mode.
+    """
+    if req.crop_mode in ("auto", "manual"):
+        box = req.crops.get(name)
+        return list(box) if box and len(box) == 4 else None
+    return None
+
+
+def _job_of_kind(job_id: str, kind: str) -> dict:
+    """Job with this id, or 404 when it is missing or of a different kind.
+
+    Every job in ``JOBS`` is stamped with ``kind``
+    (``dataset`` | ``crop_auto`` | ``upscale``) at creation, because the three
+    shapes are not interchangeable: only dataset results carry ``caption``,
+    only crop-auto jobs carry ``crops``, and each kind has its own routes.
+    """
+    job = JOBS.get(job_id)
+    if not job or job.get("kind") != kind:
+        raise HTTPException(404, "Unknown job.")
+    return job
+
+
+SRC_THUMBS = WORK / "srcthumbs"
+
+
+def _src_thumb_path(folder: str, name: str) -> Path:
+    key = hashlib.sha1(str(Path(folder).expanduser().resolve()).encode()).hexdigest()[:16]
+    return SRC_THUMBS / key / (name + ".jpg")
 
 
 def _final_caption(req: ExportRequest, result: dict) -> str:
@@ -221,6 +300,43 @@ def _caption_output_files(base_name: str, caption: str, fmt: str) -> list[tuple[
     return files
 
 
+class _UpscaleHook:
+    """Callable passed to process_image(upscale=...); records what it did.
+
+    Keeps the pipeline honest: a broken upscaler degrades to plain LANCZOS
+    instead of killing the job.
+    """
+
+    def __init__(self, entry: dict, min_ratio: float = 1.05, token: str = "",
+                 fit: str = "cover", run=None):
+        self.entry = entry
+        self.min_ratio = min_ratio
+        self.token = token
+        self.fit = fit
+        self.used = False
+        self.error = ""
+        self._run = run or (lambda img, entry, passes: upscaler.upscale(
+            img, entry, passes, token=self.token))
+
+    def reset(self) -> None:
+        self.used = False
+        self.error = ""
+
+    def __call__(self, img, target):
+        scale = int(self.entry.get("scale") or 0) or 4
+        passes = upscaler.plan_passes(
+            (img.width, img.height), target, scale, self.min_ratio, fit=self.fit)
+        if passes <= 0:
+            return img
+        try:
+            out = self._run(img, self.entry, passes)
+        except Exception as e:  # noqa: BLE001 - fall back to plain resizing
+            self.error = str(e)
+            return img
+        self.used = True
+        return out
+
+
 def _job_public(job: dict) -> dict:
     """Strip non-serialisable internals before sending to the client."""
     return {
@@ -239,6 +355,8 @@ def _job_public(job: dict) -> dict:
                 "width": r["width"],
                 "height": r["height"],
                 "caption": r["caption"],
+                "upscaled": r.get("upscaled", False),
+                "upscale_error": r.get("upscale_error", ""),
             }
             for r in job["results"]
         ],
@@ -267,14 +385,32 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
             quant = req.quant if req.quant in ("4bit", "none") else "4bit"
             captioner.ensure_loaded(req.model, quant)
 
+        hook = None
+        if req.upscale_model:
+            entry = upscaler.resolve(
+                req.upscale_model, upscaler.load_config(UPSCALER_CONFIG_PATH))
+            if entry:
+                job["state"] = "loading_model"
+                job["current"] = "Loading the upscale model…"
+                hook = _UpscaleHook(entry, req.upscale_min_ratio,
+                                    hf_auth.load_token(HF_TOKEN_PATH),
+                                    fit=req.fit)
+
         job["state"] = "processing"
         prefix = (req.mode or "img")
 
         for i, src in enumerate(files):
             job["current"] = src.name
             try:
+                if hook:
+                    hook.reset()
                 img, (w, h) = image_utils.process_image(
-                    str(src), req.resolution, req.step, req.square
+                    str(src), req.resolution, req.step, req.square,
+                    crop=_crop_for(req, src.name),
+                    centering=image_utils.centering_pair(req.centering_x, req.centering_y),
+                    fit=req.fit,
+                    pad_color=req.pad_color,
+                    upscale=hook,
                 )
                 out_name = f"{prefix}_{i:04d}.{ext}"
                 image_utils.save_image(
@@ -305,6 +441,8 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
                     "height": h,
                     "caption": caption,
                     "format": req.caption_format,
+                    "upscaled": bool(hook and hook.used),
+                    "upscale_error": hook.error if hook else "",
                 })
             except Exception as e:  # noqa: BLE001 - record per-file failures, keep going
                 job["results"].append({
@@ -488,6 +626,25 @@ def api_lmstudio_set(req: LmStudioConfig):
     return {"url": _set_lmstudio_url(req.url)}
 
 
+@app.get("/api/hf/token")
+def api_hf_token_get():
+    return hf_auth.status(hf_auth.load_token(HF_TOKEN_PATH))
+
+
+@app.post("/api/hf/token")
+def api_hf_token_set(req: HFTokenRequest):
+    hf_auth.save_token(HF_TOKEN_PATH, req.token)
+    hf_auth.apply_env(req.token)
+    return hf_auth.status(req.token)
+
+
+@app.delete("/api/hf/token")
+def api_hf_token_clear():
+    hf_auth.clear_token(HF_TOKEN_PATH)
+    hf_auth.apply_env("")
+    return {"set": False, "tail": ""}
+
+
 @app.post("/api/scan")
 def api_scan(req: ScanRequest):
     files = _list_images(req.folder)
@@ -498,19 +655,48 @@ def api_scan(req: ScanRequest):
     }
 
 
+@app.get("/api/src/thumb")
+def api_src_thumb(folder: str, name: str):
+    """Cached JPEG thumbnail of a source image (for the crop grid)."""
+    src = _safe_source_path(folder, name)
+    cache = _src_thumb_path(folder, name)
+    if not cache.exists() or cache.stat().st_mtime < src.stat().st_mtime:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        img = image_utils.load_source(str(src))
+        thumb = image_utils.make_thumbnail(img, 480)
+        thumb.save(str(cache), format="JPEG", quality=80)
+    return FileResponse(str(cache), media_type="image/jpeg")
+
+
+@app.get("/api/src/image")
+def api_src_image(folder: str, name: str):
+    """Down-scaled source image for the crop editor, with the true source size."""
+    src = _safe_source_path(folder, name)
+    img = image_utils.load_source(str(src))
+    full_w, full_h = img.width, img.height
+    preview = image_utils.make_thumbnail(img, 1600)
+    buf = io.BytesIO()
+    preview.save(buf, format="JPEG", quality=88)
+    return Response(
+        content=buf.getvalue(),
+        media_type="image/jpeg",
+        headers={"X-Src-Width": str(full_w), "X-Src-Height": str(full_h)},
+    )
+
+
 @app.post("/api/upload")
 async def api_upload(files: list[UploadFile]):
     dest = WORK / "uploads" / uuid.uuid4().hex
     dest.mkdir(parents=True, exist_ok=True)
-    saved = 0
+    saved_names: list[str] = []
     for f in files:
         if Path(f.filename).suffix.lower() not in image_utils.SUPPORTED_EXT:
             continue
         target = dest / Path(f.filename).name
         with open(target, "wb") as out:
             shutil.copyfileobj(f.file, out)
-        saved += 1
-    return {"folder": str(dest), "count": saved}
+        saved_names.append(target.name)
+    return {"folder": str(dest), "count": len(saved_names), "files": sorted(saved_names)}
 
 
 @app.post("/api/process")
@@ -523,6 +709,7 @@ def api_process(req: ProcessRequest):
     with JOBS_LOCK:
         JOBS[job_id] = {
             "id": job_id,
+            "kind": "dataset",
             "state": "pending",
             "total": len(files),
             "processed": 0,
@@ -538,10 +725,59 @@ def api_process(req: ProcessRequest):
 
 @app.get("/api/job/{job_id}")
 def api_job(job_id: str):
-    job = JOBS.get(job_id)
-    if not job:
-        raise HTTPException(404, "Unknown job.")
-    return _job_public(job)
+    return _job_public(_job_of_kind(job_id, "dataset"))
+
+
+def _run_crop_auto(job_id: str, req: CropAutoRequest, files: list[Path]) -> None:
+    job = JOBS[job_id]
+    try:
+        job["state"] = "processing"
+        for i, src in enumerate(files):
+            job["current"] = src.name
+            try:
+                img = image_utils.load_source(str(src))
+                box = crop_auto.suggest_crop(
+                    img, req.mode, req.resolution, req.step, req.square)
+                if box:
+                    job["crops"][src.name] = box
+            except Exception as e:  # noqa: BLE001 - one bad file must not kill the job
+                job["skipped"].append(f"{src.name}: {e}")
+            job["processed"] = i + 1
+        job["current"] = ""
+        job["state"] = "done"
+    except Exception as e:  # noqa: BLE001
+        job["state"] = "error"
+        job["error"] = f"{e}\n{traceback.format_exc()}"
+
+
+@app.post("/api/crop/auto")
+def api_crop_auto(req: CropAutoRequest):
+    files = _list_images(req.folder)
+    if req.names:
+        wanted = set(req.names)
+        files = [f for f in files if f.name in wanted]
+    if not files:
+        raise HTTPException(400, "No supported images in the folder.")
+    job_id = uuid.uuid4().hex
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "id": job_id, "kind": "crop_auto", "state": "pending",
+            "total": len(files), "processed": 0, "current": "", "error": "",
+            "crops": {}, "skipped": [],
+        }
+    threading.Thread(target=_run_crop_auto, args=(job_id, req, files),
+                     daemon=True).start()
+    return {"job_id": job_id, "total": len(files)}
+
+
+@app.get("/api/crop/auto/{job_id}")
+def api_crop_auto_job(job_id: str):
+    job = _job_of_kind(job_id, "crop_auto")
+    return {
+        "state": job["state"], "total": job["total"],
+        "processed": job["processed"], "current": job["current"],
+        "error": job["error"], "crops": job["crops"], "skipped": job["skipped"],
+    }
 
 
 @app.get("/api/thumb/{job_id}/{idx}")
@@ -554,9 +790,7 @@ def api_thumb(job_id: str, idx: int):
 
 @app.post("/api/export")
 def api_export(req: ExportRequest):
-    job = JOBS.get(req.job_id)
-    if not job:
-        raise HTTPException(404, "Unknown job.")
+    job = _job_of_kind(req.job_id, "dataset")
     if job["state"] != "done":
         raise HTTPException(400, "The job is not finished.")
 
@@ -593,9 +827,26 @@ def _busy() -> bool:
     )
 
 
+def _gpu_status() -> dict:
+    """Captioner status extended with the upscaler runtime.
+
+    Composed here rather than inside ``captioner`` so the two model modules
+    stay independent; the topbar needs a single "is anything holding VRAM"
+    flag, otherwise ⏏ Release GPU stays disabled while the upscaler is loaded.
+    """
+    info = captioner.gpu_status()
+    up = upscaler.status()
+    info["upscale_loaded"] = up["loaded"]
+    info["upscale_model"] = up["key"]
+    info["upscale_device"] = up["device"]
+    info["upscale_note"] = up["note"]
+    info["loaded"] = bool(info.get("loaded")) or up["loaded"]
+    return info
+
+
 @app.get("/api/gpu")
 def api_gpu():
-    return captioner.gpu_status()
+    return _gpu_status()
 
 
 @app.post("/api/unload")
@@ -604,7 +855,231 @@ def api_unload():
         raise HTTPException(409, "Processing in progress — wait for it to finish.")
     captioner.unload()
     florence.unload()
-    return captioner.gpu_status()
+    upscaler.unload()
+    return _gpu_status()
+
+
+class UpscaleScanRequest(BaseModel):
+    folder: str
+
+
+class UpscaleCustomRequest(BaseModel):
+    repo_id: str
+    filename: str
+    scale: int = 0
+
+
+class UpscaleDownloadRequest(BaseModel):
+    model_id: str
+
+
+@app.get("/api/upscale/models")
+def api_upscale_models():
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    return {"models": upscaler.registry(cfg), "folder": cfg.get("folder", "")}
+
+
+@app.post("/api/upscale/models/scan")
+def api_upscale_scan(req: UpscaleScanRequest):
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    cfg["folder"] = req.folder.strip()
+    upscaler.save_config(UPSCALER_CONFIG_PATH, cfg)
+    return {"models": upscaler.registry(cfg), "folder": cfg["folder"]}
+
+
+@app.post("/api/upscale/models/custom")
+def api_upscale_custom_add(req: UpscaleCustomRequest):
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    entry = {"repo_id": req.repo_id.strip(), "filename": req.filename.strip(),
+             "scale": req.scale}
+    if not entry["repo_id"] or not entry["filename"]:
+        raise HTTPException(400, "repo_id and filename are required.")
+    cfg["custom"] = [c for c in cfg["custom"]
+                     if (c.get("repo_id"), c.get("filename")) !=
+                     (entry["repo_id"], entry["filename"])] + [entry]
+    upscaler.save_config(UPSCALER_CONFIG_PATH, cfg)
+    return {"models": upscaler.registry(cfg)}
+
+
+@app.delete("/api/upscale/models/custom")
+def api_upscale_custom_del(req: UpscaleCustomRequest):
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    cfg["custom"] = [c for c in cfg["custom"]
+                     if (c.get("repo_id"), c.get("filename")) !=
+                     (req.repo_id, req.filename)]
+    upscaler.save_config(UPSCALER_CONFIG_PATH, cfg)
+    return {"models": upscaler.registry(cfg)}
+
+
+@app.post("/api/upscale/download")
+def api_upscale_download(req: UpscaleDownloadRequest):
+    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+    entry = upscaler.resolve(req.model_id, cfg)
+    if not entry:
+        raise HTTPException(404, "Unknown upscale model.")
+    try:
+        path = upscaler.weights_path(entry, hf_auth.load_token(HF_TOKEN_PATH))
+    except Exception as e:  # noqa: BLE001 - surface a readable message in the UI
+        raise HTTPException(400, f"Download failed: {e}") from e
+    return {"ok": True, "path": path, "models": upscaler.registry(cfg)}
+
+
+# --------------------------------------------------------------------------- #
+# Standalone "Upscale these photos" tool
+# --------------------------------------------------------------------------- #
+class UpscaleRunRequest(BaseModel):
+    folder: str
+    model_id: str
+    mode: str = "native"     # "native" | "x2" | "long_side"
+    long_side: int = 2048
+    fmt: str = "png"         # "png" | "jpg"
+    jpg_quality: int = 95
+
+
+class UpscaleExportRequest(BaseModel):
+    job_id: str
+    output_folder: str
+
+
+def _upscale_target(size, mode: str, value: int, scale: int) -> tuple[int, int]:
+    """Target pixel size for the standalone upscale tool (never shrinks)."""
+    w, h = size
+    if mode == "x2":
+        factor = 2.0
+    elif mode == "long_side":
+        factor = max(1.0, value / max(w, h))
+    else:
+        factor = float(scale or 4)
+    return (max(w, int(round(w * factor))), max(h, int(round(h * factor))))
+
+
+def _upscale_out_name(idx: int, src: Path, ext: str) -> str:
+    """Output filename for one result; the index keeps same-stem sources unique
+
+    (e.g. photo.jpg and photo.png in the same folder must not collide).
+    """
+    return f"{idx:04d}_{src.stem}_up.{ext}"
+
+
+def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> None:
+    job = JOBS[job_id]
+    out_dir = WORK / job_id / "upscaled"
+    thumb_dir = WORK / job_id / "thumbs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    ext = "jpg" if req.fmt == "jpg" else "png"
+    try:
+        cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
+        entry = upscaler.resolve(req.model_id, cfg)
+        if not entry:
+            raise RuntimeError(f"Unknown upscale model: {req.model_id}")
+        token = hf_auth.load_token(HF_TOKEN_PATH)
+        job["state"] = "loading_model"
+        job["current"] = "Loading the upscale model…"
+        scale = int(entry.get("scale") or 0) or 4
+        job["state"] = "processing"
+        for i, src in enumerate(files):
+            job["current"] = src.name
+            try:
+                img = image_utils.load_source(str(src))
+                target = _upscale_target((img.width, img.height), req.mode,
+                                         req.long_side, scale)
+                passes = upscaler.plan_passes((img.width, img.height), target,
+                                              scale, min_ratio=1.0)
+                big = upscaler.upscale(img, entry, passes, token=token)
+                if (big.width, big.height) != target:
+                    big = big.resize(target, Image.LANCZOS)
+                out_name = _upscale_out_name(i, src, ext)
+                image_utils.save_image(big, str(out_dir / out_name),
+                                       req.fmt, req.jpg_quality)
+                image_utils.make_thumbnail(big, 480).save(
+                    str(thumb_dir / f"{i:04d}.jpg"), format="JPEG", quality=80)
+                job["results"].append({
+                    "idx": i, "src_name": src.name, "out_name": out_name,
+                    "width": big.width, "height": big.height, "error": "",
+                })
+            except Exception as e:  # noqa: BLE001 - keep going on per-file errors
+                job["results"].append({
+                    "idx": i, "src_name": src.name, "out_name": "",
+                    "width": 0, "height": 0, "error": str(e),
+                })
+            job["processed"] = i + 1
+        job["current"] = ""
+        job["state"] = "done"
+    except Exception as e:  # noqa: BLE001
+        job["state"] = "error"
+        job["error"] = f"{e}\n{traceback.format_exc()}"
+
+
+@app.post("/api/upscale/run")
+def api_upscale_run(req: UpscaleRunRequest):
+    files = _list_images(req.folder)
+    if not files:
+        raise HTTPException(400, "No supported images in the folder.")
+    job_id = uuid.uuid4().hex
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "id": job_id, "kind": "upscale", "state": "pending",
+            "total": len(files), "processed": 0, "current": "", "error": "",
+            "config": req.model_dump(), "results": [],
+        }
+    threading.Thread(target=_run_upscale_job, args=(job_id, req, files),
+                     daemon=True).start()
+    return {"job_id": job_id, "total": len(files)}
+
+
+@app.get("/api/upscale/job/{job_id}")
+def api_upscale_job(job_id: str):
+    job = _job_of_kind(job_id, "upscale")
+    return {
+        "state": job["state"], "total": job["total"], "processed": job["processed"],
+        "current": job["current"], "error": job["error"], "results": job["results"],
+    }
+
+
+@app.get("/api/upscale/thumb/{job_id}/{idx}")
+def api_upscale_thumb(job_id: str, idx: int):
+    path = WORK / job_id / "thumbs" / f"{idx:04d}.jpg"
+    if not path.exists():
+        raise HTTPException(404, "No thumbnail.")
+    return FileResponse(str(path), media_type="image/jpeg")
+
+
+@app.post("/api/upscale/export")
+def api_upscale_export(req: UpscaleExportRequest):
+    job = _job_of_kind(req.job_id, "upscale")
+    if job["state"] != "done":
+        raise HTTPException(400, "The job is not finished.")
+    if not req.output_folder.strip():
+        raise HTTPException(400, "Enter a destination folder.")
+    dest = Path(req.output_folder).expanduser()
+    dest.mkdir(parents=True, exist_ok=True)
+    src_dir = WORK / req.job_id / "upscaled"
+    written = 0
+    for r in job["results"]:
+        if not r["out_name"]:
+            continue
+        shutil.copy2(src_dir / r["out_name"], dest / r["out_name"])
+        written += 1
+    return {"written": written, "folder": str(dest)}
+
+
+@app.get("/api/upscale/zip/{job_id}")
+def api_upscale_zip(job_id: str):
+    job = _job_of_kind(job_id, "upscale")
+    if job["state"] != "done":
+        raise HTTPException(400, "The job is not finished.")
+    src_dir = WORK / job_id / "upscaled"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for r in job["results"]:
+            if r["out_name"]:
+                zf.write(src_dir / r["out_name"], r["out_name"])
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="upscaled_{job_id[:8]}.zip"'},
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1608,9 +2083,7 @@ def api_prompt(req: PromptRequest):
 @app.post("/api/zip")
 def api_zip(req: ExportRequest):
     """Build the dataset as an in-memory ZIP and return it as a download."""
-    job = JOBS.get(req.job_id)
-    if not job:
-        raise HTTPException(404, "Unknown job.")
+    job = _job_of_kind(req.job_id, "dataset")
     if job["state"] != "done":
         raise HTTPException(400, "The job is not finished.")
 

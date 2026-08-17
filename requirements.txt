@@ -8,6 +8,10 @@ websocket-client>=1.7.0
 pillow>=10.2.0
 pillow-heif>=0.16.0
 
+# Super-resolution (upscale models loaded the same way ComfyUI does it)
+spandrel>=0.3.4
+huggingface_hub>=0.23.0
+
 # Vision-language captioning (Qwen2.5-VL)
 # NOTE: on Linux the default PyPI torch wheel is CUDA-enabled (good for the RTX 4070 Ti).
 torch>=2.4.0

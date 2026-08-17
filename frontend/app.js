@@ -47,10 +47,119 @@ function populateModels(models, def, selectKey) {
     populateModels(models, def);
     const cfg = await api("/api/lmstudio");
     if ($("lmstudioUrl")) $("lmstudioUrl").value = cfg.url;
+    loadUpscaleModels();
+    refreshHfToken();
   } catch (e) {
     console.error(e);
   }
 })();
+
+// --------------------------------------------------------------------------- //
+// Upscale models + Hugging Face token
+// --------------------------------------------------------------------------- //
+// NOTE: declared as a hoisted function declaration (not a `window.x = async
+// function ...` expression as originally drafted) because init() above is an
+// IIFE that runs immediately and calls loadUpscaleModels() before a later
+// assignment would have executed. A hoisted declaration is available
+// throughout the whole script, matching the pattern already used by
+// refreshGpu() below.
+async function loadUpscaleModels(selected) {
+  const { models, folder } = await api("/api/upscale/models");
+  for (const selId of ["upscaleModel", "uModel"]) {
+    const sel = $(selId);
+    if (!sel) continue;
+    const prev = selected || sel.value;
+    sel.innerHTML = "";
+    if (selId === "upscaleModel") {
+      const off = document.createElement("option");
+      off.value = "";
+      off.textContent = "Off (plain LANCZOS)";
+      sel.appendChild(off);
+    }
+    for (const m of models) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = (m.cached ? "✓ " : "⬇ ") + m.label;
+      sel.appendChild(opt);
+    }
+    if (prev) sel.value = prev;
+  }
+  if ($("upFolder") && folder && !$("upFolder").value) $("upFolder").value = folder;
+  return models;
+}
+window.loadUpscaleModels = loadUpscaleModels;
+
+async function refreshHfToken() {
+  try {
+    const st = await api("/api/hf/token");
+    $("hfInfo").textContent = st.set ? `Token set (…${st.tail})` : "No token.";
+  } catch (e) {
+    $("hfInfo").textContent = "Error: " + e.message;
+  }
+}
+
+$("hfSaveBtn").addEventListener("click", async () => {
+  try {
+    await api("/api/hf/token", { token: $("hfToken").value });
+    $("hfToken").value = "";
+    refreshHfToken();
+  } catch (e) {
+    $("hfInfo").textContent = "Error: " + e.message;
+  }
+});
+
+$("hfClearBtn").addEventListener("click", async () => {
+  try {
+    const res = await fetch("/api/hf/token", { method: "DELETE" });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt || res.statusText);
+    }
+    refreshHfToken();
+  } catch (e) {
+    $("hfInfo").textContent = "Error: " + e.message;
+  }
+});
+
+$("upScanBtn").addEventListener("click", async () => {
+  try {
+    await api("/api/upscale/models/scan", { folder: $("upFolder").value.trim() });
+    loadUpscaleModels();
+  } catch (e) {
+    $("upModelInfo").textContent = "Error: " + e.message;
+  }
+});
+
+$("upCustomAddBtn").addEventListener("click", async () => {
+  try {
+    await api("/api/upscale/models/custom", {
+      repo_id: $("upCustomRepo").value.trim(),
+      filename: $("upCustomFile").value.trim(),
+    });
+    $("upCustomRepo").value = "";
+    $("upCustomFile").value = "";
+    loadUpscaleModels();
+  } catch (e) {
+    $("upModelInfo").textContent = "Error: " + e.message;
+  }
+});
+
+$("upDownloadBtn").addEventListener("click", async () => {
+  const id = $("upscaleModel").value;
+  if (!id) return;
+  const btn = $("upDownloadBtn");
+  btn.disabled = true;
+  $("upModelInfo").textContent = "Downloading the weights…";
+  try {
+    await api("/api/upscale/download", { model_id: id });
+    $("upModelInfo").textContent = "Weights ready.";
+    loadUpscaleModels(id);
+  } catch (e) {
+    $("upModelInfo").textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // --------------------------------------------------------------------------- //
 // GPU status + releasing models from memory
@@ -60,16 +169,28 @@ const shortModel = (m) => (m ? m.split("/").pop() : "");
 function applyGpu(g) {
   const el = $("gpuStatus");
   const btn = $("unloadBtn");
+  // "loaded" is the OR of every model that can hold VRAM (captioner and
+  // upscaler), so ⏏ Release GPU is offered whenever there is something to free.
+  const parts = [];
+  if (g.model) parts.push(`Model: ${shortModel(g.model)} (${g.quant})`);
+  if (g.upscale_loaded) {
+    parts.push(
+      `Upscaler: ${shortModel(g.upscale_model)}` +
+      (g.upscale_device === "cpu" ? " (CPU)" : ""));
+  }
   if (!g.cuda) {
-    el.textContent = "GPU: brak CUDA (CPU)";
-    btn.disabled = true;
+    el.textContent = parts.length
+      ? parts.join(" · ") + " · no CUDA (CPU)"
+      : "GPU: no CUDA (CPU)";
+    el.className = "info";
+    btn.disabled = !g.loaded;
     return;
   }
   const vram = g.vram_total_gb
     ? ` · VRAM ${g.vram_used_gb}/${g.vram_total_gb} GB`
     : "";
   if (g.loaded) {
-    el.textContent = `Model: ${shortModel(g.model)} (${g.quant})${vram}`;
+    el.textContent = parts.join(" · ") + vram + (g.upscale_note ? ` · ${g.upscale_note}` : "");
     el.className = "info ok";
     btn.disabled = false;
   } else {
@@ -115,6 +236,7 @@ function switchView(view) {
     div.classList.toggle("hidden", div.id !== "view-" + view));
   if (view === "comfy") { loadComfyConfig(); loadEditorWorkflowFromServer(); }
   if (view === "bbox" && window.BboxEditor) window.BboxEditor.onShow();
+  if (view === "upscale" && window.UpscaleView) window.UpscaleView.onShow();
 }
 window.switchView = switchView;
 
@@ -146,6 +268,7 @@ $("scanBtn").addEventListener("click", async () => {
     const r = await api("/api/scan", { folder });
     state.folder = r.folder;
     state.count = r.count;
+    CropPlan.setSource(r.folder, r.files);
     setSrcInfo(`Found ${r.count} images in: ${r.folder}`, "ok");
     $("processBtn").disabled = r.count === 0;
   } catch (e) {
@@ -178,6 +301,7 @@ async function uploadFiles(fileList) {
     const r = await res.json();
     state.folder = r.folder;
     state.count = r.count;
+    CropPlan.setSource(r.folder, r.files || []);
     setSrcInfo(`Uploaded ${r.count} images.`, "ok");
     $("processBtn").disabled = r.count === 0;
   } catch (e) {
@@ -207,9 +331,12 @@ $("processBtn").addEventListener("click", async () => {
     jpg_quality: parseInt($("jpgQuality").value, 10),
     model: $("model").value,
     quant: $("quant").value,
+    upscale_model: $("upscaleModel").value,
     max_tokens: parseInt($("maxTokens").value, 10),
     do_caption: $("doCaption").checked,
     caption_format: $("captionFormat").value,
+    ...CropPlan.settings(),
+    crops: CropPlan.all(),
   };
 
   $("processBtn").disabled = true;
@@ -285,7 +412,7 @@ function renderResults(job) {
         <img src="/api/thumb/${job.id}/${r.idx}" loading="lazy" />
         <div class="meta">
           <span>${r.out_name || r.src_name}</span>
-          <span>${r.width}×${r.height}</span>
+          <span>${r.width}×${r.height}${r.upscaled ? ' <span title="Upscaled with the selected model">✨</span>' : ""}</span>
         </div>
         <div class="trigprefix" data-idx="${r.idx}"></div>
         <textarea data-idx="${r.idx}" placeholder="(opis)"></textarea>`;
@@ -301,8 +428,26 @@ function renderResults(job) {
       });
     }
   }
+  renderUpscaleWarning(job);
   updateTriggerPreviews();
   updateExportCount();
+}
+
+// A failing upscaler degrades to plain LANCZOS, which otherwise shows up only
+// as missing ✨ badges — say it out loud instead.
+function renderUpscaleWarning(job) {
+  const el = $("upscaleWarn");
+  if (!el) return;
+  const bad = job.results.filter((r) => r.upscale_error);
+  if (!bad.length) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  const what = bad.length === 1 ? "1 image" : `${bad.length} images`;
+  el.textContent =
+    `Upscaling failed on ${what} (resized without the model): ${bad[0].upscale_error}`;
+  el.classList.remove("hidden");
 }
 
 // Live preview of the trigger word prepended to every caption.
