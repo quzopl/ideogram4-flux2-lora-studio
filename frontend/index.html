@@ -6,6 +6,7 @@
   <title>Ideogram4 FLUX2 LoRA — dataset & prompt studio</title>
   <link rel="stylesheet" href="/style.css" />
   <link rel="stylesheet" href="/bbox_editor.css" />
+  <link rel="stylesheet" href="/crop_editor.css" />
 </head>
 <body>
   <header>
@@ -16,6 +17,7 @@
       <button class="navtab" data-view="prompts">✨ Prompt studio</button>
       <button class="navtab" data-view="bbox">🧩 Bbox editor</button>
       <button class="navtab" data-view="comfy">🎨 ComfyUI</button>
+      <button class="navtab" data-view="upscale">🔍 Upscale</button>
       <div class="gpubar">
         <span id="gpuStatus" class="info">GPU: …</span>
         <button id="unloadBtn" title="Release models from GPU memory" disabled>⏏ Release GPU</button>
@@ -48,6 +50,12 @@
       </div>
 
       <p id="srcInfo" class="info"></p>
+      <div id="cropBar" class="row hidden">
+        <button type="button" id="autoCropBtn" class="mini">✂ Auto-crop all</button>
+        <button type="button" id="clearCropsBtn" class="mini">Clear crops</button>
+        <span id="cropInfo" class="info"></span>
+      </div>
+      <div id="srcGrid" class="srcgrid"></div>
     </section>
 
     <!-- STEP 2: SETTINGS -->
@@ -111,6 +119,44 @@
         </div>
 
         <div class="field">
+          <label>Crop source</label>
+          <select id="cropMode">
+            <option value="center" selected>Centre (whole frame)</option>
+            <option value="auto">Auto (Florence-2 subject)</option>
+            <option value="manual">Manual (per-image crops)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Fit</label>
+          <select id="fitMode">
+            <option value="cover" selected>Cover (crop to fill)</option>
+            <option value="contain">Contain (pad with colour)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Pad colour</label>
+          <input type="color" id="padColor" value="#000000" />
+        </div>
+
+        <div class="field">
+          <label>Centering (horizontal / vertical)</label>
+          <div class="row">
+            <select id="centeringX">
+              <option value="left">Left</option>
+              <option value="center" selected>Centre</option>
+              <option value="right">Right</option>
+            </select>
+            <select id="centeringY">
+              <option value="top">Top</option>
+              <option value="center" selected>Centre</option>
+              <option value="bottom">Bottom</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
           <label>Format</label>
           <select id="fmt">
             <option value="png" selected>PNG (lossless)</option>
@@ -145,6 +191,36 @@
         </div>
 
         <div class="field">
+          <label>Upscale model (used when the crop is smaller than the target)</label>
+          <select id="upscaleModel"></select>
+          <button type="button" id="upDownloadBtn" class="mini">⬇ Download weights</button>
+          <span id="upModelInfo" class="info"></span>
+        </div>
+
+        <div class="field">
+          <label>Local upscale model folder</label>
+          <div class="row">
+            <input type="text" id="upFolder" placeholder="/home/user/ComfyUI/models/upscale_models" />
+            <button type="button" id="upScanBtn" class="mini">Scan</button>
+          </div>
+          <div class="row">
+            <input type="text" id="upCustomRepo" placeholder="HF repo id, e.g. me/my-upscaler" />
+            <input type="text" id="upCustomFile" placeholder="file.pth" />
+            <button type="button" id="upCustomAddBtn" class="mini">Add</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Hugging Face token (for gated repos)</label>
+          <div class="row">
+            <input type="password" id="hfToken" placeholder="hf_…" />
+            <button type="button" id="hfSaveBtn" class="mini">Save</button>
+            <button type="button" id="hfClearBtn" class="mini">Remove</button>
+          </div>
+          <span id="hfInfo" class="info"></span>
+        </div>
+
+        <div class="field">
           <label>Max caption length (tokens)</label>
           <input type="number" id="maxTokens" value="512" min="64" max="2048" step="32" />
         </div>
@@ -175,6 +251,7 @@
 
     <section class="card hidden" id="resultsCard">
       <h2><span class="num">4</span> Review and edit captions</h2>
+      <p class="info err hidden" id="upscaleWarn"></p>
       <div id="results" class="results"></div>
     </section>
 
@@ -586,6 +663,98 @@
         <div id="cGallery" class="results"></div>
       </section>
     </div><!-- /view-comfy -->
+
+    <!-- VIEW: UPSCALE -->
+    <div id="view-upscale" class="hidden">
+      <section class="card">
+        <h2><span class="num">1</span> Images to upscale</h2>
+        <div class="row">
+          <input type="text" id="uFolder" placeholder="/home/user/photos/small" />
+          <button id="uScanBtn">Scan</button>
+        </div>
+        <div class="dropzone" id="uDropzone">Drop images…</div>
+        <input type="file" id="uFileInput" multiple accept="image/*,.heic,.heif" hidden />
+        <p id="uSrcInfo" class="info"></p>
+      </section>
+
+      <section class="card">
+        <h2><span class="num">2</span> Model and target size</h2>
+        <div class="grid">
+          <div class="field">
+            <label>Upscale model</label>
+            <select id="uModel"></select>
+          </div>
+          <div class="field">
+            <label>Target</label>
+            <select id="uMode">
+              <option value="native" selected>Model's native scale</option>
+              <option value="x2">x2</option>
+              <option value="long_side">Long side = N px</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Long side (px)</label>
+            <input type="number" id="uLongSide" value="2048" min="256" max="8192" step="64" />
+          </div>
+          <div class="field">
+            <label>Output format</label>
+            <select id="uFmt">
+              <option value="png" selected>PNG (lossless)</option>
+              <option value="jpg">JPG</option>
+            </select>
+          </div>
+        </div>
+        <button id="uRunBtn" class="primary" disabled>Upscale images</button>
+      </section>
+
+      <section class="card hidden" id="uProgressCard">
+        <h2><span class="num">3</span> Progress</h2>
+        <div class="progress"><div id="uProgressBar"></div></div>
+        <p id="uProgressText" class="info"></p>
+        <div id="uResults" class="srcgrid"></div>
+      </section>
+
+      <section class="card hidden" id="uExportCard">
+        <h2><span class="num">4</span> Save</h2>
+        <div class="row">
+          <input type="text" id="uOutFolder" placeholder="/home/user/photos/upscaled" />
+          <button id="uExportBtn" class="primary">Save to folder</button>
+        </div>
+        <div class="orline"><span>or</span></div>
+        <button id="uZipBtn" class="primary">⬇ Download .zip</button>
+        <p id="uExportInfo" class="info"></p>
+      </section>
+    </div><!-- /view-upscale -->
+
+    <div id="cropModal" class="cropmodal hidden">
+      <div class="cropbox">
+        <div class="crophead">
+          <strong id="cropTitle">crop</strong>
+          <select id="cropRatio">
+            <option value="free" selected>Free</option>
+            <option value="1">1:1</option>
+            <option value="0.75">3:4</option>
+            <option value="1.3333">4:3</option>
+            <option value="1.7778">16:9</option>
+          </select>
+          <span id="cropSize" class="info"></span>
+          <span class="spacer"></span>
+          <button type="button" id="cropAutoBtn" class="mini">Auto (Florence)</button>
+          <button type="button" id="cropResetBtn" class="mini">Reset</button>
+          <button type="button" id="cropApplyAllBtn" class="mini">Apply to same ratio</button>
+          <button type="button" id="cropSaveBtn" class="primary">Save</button>
+          <button type="button" id="cropCancelBtn" class="mini">Cancel</button>
+        </div>
+        <div class="cropstage" id="cropStage">
+          <img id="cropImg" alt="" />
+          <div id="cropRect" class="croprect">
+            <i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i>
+            <i data-h="w"></i><i data-h="e"></i>
+            <i data-h="sw"></i><i data-h="s"></i><i data-h="se"></i>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <!-- Gallery lightbox: full image + prompt + actions -->
@@ -616,5 +785,7 @@
   <script src="/ideogram_render.js"></script>
   <script src="/image_to_prompt.js"></script>
   <script src="/app.js"></script>
+  <script src="/crop_editor.js"></script>
+  <script src="/upscale.js"></script>
 </body>
 </html>

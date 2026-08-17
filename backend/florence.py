@@ -230,6 +230,28 @@ def _run_task(image, task: str) -> dict | str:
     return parsed.get(task, next(iter(parsed.values()), None)) if isinstance(parsed, dict) else parsed
 
 
+def _run_task_grounding(image, phrase: str) -> dict | str:
+    """<CAPTION_TO_PHRASE_GROUNDING> for a single phrase (used by auto-crop)."""
+    rt = _get_runtime()
+    task = "<CAPTION_TO_PHRASE_GROUNDING>"
+    inputs = rt["processor"](text=task + phrase, images=image, return_tensors="pt")
+    moved = {}
+    for k, v in inputs.items():
+        if hasattr(v, "to"):
+            v = v.to(rt["device"])
+            if k == "pixel_values":
+                v = v.to(rt["model"].dtype)
+        moved[k] = v
+    with rt["torch"].inference_mode():
+        ids = rt["model"].generate(
+            input_ids=moved["input_ids"], pixel_values=moved["pixel_values"],
+            max_new_tokens=512, num_beams=3)
+    raw = rt["processor"].batch_decode(ids, skip_special_tokens=False)[0]
+    parsed = rt["processor"].post_process_generation(
+        raw, task=task, image_size=(image.width, image.height))
+    return parsed.get(task, {}) if isinstance(parsed, dict) else {}
+
+
 def analyze_image(image) -> tuple[str, list[dict]]:
     """PIL.Image -> (scene caption, v15 elements). Loads the model on first use."""
     caption = _run_task(image, "<MORE_DETAILED_CAPTION>")

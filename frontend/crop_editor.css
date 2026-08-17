@@ -1,0 +1,57 @@
+/* Source image grid + crop badges (step 1) */
+.srcgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.srcgrid .cell {
+  position: relative;
+  border: 1px solid #2c3444;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #11151d;
+}
+.srcgrid .cell img { display: block; width: 100%; height: 120px; object-fit: cover; }
+.srcgrid .cell .name {
+  font-size: 11px; padding: 3px 5px; color: #9aa4b5;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.srcgrid .cell.cropped { border-color: #4c8bf5; }
+.srcgrid .cell .badge {
+  position: absolute; top: 4px; right: 4px;
+  background: #4c8bf5; color: #fff; border-radius: 4px;
+  font-size: 11px; padding: 1px 4px;
+}
+
+/* Crop editor modal */
+.cropmodal {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(4, 7, 12, .82);
+  display: flex; align-items: center; justify-content: center;
+}
+.cropmodal.hidden { display: none; }
+.cropbox {
+  background: #141a24; border: 1px solid #2c3444; border-radius: 10px;
+  padding: 12px; max-width: 94vw; max-height: 94vh; display: flex; flex-direction: column; gap: 10px;
+}
+.crophead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.crophead .spacer { flex: 1; }
+.cropstage { position: relative; line-height: 0; overflow: hidden; }
+.cropstage img { max-width: 88vw; max-height: 76vh; user-select: none; -webkit-user-drag: none; }
+.croprect {
+  position: absolute; border: 2px solid #4c8bf5; cursor: move;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45);
+}
+.croprect i {
+  position: absolute; width: 12px; height: 12px; background: #4c8bf5; border-radius: 2px;
+}
+.croprect i[data-h="nw"] { left: -7px; top: -7px; cursor: nwse-resize; }
+.croprect i[data-h="n"]  { left: calc(50% - 6px); top: -7px; cursor: ns-resize; }
+.croprect i[data-h="ne"] { right: -7px; top: -7px; cursor: nesw-resize; }
+.croprect i[data-h="w"]  { left: -7px; top: calc(50% - 6px); cursor: ew-resize; }
+.croprect i[data-h="e"]  { right: -7px; top: calc(50% - 6px); cursor: ew-resize; }
+.croprect i[data-h="sw"] { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.croprect i[data-h="s"]  { left: calc(50% - 6px); bottom: -7px; cursor: ns-resize; }
+.croprect i[data-h="se"] { right: -7px; bottom: -7px; cursor: nwse-resize; }
