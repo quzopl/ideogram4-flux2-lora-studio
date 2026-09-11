@@ -13,6 +13,8 @@ import os
 import threading
 from pathlib import Path
 
+from . import gpu
+
 WEIGHT_EXT = {".pth", ".safetensors"}
 MAX_PASSES = 2
 
@@ -180,10 +182,10 @@ def _load(entry: dict, token: str = "") -> dict:
         model = ModelLoader().load_from_file(path)
         if not isinstance(model, ImageModelDescriptor):
             raise RuntimeError(f"{entry['filename']} is not an image upscaler.")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = gpu.current_device()
         # fp16 halves both the weights and the activations, but only where the
         # architecture says it is safe (spandrel knows which ones overflow).
-        half = device == "cuda" and bool(getattr(model, "supports_half", False))
+        half = gpu.is_cuda(device) and bool(getattr(model, "supports_half", False))
         dtype = torch.float16 if half else torch.float32
         model.to(device)
         if half:
@@ -200,13 +202,11 @@ def unload() -> None:
     with _LOCK:
         if _RUNTIME is None:
             return
-        torch = _RUNTIME["torch"]
         _RUNTIME = None
         _NOTE = ""
         import gc
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        gpu.empty_cache()
 
 
 def is_loaded() -> bool:
@@ -285,8 +285,7 @@ def _to_cpu(rt: dict) -> None:
         rt["model"].to(dtype=torch.float32)
     rt["device"] = "cpu"
     rt["dtype"] = torch.float32
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    gpu.empty_cache()
 
 
 def _is_oom(e: Exception) -> bool:
@@ -294,11 +293,9 @@ def _is_oom(e: Exception) -> bool:
 
 
 def _empty_cache(rt: dict) -> None:
-    torch = rt["torch"]
-    # A CPU-only torch build has no working cuda allocator; calling into it
-    # here would mask the error we are actually trying to recover from.
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    # gpu.empty_cache() is a no-op on a CPU-only torch build, so it cannot
+    # mask the error we are actually trying to recover from.
+    gpu.empty_cache()
 
 
 def upscale(img, entry: dict, passes: int, token: str = ""):

@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
-from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence,
+from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence, gpu,
                hf_auth, ideogram_workflow, image_utils, lmstudio, prompts, upscaler,
                v15_lint)
 
@@ -841,6 +841,13 @@ def _gpu_status() -> dict:
     info["upscale_device"] = up["device"]
     info["upscale_note"] = up["note"]
     info["loaded"] = bool(info.get("loaded")) or up["loaded"]
+    # VRAM of the card the models actually use (captioner measures the torch
+    # default device, which is not necessarily the chosen one).
+    devices = gpu.probe()
+    chosen = gpu.resolve(gpu.load_selected(gpu.CONFIG_PATH), devices)
+    info["gpu_label"] = gpu.label(chosen, devices) if chosen else ""
+    if chosen:
+        info["vram_used_gb"], info["vram_total_gb"] = gpu.vram_gb(chosen)
     return info
 
 
@@ -853,6 +860,34 @@ def api_gpu():
 def api_unload():
     if _busy():
         raise HTTPException(409, "Processing in progress — wait for it to finish.")
+    captioner.unload()
+    florence.unload()
+    upscaler.unload()
+    return _gpu_status()
+
+
+class GpuSelectRequest(BaseModel):
+    uuid: str
+
+
+@app.get("/api/gpus")
+def api_gpus():
+    """Cards for the topbar select, labelled by name — never by CUDA index."""
+    devices = gpu.probe()
+    chosen = gpu.resolve(gpu.load_selected(gpu.CONFIG_PATH), devices)
+    return {"gpus": gpu.listing(devices, chosen["uuid"] if chosen else None),
+            "selected": chosen["uuid"] if chosen else None}
+
+
+@app.post("/api/gpu/select")
+def api_gpu_select(req: GpuSelectRequest):
+    """Switch the card the models load on. Loaded models sit on the old card,
+    so they are released; the next use loads them on the new one."""
+    if _busy():
+        raise HTTPException(409, "Processing in progress — wait for it to finish.")
+    if not any(d["uuid"] == req.uuid for d in gpu.probe()):
+        raise HTTPException(400, "Unknown GPU.")
+    gpu.save_selected(gpu.CONFIG_PATH, req.uuid)
     captioner.unload()
     florence.unload()
     upscaler.unload()
