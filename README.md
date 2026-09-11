@@ -51,7 +51,14 @@ prompting:
   the dataset tab.
 
 The top bar shows the GPU status (loaded model and VRAM usage) and a
-**⏏ Release GPU** button that unloads the models from the card.
+**⏏ Release GPU** button that unloads the models from the card. On a machine
+with more than one NVIDIA card, a picker next to it lists the cards **by name
+and memory** (e.g. `RTX 5080 · 16 GB`) — never by CUDA number, which can
+disagree with `nvidia-smi`. The choice is remembered by the card's UUID, the
+card with the most memory is used until you pick one, and switching releases
+the loaded models so they reload on the new card. It applies to the local
+models (VLM, Florence-2, upscaler); ComfyUI and LM Studio are separate
+processes and keep their own GPU settings.
 
 ## Screenshots
 

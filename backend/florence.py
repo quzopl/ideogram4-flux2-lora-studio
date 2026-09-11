@@ -17,6 +17,8 @@ import os
 import re
 import threading
 
+from . import gpu
+
 # Checkpoints converted for the native transformers >= 5 implementation
 # (the original microsoft/Florence-2-* need trust_remote_code and older
 # transformers). Bigger variant: florence-community/Florence-2-large-ft.
@@ -182,8 +184,8 @@ def _get_runtime() -> dict:
         import torch
         from transformers import AutoProcessor, Florence2ForConditionalGeneration
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if device == "cuda" else torch.float32
+        device = gpu.current_device()
+        dtype = torch.float16 if gpu.is_cuda(device) else torch.float32
         model = Florence2ForConditionalGeneration.from_pretrained(
             DEFAULT_MODEL, dtype=dtype).to(device)
         model.eval()
@@ -199,12 +201,10 @@ def unload() -> None:
     with _LOCK:
         if _RUNTIME is None:
             return
-        torch = _RUNTIME["torch"]
         _RUNTIME = None
         import gc
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        gpu.empty_cache()
 
 
 def _run_task(image, task: str) -> dict | str:
