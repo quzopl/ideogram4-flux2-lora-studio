@@ -9,7 +9,7 @@ import threading
 
 from PIL import Image
 
-from . import prompts
+from . import gpu, prompts
 
 # Models exposed in the UI. Keep the lighter one first for safe defaults.
 AVAILABLE_MODELS = {
@@ -25,7 +25,7 @@ _state: dict = {"model": None, "processor": None, "key": None}
 def _device():
     import torch
 
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    return gpu.current_device()
 
 
 def ensure_loaded(model_name: str, quant: str) -> None:
@@ -41,12 +41,12 @@ def ensure_loaded(model_name: str, quant: str) -> None:
         # Free any previously loaded model before swapping.
         _state["model"] = None
         _state["processor"] = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        gpu.empty_cache()
 
         # transformers 5.x renamed torch_dtype -> dtype.
         load_kwargs: dict = {"dtype": torch.float16}
-        on_cuda = torch.cuda.is_available()
+        device = gpu.current_device()
+        on_cuda = gpu.is_cuda(device)
 
         if quant == "4bit" and on_cuda:
             from transformers import BitsAndBytesConfig
@@ -57,9 +57,9 @@ def ensure_loaded(model_name: str, quant: str) -> None:
                 bnb_4bit_compute_dtype=torch.float16,
                 bnb_4bit_use_double_quant=True,
             )
-            load_kwargs["device_map"] = "cuda"
+            load_kwargs["device_map"] = device
         elif on_cuda:
-            load_kwargs["device_map"] = "cuda"
+            load_kwargs["device_map"] = device
 
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_name, **load_kwargs
@@ -89,8 +89,8 @@ def unload() -> None:
         _state["processor"] = None
         _state["key"] = None
         gc.collect()
+        gpu.empty_cache()
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
 
 
@@ -99,21 +99,21 @@ def is_loaded() -> bool:
 
 
 def gpu_status() -> dict:
-    """Report whether a model is loaded and current VRAM usage."""
+    """Report whether a model is loaded.
+
+    VRAM is measured by the server on the chosen card (``gpu.vram_gb``): a
+    bare ``torch.cuda.mem_get_info()`` here would read — and open a CUDA
+    context on — cuda:0, which is not necessarily the card in use.
+    """
     import torch
 
     key = _state["key"]
-    info: dict = {
+    return {
         "loaded": _state["model"] is not None,
         "model": key[0] if key else None,
         "quant": key[1] if key else None,
         "cuda": torch.cuda.is_available(),
     }
-    if torch.cuda.is_available():
-        free, total = torch.cuda.mem_get_info()
-        info["vram_used_gb"] = round((total - free) / 1e9, 2)
-        info["vram_total_gb"] = round(total / 1e9, 2)
-    return info
 
 
 def caption_image(
