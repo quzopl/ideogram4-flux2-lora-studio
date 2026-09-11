@@ -169,6 +169,7 @@ const shortModel = (m) => (m ? m.split("/").pop() : "");
 function applyGpu(g) {
   const el = $("gpuStatus");
   const btn = $("unloadBtn");
+  el.title = g.gpu_label ? `VRAM of ${g.gpu_label}` : "";
   // "loaded" is the OR of every model that can hold VRAM (captioner and
   // upscaler), so ⏏ Release GPU is offered whenever there is something to free.
   const parts = [];
@@ -208,6 +209,45 @@ async function refreshGpu() {
   }
 }
 
+// GPU picker: cards are listed by name (never by CUDA number, which can
+// disagree with nvidia-smi). Hidden when there is nothing to choose.
+async function loadGpus() {
+  const sel = $("gpuSelect");
+  try {
+    const { gpus } = await api("/api/gpus");
+    sel.innerHTML = "";
+    for (const g of gpus) {
+      const opt = document.createElement("option");
+      opt.value = g.uuid;
+      opt.textContent = g.label;
+      opt.selected = g.selected;
+      sel.appendChild(opt);
+    }
+    sel.classList.toggle("hidden", gpus.length < 2);
+  } catch (e) {
+    sel.classList.add("hidden");
+    console.error(e);
+  }
+}
+
+$("gpuSelect").addEventListener("change", async () => {
+  const sel = $("gpuSelect");
+  const label = sel.options[sel.selectedIndex].textContent;
+  sel.disabled = true;
+  try {
+    applyGpu(await api("/api/gpu/select", { uuid: sel.value }));
+    $("gpuStatus").textContent = `Using ${label} — models will load there next time.`;
+    $("gpuStatus").className = "info ok";
+    setTimeout(refreshGpu, 4000);
+  } catch (e) {
+    $("gpuStatus").textContent = "GPU switch failed: " + e.message;
+    $("gpuStatus").className = "info err";
+    loadGpus(); // put the select back on the card actually in use
+  } finally {
+    sel.disabled = false;
+  }
+});
+
 $("unloadBtn").addEventListener("click", async () => {
   const btn = $("unloadBtn");
   btn.disabled = true;
@@ -223,6 +263,7 @@ $("unloadBtn").addEventListener("click", async () => {
 });
 
 refreshGpu();
+loadGpus();
 
 // --------------------------------------------------------------------------- //
 // Top navigation (Dataset <-> Prompt studio)
