@@ -223,7 +223,8 @@
 
         <div class="field">
           <label>Max caption length (tokens)</label>
-          <input type="number" id="maxTokens" value="512" min="64" max="2048" step="32" />
+          <input type="number" id="maxTokens" value="512" min="64" max="8192" step="32"
+                 title="Reasoning models (Qwen3 and friends) count their thinking against this limit — give them 2048+ or they return nothing." />
         </div>
 
         <div class="field">
@@ -316,7 +317,8 @@
           </div>
           <div class="field">
             <label>Max length (tokens)</label>
-            <input type="number" id="pMaxTokens" value="768" min="64" max="2048" step="32" />
+            <input type="number" id="pMaxTokens" value="768" min="64" max="8192" step="32"
+                   title="Reasoning models (Qwen3 and friends) count their thinking against this limit — give them 2048+ or they return nothing." />
           </div>
           <div class="field hidden" id="pElemDetailField">
             <label>Element count (Ideogram)</label>
