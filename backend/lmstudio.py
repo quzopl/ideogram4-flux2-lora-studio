@@ -42,6 +42,25 @@ def list_models(base_url: str = DEFAULT_URL, timeout: float = 3.0) -> list[str]:
     return [m["id"] for m in data if isinstance(m, dict) and m.get("id")]
 
 
+def _empty_answer_reason(out: dict, choice: dict) -> str:
+    """Why the answer came back empty.
+
+    Reasoning models (Qwen3 and friends) stream their thinking into
+    "reasoning_content" and it counts against max_tokens — run out of budget
+    there and "content" stays empty while LM Studio still looks busy.
+    """
+    message = choice.get("message") or {}
+    usage = out.get("usage") or {}
+    details = usage.get("completion_tokens_details") or {}
+    spent = details.get("reasoning_tokens") or usage.get("completion_tokens") or 0
+    if message.get("reasoning_content") or details.get("reasoning_tokens"):
+        return (f"The model spent all {spent} tokens on reasoning and never wrote "
+                f"the answer. Raise the max tokens setting ('Max caption length' "
+                f"in the dataset view; 2048+ works for Qwen3-class models) or pick "
+                f"a model that does not think.")
+    return "LM Studio returned an empty answer."
+
+
 def _chat(base_url: str, payload: dict, timeout: float) -> str:
     url = f"{base_url.rstrip('/')}/chat/completions"
     try:
@@ -53,11 +72,12 @@ def _chat(base_url: str, payload: dict, timeout: float) -> str:
     except ValueError as e:
         raise LMStudioError("Bad LM Studio response (not JSON).") from e
     try:
-        content = out["choices"][0]["message"]["content"]
+        choice = out["choices"][0]
+        content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError) as e:
         raise LMStudioError("LM Studio returned a response without content.") from e
-    if content is None:
-        raise LMStudioError("LM Studio returned empty content (content=null).")
+    if not (content or "").strip():
+        raise LMStudioError(_empty_answer_reason(out, choice))
     return content
 
 

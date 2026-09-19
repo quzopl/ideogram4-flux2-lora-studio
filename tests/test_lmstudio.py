@@ -110,3 +110,42 @@ def test_chat_content_null_raises(monkeypatch):
                         lambda req, timeout=0: _FakeResp({"choices": [{"message": {"content": None}}]}))
     with pytest.raises(lmstudio.LMStudioError):
         lmstudio.generate_text("http://x/v1", "m", "s", "u")
+
+
+# Reasoning models (Qwen3 and friends) put their thinking in "reasoning_content"
+# and can burn the whole max_tokens budget there, leaving content empty. That
+# used to be stored as an empty caption with no error at all.
+def _reasoning_only(reasoning_tokens=512):
+    return {"choices": [{"message": {"role": "assistant", "content": "",
+                                     "reasoning_content": "The user wants a caption..."},
+                         "finish_reason": "length"}],
+            "usage": {"completion_tokens": reasoning_tokens,
+                      "completion_tokens_details": {"reasoning_tokens": reasoning_tokens}}}
+
+
+def test_chat_reasoning_only_raises_with_a_usable_hint(monkeypatch):
+    monkeypatch.setattr(lmstudio.urllib.request, "urlopen",
+                        lambda req, timeout=0: _FakeResp(_reasoning_only(512)))
+    with pytest.raises(lmstudio.LMStudioError) as e:
+        lmstudio.generate_text("http://x/v1", "m", "s", "u")
+    msg = str(e.value)
+    assert "512" in msg                      # how much was spent
+    assert "reasoning" in msg.lower()        # where it went
+    assert "max tokens" in msg.lower()       # what to do about it
+
+
+def test_chat_empty_content_without_reasoning_raises(monkeypatch):
+    monkeypatch.setattr(lmstudio.urllib.request, "urlopen",
+                        lambda req, timeout=0: _FakeResp(
+                            {"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]}))
+    with pytest.raises(lmstudio.LMStudioError) as e:
+        lmstudio.generate_text("http://x/v1", "m", "s", "u")
+    assert "reasoning" not in str(e.value).lower()
+
+
+def test_chat_whitespace_only_content_raises(monkeypatch):
+    monkeypatch.setattr(lmstudio.urllib.request, "urlopen",
+                        lambda req, timeout=0: _FakeResp(
+                            {"choices": [{"message": {"content": "   \n  "}}]}))
+    with pytest.raises(lmstudio.LMStudioError):
+        lmstudio.generate_text("http://x/v1", "m", "s", "u")
