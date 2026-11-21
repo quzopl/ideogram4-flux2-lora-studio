@@ -462,7 +462,7 @@ def test_dataset_upscale_hook_uses_real_scale_for_local_models(monkeypatch):
     monkeypatch.setattr(server, "_ensure_model", lambda model_id, j: "/m/local.pth")
     scales = []
     monkeypatch.setattr(server.upscaler, "model_scale",
-                        lambda entry, token="", device=None: scales.append(entry["path"]) or 2)
+                        lambda entry, token="", device=None: scales.append(entry["path"]) or 4)
     planned = []
     real_plan = server.upscaler.plan_passes
     monkeypatch.setattr(server.upscaler, "plan_passes",
@@ -471,8 +471,9 @@ def test_dataset_upscale_hook_uses_real_scale_for_local_models(monkeypatch):
     monkeypatch.setattr(server.upscaler, "upscale", lambda img, entry, passes, token="": img)
     hook = server._UpscaleHook({"id": "local:/m/local.pth", "scale": 0}, min_ratio=1.05, job={})
     hook(Image.new("RGB", (100, 100)), (400, 400))
+    assert planned == [2, 4]            # early check (guess), then the real scale
     hook(Image.new("RGB", (100, 100)), (400, 400))
-    assert set(planned) == {2} and scales == ["/m/local.pth"]  # probed once, memoised
+    assert planned == [2, 4, 2, 4] and scales == ["/m/local.pth"]  # probed once, memoised
     assert hook.used and not hook.error
 
 
