@@ -1,5 +1,10 @@
 """Suite-wide isolation: no test may read or write the real .work/settings.json."""
+import os
+
 import pytest
+
+# Must precede any import of backend.server: TestClient sends "Host: testserver".
+os.environ["FLUX_PREP_EXTRA_HOSTS"] = "testserver"
 
 from backend import settings
 

@@ -29,6 +29,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from . import api_settings
+from .origin_guard import OriginGuard
 from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence, gpu,
                hf_auth, ideogram_workflow, image_utils, lmstudio, prompts, upscaler,
                v15_lint)
@@ -120,6 +121,9 @@ _OBJECT_INFO_CACHE: dict = {"url": None, "data": None, "ts": 0.0}
 _OBJECT_INFO_TTL = 300.0  # seconds
 
 app = FastAPI(title="Ideogram4 FLUX2 LoRA — dataset & prompt studio")
+# Extra allowed Host values (tests set "testserver"); empty in normal use.
+app.add_middleware(OriginGuard, extra_hosts=[
+    h for h in os.environ.get("FLUX_PREP_EXTRA_HOSTS", "").split(",") if h.strip()])
 
 
 @app.middleware("http")
