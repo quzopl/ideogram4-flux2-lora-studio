@@ -21,13 +21,14 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import api_models as models_api, api_settings
 from .origin_guard import OriginGuard
@@ -1124,10 +1125,12 @@ def api_upscale_download(req: UpscaleDownloadRequest):
 class UpscaleRunRequest(BaseModel):
     folder: str
     model_id: str
-    mode: str = "native"     # "native" | "x2" | "long_side"
+    mode: Literal["native", "x2", "factor", "long_side"] = "native"
     long_side: int = 2048
+    factor: float = Field(2.0, gt=1.0, le=8.0)
     fmt: str = "png"         # "png" | "jpg"
     jpg_quality: int = 95
+    device: str = ""         # used from Task 9 on
 
 
 class UpscaleExportRequest(BaseModel):
@@ -1135,11 +1138,14 @@ class UpscaleExportRequest(BaseModel):
     output_folder: str
 
 
-def _upscale_target(size, mode: str, value: int, scale: int) -> tuple[int, int]:
+def _upscale_target(size, mode: str, value: int, scale: int,
+                    factor: float = 2.0) -> tuple[int, int]:
     """Target pixel size for the standalone upscale tool (never shrinks)."""
     w, h = size
     if mode == "x2":
         factor = 2.0
+    elif mode == "factor":
+        pass
     elif mode == "long_side":
         factor = max(1.0, value / max(w, h))
     else:
@@ -1171,14 +1177,14 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> 
         job["state"] = "loading_model"
         job["current"] = "Loading the upscale model…"
         entry = {**entry, "path": _ensure_model(entry["id"], job)}
-        scale = int(entry.get("scale") or 0) or 4
+        scale = int(entry.get("scale") or 0) or upscaler.model_scale(entry, token)
         job["state"] = "processing"
         for i, src in enumerate(files):
             job["current"] = src.name
             try:
                 img = image_utils.load_source(str(src))
                 target = _upscale_target((img.width, img.height), req.mode,
-                                         req.long_side, scale)
+                                         req.long_side, scale, req.factor)
                 passes = upscaler.plan_passes((img.width, img.height), target,
                                               scale, min_ratio=1.0)
                 big = upscaler.upscale(img, entry, passes, token=token)
@@ -1192,6 +1198,7 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> 
                 job["results"].append({
                     "idx": i, "src_name": src.name, "out_name": out_name,
                     "width": big.width, "height": big.height, "error": "",
+                    "passes": passes,
                 })
             except Exception as e:  # noqa: BLE001 - keep going on per-file errors
                 job["results"].append({

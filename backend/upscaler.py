@@ -196,6 +196,14 @@ def _load(entry: dict, token: str = "") -> dict:
         return _RUNTIME
 
 
+def model_scale(entry: dict, token: str = "", device: str | None = None) -> int:
+    """The loaded model's real scale factor (local entries register scale 0).
+
+    ``device`` is accepted for Task 9 (per-job devices) and ignored until then.
+    """
+    return _load(entry, token)["scale"]
+
+
 def unload() -> None:
     """Release the upscaler from memory (wired to the 'Release GPU' button)."""
     global _RUNTIME, _NOTE
