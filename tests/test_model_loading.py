@@ -347,6 +347,25 @@ def test_dataset_upscale_hook_uses_resolved_path(monkeypatch):
     assert hook.error == NO_FOLDER and not hook.used
 
 
+def test_dataset_upscale_hook_remembers_a_failed_ensure(monkeypatch):
+    calls = []
+
+    def failing(model_id, j):
+        calls.append(model_id)
+        raise RuntimeError("Download cancelled.")
+
+    monkeypatch.setattr(server, "_ensure_model", failing)
+    monkeypatch.setattr(server.upscaler, "upscale",
+                        lambda *a, **kw: pytest.fail("no weights, nothing to upscale with"))
+    hook = server._UpscaleHook({"id": X4, "scale": 4}, min_ratio=1.05, job={})
+    for _ in range(3):  # three images that all need upscaling
+        hook.reset()    # as _run_job does before each image
+        img = Image.new("RGB", (100, 100))
+        assert hook(img, (400, 400)) is img
+        assert hook.error == "Download cancelled." and not hook.used
+    assert calls == [X4]  # one attempt, not one fetch (or restarted download) per image
+
+
 def test_legacy_upscale_download_without_folder_400(monkeypatch):
     monkeypatch.setattr(server.upscaler, "weights_path",
                         lambda *a, **kw: pytest.fail("must not download into the HF cache"))

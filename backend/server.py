@@ -312,7 +312,9 @@ class _UpscaleHook:
     """Callable passed to process_image(upscale=...); records what it did.
 
     Keeps the pipeline honest: a broken upscaler degrades to plain LANCZOS
-    instead of killing the job.
+    instead of killing the job. A failed model ensure is remembered for the
+    rest of the job, so later images report the same error instead of each
+    starting another download (and restarting one the user cancelled).
     """
 
     def __init__(self, entry: dict, min_ratio: float = 1.05, token: str = "",
@@ -326,6 +328,7 @@ class _UpscaleHook:
         self.job = job
         self._injected = run is not None
         self._scale = 0
+        self._ensure_error: str | None = None  # survives reset(): one attempt per job
         self._run = run or (lambda img, entry, passes: upscaler.upscale(
             img, entry, passes, token=self.token))
 
@@ -344,7 +347,14 @@ class _UpscaleHook:
                 return img
             entry = self.entry
             if not self._injected:
-                entry = {**entry, "path": _ensure_model(entry["id"], self.job)}
+                if self._ensure_error is not None:
+                    self.error = self._ensure_error
+                    return img
+                try:
+                    entry = {**entry, "path": _ensure_model(entry["id"], self.job)}
+                except Exception as e:  # noqa: BLE001 - remembered, then the fallback below
+                    self._ensure_error = str(e)
+                    raise
             if not self._scale:
                 # Local models register scale 0: ask the loaded model, once.
                 self._scale = (int(entry.get("scale") or 0)
