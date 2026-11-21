@@ -217,16 +217,22 @@ def _remote_size(entry: dict, token: str) -> int | None:
     """Bytes the download will fetch, or None when the hub cannot say."""
     try:
         from huggingface_hub import HfApi
-        from huggingface_hub.utils import filter_repo_objects
         info = HfApi().model_info(entry["repo_id"], files_metadata=True, token=token or None)
-        sizes = {s.rfilename: s.size for s in info.siblings or []}
-        names = ([entry["filename"]] if entry["filename"] else
-                 list(filter_repo_objects(list(sizes), ignore_patterns=IGNORE_PATTERNS)))
-        if not names or any(sizes.get(n) is None for n in names):
+        sizes = _expected_files(entry, info)
+        if not sizes or None in sizes.values():
             return None
-        return sum(sizes[n] for n in names)
+        return sum(sizes.values())
     except Exception:  # noqa: BLE001 - offline, gated or unknown repo: size unknown
         return None
+
+
+def _expected_files(entry: dict, info) -> dict[str, int | None]:
+    """Name -> size of every file a download of ``entry`` fetches, per ``model_info``."""
+    from huggingface_hub.utils import filter_repo_objects
+    sizes = {s.rfilename: s.size for s in info.siblings or []}
+    if entry["filename"]:
+        return {entry["filename"]: sizes.get(entry["filename"])}
+    return {n: sizes[n] for n in filter_repo_objects(list(sizes), ignore_patterns=IGNORE_PATTERNS)}
 
 
 def _dir_bytes(path: Path) -> int:
@@ -241,14 +247,28 @@ def _dir_bytes(path: Path) -> int:
 
 
 def _download(entry: dict, target_dir: str, token: str) -> None:
-    """The hub call itself; runs in the child process started by _fetch."""
-    from huggingface_hub import hf_hub_download, snapshot_download
+    """The hub call itself; runs in the child process started by _fetch.
+
+    When the Hub is unreachable (offline, refused, gated, 5xx) the hub's
+    download functions fall back to whatever already sits in local_dir and
+    return normally, so the leftovers of a cancelled attempt would pass as a
+    finished download. Hence: look the repo up first (this raises when it is
+    unreachable), pin the download to that commit and check every expected
+    file afterwards.
+    """
+    from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+    repo_id, tok = entry["repo_id"], token or None
+    info = HfApi().model_info(repo_id, files_metadata=True, token=tok)
     if entry["filename"]:
-        hf_hub_download(entry["repo_id"], entry["filename"], local_dir=target_dir,
-                        token=token or None)
+        hf_hub_download(repo_id, entry["filename"], revision=info.sha, local_dir=target_dir,
+                        token=tok)
     else:
-        snapshot_download(entry["repo_id"], local_dir=target_dir, token=token or None,
+        snapshot_download(repo_id, revision=info.sha, local_dir=target_dir, token=tok,
                           ignore_patterns=IGNORE_PATTERNS)
+    for name, size in _expected_files(entry, info).items():
+        f = Path(target_dir, name)
+        if not f.is_file() or (size is not None and f.stat().st_size != size):
+            raise RuntimeError(f"Download incomplete: {name} is missing or truncated.")
 
 
 def _child(conn, download: Callable[[dict, str, str], None], entry: dict,

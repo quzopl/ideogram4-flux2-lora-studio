@@ -15,6 +15,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -307,3 +308,77 @@ def test_fetch_child_success_returns_file_path(tmp_path, monkeypatch):
     entry = ms.find(X4, _ctx())
     assert REAL_FETCH(entry, tmp_path, "", lambda done, total: None) == tmp_path / X4_FILE[1]
     assert (tmp_path / X4_FILE[1]).read_bytes() == b"w" * 10
+
+
+# --------------------------------------------------------------------------- #
+# Real _download: never trust the hub's "success" when it fell back to local_dir
+# --------------------------------------------------------------------------- #
+def _hub_offline(tmp_path, monkeypatch):
+    """Real _fetch/_download; the spawned child inherits an offline, empty hub."""
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+    monkeypatch.setattr(ms, "_fetch", REAL_FETCH)
+
+
+def test_offline_retry_of_partial_snapshot_is_error(tmp_path, monkeypatch):
+    _hub_offline(tmp_path, monkeypatch)
+    md = tmp_path / "models"
+    target = md / ms.folder_name(QWEN7)
+    # what a cancelled attempt leaves behind: config, one finished shard, one .incomplete
+    (target / ".cache/huggingface/download").mkdir(parents=True)
+    (target / ".cache/huggingface/download/model-00002-of-00005.safetensors.e.incomplete"
+     ).write_bytes(b"x" * 1000)
+    (target / "config.json").write_text(json.dumps({"model_type": "qwen2_5_vl"}))
+    (target / "model-00001-of-00005.safetensors").write_bytes(b"x" * 1000)
+    job = ms.start_download(QWEN7, str(md), _ctx())
+    done = _wait(job, {"done", "error", "cancelled"}, timeout=30)
+    assert done["state"] == "error" and done["error"]
+    assert not (target / ms.MARKER).exists()
+    assert QWEN7 not in settings.load()["model_locations"]
+    assert _row(_ctx(md), QWEN7)["status"] == "missing"
+
+
+def test_offline_retry_of_unfinished_file_is_error(tmp_path, monkeypatch):
+    _hub_offline(tmp_path, monkeypatch)
+    md = tmp_path / "models"
+    target = md / ms.folder_name(X4_FILE[0])
+    (target / ".cache/huggingface/download").mkdir(parents=True)
+    (target / f".cache/huggingface/download/{X4_FILE[1]}.e.incomplete").write_bytes(b"x" * 100)
+    job = ms.start_download(X4, str(md), _ctx())
+    done = _wait(job, {"done", "error", "cancelled"}, timeout=30)
+    assert done["state"] == "error" and done["error"]
+    assert not (target / X4_FILE[1]).exists()
+    assert X4 not in settings.load()["model_locations"]
+    assert _row(_ctx(md), X4)["status"] == "missing"
+
+
+def test_download_pins_revision_and_verifies_files(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    siblings = [SimpleNamespace(rfilename=n, size=z) for n, z in
+                [("config.json", 2), ("model.safetensors", 3), ("pytorch_model.bin", 9)]]
+
+    class FakeApi:
+        def model_info(self, repo_id, files_metadata=False, token=None):
+            assert repo_id == QWEN7 and files_metadata and token == "hf_x"
+            return SimpleNamespace(sha="c0ffee", siblings=siblings)
+
+    calls = []
+
+    def fake_snapshot(repo_id, **kw):
+        calls.append(kw)
+        d = Path(kw["local_dir"])
+        (d / "config.json").write_bytes(b"{}")
+        (d / "model.safetensors").write_bytes(weights)
+        return str(d)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot)
+    entry = ms.find(QWEN7, _ctx())
+    weights = b"xx"  # truncated: the hub listing says 3 bytes
+    with pytest.raises(RuntimeError, match="model.safetensors"):
+        ms._download(entry, str(tmp_path), "hf_x")
+    weights = b"xxx"
+    ms._download(entry, str(tmp_path), "hf_x")  # pytorch_model.bin is ignored, not required
+    assert calls[-1]["revision"] == "c0ffee"
+    assert calls[-1]["ignore_patterns"] == ms.IGNORE_PATTERNS
