@@ -178,3 +178,25 @@ def test_is_qwen_vl_config():
     assert ms.is_qwen_vl_config({"model_type": "Qwen2_5_VL"})
     assert ms.is_qwen_vl_config({"architectures": ["Qwen2_5_VLForConditionalGeneration"]})
     assert not ms.is_qwen_vl_config({"model_type": "llama"})
+
+
+def test_weights_complete_malformed_index_is_false(tmp_path):
+    for i, body in enumerate(['[]', '{"weight_map":{"a":["x"]}}',
+                              '{"weight_map":{"a":5}}', '{"weight_map":[]}',
+                              'not json']):
+        d = tmp_path / f"m{i}"
+        d.mkdir()
+        (d / "model.safetensors.index.json").write_text(body)
+        assert ms.weights_complete(d) is False
+    d = _fake_snapshot(tmp_path / "v")
+    (d / "model.safetensors").unlink()
+    (d / "model.safetensors.index.json").write_text("[]")
+    assert ms.validate_dir(d, "vlm")["reason"] == "Model weights are incomplete."
+
+
+def test_upscale_entry_carries_scale_and_note(tmp_path):
+    ctx = _ctx(tmp_path, upscale_cfg={"folder": "", "custom": [
+        {"repo_id": "u/r", "filename": "x.pth", "scale": 3}]})
+    e = ms.find("realesrgan-x4", ctx)
+    assert e["scale"] == 4 and e["note"] == "Solid default for photographic sources."
+    assert ms.find("hf:u/r/x.pth", ctx)["scale"] == 3

@@ -39,10 +39,11 @@ def weights_complete(path: Path) -> bool:
         return True
     index = path / "model.safetensors.index.json"
     try:
-        files = set(json.loads(index.read_text(encoding="utf-8"))["weight_map"].values())
-    except (OSError, ValueError, KeyError, AttributeError):
+        weight_map = json.loads(index.read_text(encoding="utf-8"))["weight_map"]
+        files = set(weight_map.values())
+        return bool(files) and all((path / f).is_file() for f in files)
+    except (OSError, ValueError, KeyError, AttributeError, TypeError):
         return False
-    return bool(files) and all((path / f).is_file() for f in files)
 
 
 def validate_dir(path: Path, kind: str) -> dict:
@@ -122,7 +123,8 @@ def entries(ctx: dict) -> list[dict]:
     for m in upscaler.registry(ctx.get("upscale_cfg") or {}):
         e = {"id": m["id"], "kind": "upscale", "label": m["label"],
              "repo_id": m.get("repo_id", ""), "filename": m.get("filename", ""),
-             "source": m["source"]}
+             "source": m["source"], "scale": int(m.get("scale") or 0),
+             "note": str(m.get("note") or "")}
         if m.get("path"):
             e["path"] = m["path"]
         out.append(e)
