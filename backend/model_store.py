@@ -13,12 +13,12 @@ location through settings.update. Only `_remote_size` and `_fetch` touch the
 network.
 
 Downloads go into `<dest>/<folder_name(repo_id)>`, and a snapshot only counts
-once the MARKER is written after a successful fetch, so a cancelled or failed
-download is never listed as ready. The hub call runs in a spawned child
-process: hf_xet logs and swallows exceptions raised from progress callbacks
-(Step 0 spike, 2026-11-21), so terminating the process is the only cancel that
-actually stops the writes. Progress is the byte size of the target folder,
-polled by the parent.
+once the MARKER is written after a successful fetch whose folder passes
+validate_dir, so a cancelled, failed or unusable download is never listed as
+ready. The hub call runs in a spawned child process: hf_xet logs and swallows
+exceptions raised from progress callbacks (Step 0 spike, 2026-11-21), so
+terminating the process is the only cancel that actually stops the writes.
+Progress is the byte size of the target folder, polled by the parent.
 """
 from __future__ import annotations
 
@@ -254,18 +254,22 @@ def _download(entry: dict, target_dir: str, token: str) -> None:
     return normally, so the leftovers of a cancelled attempt would pass as a
     finished download. Hence: look the repo up first (this raises when it is
     unreachable), pin the download to that commit and check every expected
-    file afterwards.
+    file afterwards. A listing with nothing to fetch is an error too: an empty
+    folder must not pass as a finished download.
     """
     from huggingface_hub import HfApi, hf_hub_download, snapshot_download
     repo_id, tok = entry["repo_id"], token or None
     info = HfApi().model_info(repo_id, files_metadata=True, token=tok)
+    expected = _expected_files(entry, info)
+    if not expected:
+        raise RuntimeError("Download incomplete: the Hub listed no files.")
     if entry["filename"]:
         hf_hub_download(repo_id, entry["filename"], revision=info.sha, local_dir=target_dir,
                         token=tok)
     else:
         snapshot_download(repo_id, revision=info.sha, local_dir=target_dir, token=tok,
                           ignore_patterns=IGNORE_PATTERNS)
-    for name, size in _expected_files(entry, info).items():
+    for name, size in expected.items():
         f = Path(target_dir, name)
         if not f.is_file() or (size is not None and f.stat().st_size != size):
             raise RuntimeError(f"Download incomplete: {name} is missing or truncated.")
@@ -334,6 +338,10 @@ def _run(job: dict, entry: dict, target: Path, token: str, size: int | None) -> 
         target.mkdir(parents=True, exist_ok=True)
         path = _fetch(entry, target, token, progress)
         if entry["kind"] != "upscale":
+            # e.g. a repo with only .bin weights (IGNORE_PATTERNS skips them)
+            check = validate_dir(target, entry["kind"])
+            if not check["ok"]:
+                raise RuntimeError(check["reason"])
             (target / MARKER).write_text("")
         settings.update(lambda d: d["model_locations"].__setitem__(entry["id"], str(path)))
     except DownloadCancelled:

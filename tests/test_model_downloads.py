@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import fsutil, settings
+from backend import florence, fsutil, settings
 from backend import model_store as ms
 
 QWEN7 = "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -98,6 +98,25 @@ def test_download_success_sets_location_and_marker(tmp_path, monkeypatch):
     assert settings.load()["model_locations"][QWEN7] == str(target)
     row = _row(_ctx(md), QWEN7)
     assert row["status"] == "ready" and row["download"] is None
+
+
+@pytest.mark.parametrize("model_id, model_type", [
+    (QWEN7, "qwen2_5_vl"), (florence.DEFAULT_MODEL, "florence2")])
+def test_snapshot_failing_validation_is_error_without_marker(tmp_path, monkeypatch,
+                                                             model_id, model_type):
+    md = tmp_path / "models"
+
+    def fetch(entry, target_dir, token, progress):  # .bin-only weights: not loadable here
+        (target_dir / "config.json").write_text(json.dumps({"model_type": model_type}))
+        (target_dir / "pytorch_model.bin").write_bytes(b"x")
+        return target_dir
+
+    monkeypatch.setattr(ms, "_fetch", fetch)
+    done = _wait(ms.start_download(model_id, str(md), _ctx()), {"done", "error"})
+    assert (done["state"], done["error"]) == ("error", "Model weights are incomplete.")
+    assert not (md / ms.folder_name(model_id) / ms.MARKER).exists()
+    assert model_id not in settings.load()["model_locations"]
+    assert _row(_ctx(md), model_id)["status"] == "missing"
 
 
 def test_progress_bytes_reported(tmp_path, monkeypatch):
@@ -382,3 +401,20 @@ def test_download_pins_revision_and_verifies_files(tmp_path, monkeypatch):
     ms._download(entry, str(tmp_path), "hf_x")  # pytorch_model.bin is ignored, not required
     assert calls[-1]["revision"] == "c0ffee"
     assert calls[-1]["ignore_patterns"] == ms.IGNORE_PATTERNS
+
+
+@pytest.mark.parametrize("listed", [[], [("pytorch_model.bin", 9), ("tf_model.h5", 9)]])
+def test_download_with_nothing_to_fetch_is_error(tmp_path, monkeypatch, listed):
+    import huggingface_hub
+
+    siblings = [SimpleNamespace(rfilename=n, size=z) for n, z in listed]
+
+    class FakeApi:
+        def model_info(self, repo_id, files_metadata=False, token=None):
+            return SimpleNamespace(sha="c0ffee", siblings=siblings)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download",
+                        lambda *a, **kw: pytest.fail("nothing to download"))
+    with pytest.raises(RuntimeError, match=r"^Download incomplete: the Hub listed no files\.$"):
+        ms._download(ms.find(QWEN7, _ctx()), str(tmp_path), "")
