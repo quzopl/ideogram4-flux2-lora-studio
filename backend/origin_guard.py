@@ -17,25 +17,42 @@ Static frontend files are not guarded.
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import urlsplit
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
+# host[:port] with a bracketed IPv6 or a plain name; no userinfo, no junk.
+_HOST_RE = re.compile(r"^(\[[^\]@\[]+\]|[^:\[\]@]+)(:\d{1,5})?$")
+
+
 def _bare_host(value: str) -> str:
-    """Lowercase host without port; brackets around IPv6 removed."""
+    """Lowercase host without port, brackets removed; "" if malformed."""
     value = value.strip().lower()
-    if value.startswith("["):
-        return value[1:].split("]", 1)[0]
-    if value.count(":") == 1:  # host:port (a bare IPv6 has several colons)
-        return value.split(":", 1)[0]
-    return value
+    if value == "::1":  # bare unbracketed IPv6 literal
+        return value
+    m = _HOST_RE.match(value)
+    if not m:
+        return ""
+    return m.group(1).strip("[]")
 
 
 def is_loopback_host(host: str) -> bool:
     """True for 127.0.0.1 / localhost / ::1 (with or without port), else False."""
     return _bare_host(host) in _LOOPBACK
+
+
+def _route_path(scope) -> str:
+    """Path as the router sees it: scope["path"] minus root_path (uvicorn --root-path)."""
+    path, root = scope["path"], scope.get("root_path", "")
+    if root and path.startswith(root):
+        if path == root:
+            return ""
+        if path[len(root)] == "/":
+            return path[len(root):]
+    return path
 
 
 class OriginGuard:
@@ -44,7 +61,7 @@ class OriginGuard:
         self.extra_hosts = {_bare_host(h) for h in extra_hosts if h.strip()}
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
+        if scope["type"] != "http" or not _route_path(scope).startswith("/api/"):
             await self.app(scope, receive, send)
             return
         headers = {k.decode("latin-1").lower(): v.decode("latin-1")
@@ -58,7 +75,7 @@ class OriginGuard:
             cross = headers.get("sec-fetch-site", "").lower() == "cross-site"
             if origin is not None:
                 cross = cross or origin.strip().lower() == "null" or not is_loopback_host(
-                    urlsplit(origin).netloc.rpartition("@")[2])
+                    urlsplit(origin).netloc)
             if cross:
                 await self._deny(send, "Cross-origin request blocked.")
                 return

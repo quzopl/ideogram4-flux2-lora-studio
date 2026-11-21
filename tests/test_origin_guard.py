@@ -21,6 +21,10 @@ BODY = {"version": 1}
     ("127.0.0.1.evil.com", False),
     ("", False),
     ("localhost.evil.com:8123", False),
+    ("localhost:evil.com", False),
+    ("127.0.0.1:8123@evil", False),
+    ("[::1]evil.com", False),
+    ("[::1", False),
 ])
 def test_is_loopback_host_cases(host, expected):
     assert is_loopback_host(host) is expected
@@ -77,3 +81,12 @@ def test_cross_origin_get_allowed_with_loopback_host():
 
 def test_static_files_not_guarded():
     assert client.get("/", headers={"host": "evil.com"}).status_code == 200
+
+
+def test_guard_active_under_root_path():
+    rp = TestClient(server.app, root_path="/p")
+    r = rp.get("/p/api/settings", headers={"host": "evil.com"})
+    assert r.status_code == 403
+    r = rp.post("/p/api/settings/import", json=BODY,
+                headers={**LOCAL, "origin": "https://evil.com"})
+    assert r.status_code == 403
