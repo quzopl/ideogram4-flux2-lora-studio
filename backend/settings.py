@@ -148,6 +148,8 @@ def import_doc(doc: dict, path: Path | None = None) -> dict:
     if not isinstance(doc, dict) or doc.get("version") != VERSION:
         raise ValueError(f"unsupported settings version; expected {VERSION}")
     clean = _normalize(doc)
+    clean["presets"] = {v: {_check_name(n): x for n, x in ps.items()}
+                        for v, ps in clean["presets"].items()}
 
     def replace(d: dict) -> None:
         d.clear()

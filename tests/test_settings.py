@@ -127,3 +127,11 @@ def test_concurrent_updates_keep_all_writes(tmp_path):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert len(settings.load(p)["presets"]["upscale"]) == 20
+
+
+@pytest.mark.parametrize("name", ["", "a/b", "x" * 65])
+def test_import_rejects_bad_preset_name(tmp_path, name):
+    p = tmp_path / "s.json"
+    with pytest.raises(ValueError):
+        settings.import_doc({"version": 1, "presets": {"upscale": {name: {}}}}, p)
+    assert not p.exists()
