@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
+from . import api_settings
 from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence, gpu,
                hf_auth, ideogram_workflow, image_utils, lmstudio, prompts, upscaler,
                v15_lint)
@@ -2161,4 +2162,5 @@ def health():
     return JSONResponse({"ok": True})
 
 
+app.include_router(api_settings.router)
 app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
