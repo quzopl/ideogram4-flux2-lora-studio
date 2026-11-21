@@ -31,8 +31,8 @@ from pydantic import BaseModel
 from . import api_settings
 from .origin_guard import OriginGuard
 from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence, gpu,
-               hf_auth, ideogram_workflow, image_utils, lmstudio, prompts, upscaler,
-               v15_lint)
+               hf_auth, ideogram_workflow, image_utils, lmstudio, model_store, prompts,
+               upscaler, v15_lint)
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -498,9 +498,7 @@ def _model_dir_info(path: Path) -> dict:
         data = json.loads(cfg.read_text(encoding="utf-8"))
     except Exception:
         return {"ok": False, "reason": "Cannot read config.json.", "label": ""}
-    model_type = str(data.get("model_type", "")).lower()
-    arch = " ".join(data.get("architectures", []) or [])
-    if "qwen2_5_vl" in model_type or "Qwen2_5_VL" in arch:
+    if model_store.is_qwen_vl_config(data):
         return {"ok": True, "reason": "", "label": f"{path.name} (custom)"}
     return {"ok": False,
             "reason": "Only Qwen2.5-VL models are supported.",
