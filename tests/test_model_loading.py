@@ -389,6 +389,41 @@ def test_analyze_without_models_folder_answers_400(monkeypatch):
     assert exc.value.detail == NO_FOLDER
 
 
+def test_analyze_download_does_not_block_the_event_loop(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_download(model_id, job):
+        entered.set()
+        release.wait(10)
+        return "/m/florence"
+
+    monkeypatch.setattr(server, "_ensure_model", slow_download)
+    monkeypatch.setattr(server.florence, "analyze_image", lambda img: ("A scene.", []))
+    buf = io.BytesIO()
+    Image.new("RGB", (80, 60), "red").save(buf, format="PNG")
+    out = {}
+    with TestClient(server.app) as client:  # one event loop serves both requests
+        analyze = threading.Thread(target=lambda: out.update(analyze=client.post(
+            "/api/ideogram/analyze", files={"file": ("t.png", buf.getvalue(), "image/png")})))
+        poll = threading.Thread(
+            target=lambda: out.update(poll=client.get("/api/store/downloads")))
+        try:
+            analyze.start()
+            assert entered.wait(5)
+            poll.start()
+            poll.join(2)
+            assert "poll" in out, "the event loop is blocked while the model downloads"
+            assert out["poll"].status_code == 200
+        finally:
+            release.set()
+            analyze.join(10)
+            poll.join(10)
+    assert out["analyze"].status_code == 200
+    assert out["analyze"].json()["model"] == florence.DEFAULT_MODEL
+
+
 def test_prompt_maps_model_errors_to_http(tmp_path, monkeypatch):
     monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q, source=None: None)
     monkeypatch.setattr(server.captioner, "generate_text", lambda *a, **kw: "a prompt")

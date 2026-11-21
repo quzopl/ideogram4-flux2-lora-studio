@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -2164,8 +2165,10 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
         raise HTTPException(400, "Failed to read the image.")
 
     ratio = florence.nearest_aspect(image.width, image.height)
-    used_model = florence.DEFAULT_MODEL
-    try:
+
+    def analyze() -> tuple[str, str]:
+        """Model download, load and inference: blocking, so run off the event loop."""
+        used_model = florence.DEFAULT_MODEL
         if engine == "vlm":
             draft = _vlm_image_to_v15(image, prompts.build_image_v15_instruction(),
                                       model, quant, max_tokens, ratio)
@@ -2181,6 +2184,10 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
             _ensure_model_http(florence.DEFAULT_MODEL)
             caption, elements = florence.analyze_image(image)
             draft = florence.build_v15_draft(caption, elements, image.width, image.height)
+        return draft, used_model
+
+    try:
+        draft, used_model = await run_in_threadpool(analyze)
     except HTTPException:
         raise
     except lmstudio.LMStudioError as e:
