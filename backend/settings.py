@@ -4,9 +4,11 @@ values and named presets, in one JSON file under .work/.
 ``update`` is the only write path: it loads, applies a mutator and replaces the
 file atomically, all under one lock, so concurrent requests never lose each
 other's changes. ``load`` never writes, except to move a corrupt file aside
-(``<name>.bad-<unix time>``) so the user can inspect it. Settings written by
-the legacy GPU picker (.work/gpu.json) are applied on read while the new file
-does not exist, and become persistent with the first ``update``.
+(``<name>.bad-<unix time>``) so the user can inspect it. A file that cannot be
+read right now (OSError) is left alone: ``load`` falls back to the defaults and
+``update`` fails without writing, so a good file is never replaced. Settings
+written by the legacy GPU picker (.work/gpu.json) are applied on read while the
+new file does not exist, and become persistent with the first ``update``.
 """
 from __future__ import annotations
 
@@ -75,6 +77,15 @@ def _migrate(doc: dict) -> None:
 
 def load(path: Path | None = None) -> dict:
     p = Path(path) if path is not None else CONFIG_PATH
+    try:
+        return _read(p)
+    except OSError as e:
+        log.warning("settings file %s could not be read (%s); using defaults", p, e)
+        return defaults()
+
+
+def _read(p: Path) -> dict:
+    """``load`` without the fallback: an OSError while reading propagates."""
     if not p.exists():
         doc = defaults()
         _migrate(doc)
@@ -83,7 +94,7 @@ def load(path: Path | None = None) -> dict:
         raw = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("not an object")
-    except (OSError, ValueError) as e:  # JSONDecodeError is a ValueError
+    except ValueError as e:  # JSONDecodeError and UnicodeDecodeError are ValueErrors
         bad = p.with_name(f"{p.name}.bad-{int(time.time())}")
         log.warning("settings file %s is unreadable (%s); moved to %s", p, e, bad)
         try:
@@ -112,7 +123,7 @@ def _write(doc: dict, p: Path) -> None:
 def update(mutator: Callable[[dict], None], path: Path | None = None) -> dict:
     p = Path(path) if path is not None else CONFIG_PATH
     with _lock:
-        doc = load(p)
+        doc = _read(p)  # a read error aborts: writing defaults would lose the file
         mutator(doc)
         _write(doc, p)
         return doc

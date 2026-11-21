@@ -1,5 +1,6 @@
 import json
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -55,6 +56,46 @@ def test_corrupt_file_backed_up(tmp_path):
     p.write_text("{not json")
     assert settings.load(p)["models_dir"] == ""
     assert list(tmp_path.glob("s.json.bad-*"))
+
+
+@pytest.mark.parametrize("content", [b"[1, 2]", b'"text"', b"\xff\xfe{}"])
+def test_wrong_content_backed_up(tmp_path, content):
+    p = tmp_path / "s.json"
+    p.write_bytes(content)
+    assert settings.load(p)["models_dir"] == ""
+    assert not p.exists() and list(tmp_path.glob("s.json.bad-*"))
+
+
+def _unreadable(monkeypatch, p):
+    """Reading ``p`` fails the way a flaky disk or a permission change does."""
+    real = Path.read_text
+
+    def read_text(self, *a, **kw):
+        if self == p:
+            raise OSError(5, "Input/output error")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
+def test_read_error_returns_defaults_and_keeps_file(tmp_path, monkeypatch):
+    p = tmp_path / "s.json"
+    settings.set_form("dataset", {"mode": "style"}, p)
+    good = p.read_bytes()
+    _unreadable(monkeypatch, p)
+    assert settings.load(p) == settings.defaults()
+    assert p.read_bytes() == good and not list(tmp_path.glob("s.json.bad-*"))
+
+
+def test_update_on_read_error_writes_nothing(tmp_path, monkeypatch):
+    p = tmp_path / "s.json"
+    settings.set_form("dataset", {"mode": "style"}, p)
+    good = p.read_bytes()
+    _unreadable(monkeypatch, p)
+    with pytest.raises(OSError):
+        settings.set_form("upscale", {"factor": 3}, p)
+    assert p.read_bytes() == good
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["s.json"]
 
 
 def test_load_drops_unknown_keys_and_fills_missing(tmp_path):
