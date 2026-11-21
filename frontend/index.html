@@ -222,6 +222,15 @@
         </div>
 
         <div class="field">
+          <label>Models folder (models are downloaded here)</label>
+          <div class="row">
+            <input type="text" id="modelsDir" placeholder="/path/to/models" />
+            <button type="button" id="modelsDirSave" class="mini">Save</button>
+          </div>
+          <span id="modelsDirMsg" class="info"></span>
+        </div>
+
+        <div class="field">
           <label>Max caption length (tokens)</label>
           <input type="number" id="maxTokens" value="512" min="64" max="8192" step="32"
                  title="Reasoning models (Qwen3 and friends) count their thinking against this limit — give them 2048+ or they return nothing." />

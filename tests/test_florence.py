@@ -95,6 +95,7 @@ def test_analyze_endpoint_florence_engine(monkeypatch):
     def fake_analyze(img):
         return "A test scene.", [{"type": "obj", "bbox": [0, 0, 500, 500], "desc": "a thing"}]
     monkeypatch.setattr(server.florence, "analyze_image", fake_analyze)
+    monkeypatch.setattr(server, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
 
     out = asyncio.run(server.api_ideogram_analyze(_upload_png()))
     obj = json.loads(out["json"])
@@ -109,7 +110,9 @@ def test_analyze_endpoint_vlm_engine(monkeypatch):
     from backend import server
 
     seen = {}
-    monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q: seen.update(model=m))
+    monkeypatch.setattr(server, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
+    monkeypatch.setattr(server.captioner, "ensure_loaded",
+                        lambda m, q, source=None: seen.update(model=m, source=source))
     monkeypatch.setattr(server.captioner, "query_image",
                         lambda img, instr, max_new_tokens=768: seen.update(instr=instr) or
                         '{"aspect_ratio":"1:1","high_level_description":"a vlm draft",'
@@ -122,6 +125,7 @@ def test_analyze_endpoint_vlm_engine(monkeypatch):
     # aspect z obrazu wygrywa, gdy model zwrócił inny / brak
     assert obj["aspect_ratio"] in ("1:1", "4:3")
     assert seen["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
+    assert seen["source"] == "/models/Qwen/Qwen2.5-VL-7B-Instruct"
     assert "IMAGE" in seen["instr"]
     assert out["model"] == "Qwen/Qwen2.5-VL-7B-Instruct"
 
@@ -137,7 +141,8 @@ def test_analyze_endpoint_hybrid_engine(monkeypatch):
         ]
     monkeypatch.setattr(server.florence, "analyze_image", fake_analyze)
     seen = {}
-    monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q: None)
+    monkeypatch.setattr(server, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
+    monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q, source=None: None)
 
     def fake_query(img, instr, max_new_tokens=768):
         seen["instr"] = instr

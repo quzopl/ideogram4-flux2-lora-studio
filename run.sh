@@ -18,15 +18,15 @@ fi
 echo ">> Instaluję zależności (pierwszy raz może chwilę potrwać)…"
 uv pip install -r requirements.txt
 
-# Cache modeli Hugging Face na dysku z miejscem (ext4 — symlinki blobów działają).
-# Dysk systemowy "/" jest mały; modele Qwen mają kilka–kilkanaście GB.
-export HF_HOME="${HF_HOME:-/mnt/intel/huggingface}"
-mkdir -p "$HF_HOME"
+# Modele pobierają się do folderu wybranego w aplikacji, nie do cache HF.
+# HF_HOME wyeksportowany samodzielnie nadal działa (tylko go tu nie ustawiamy).
 
 PORT="${PORT:-8123}"
 echo ""
 echo ">> Otwórz w przeglądarce:  http://127.0.0.1:${PORT}"
-echo ">> Cache modeli (HF_HOME): ${HF_HOME}"
-echo ">> (Pierwsze opisanie pobierze wagi modelu VLM — kilka GB.)"
+echo ">> Models folder: set it in the app (Settings → Models folder)"
+if [ -n "${HF_HOME:-}" ]; then
+  echo ">> HF_HOME: ${HF_HOME}"
+fi
 echo ""
 exec .venv/bin/python -m uvicorn backend.server:app --host 127.0.0.1 --port "${PORT}"

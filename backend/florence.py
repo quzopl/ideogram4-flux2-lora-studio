@@ -16,6 +16,7 @@ import math
 import os
 import re
 import threading
+from typing import Callable
 
 from . import gpu
 
@@ -23,6 +24,8 @@ from . import gpu
 # (the original microsoft/Florence-2-* need trust_remote_code and older
 # transformers). Bigger variant: florence-community/Florence-2-large-ft.
 DEFAULT_MODEL = os.environ.get("FLORENCE_MODEL", "florence-community/Florence-2-base-ft")
+# Set by the server: returns the local folder to load DEFAULT_MODEL from.
+SOURCE_RESOLVER: Callable[[], str] | None = None
 
 _LOCK = threading.Lock()
 _RUNTIME: dict | None = None   # {"model","processor","torch","device"}
@@ -184,12 +187,13 @@ def _get_runtime() -> dict:
         import torch
         from transformers import AutoProcessor, Florence2ForConditionalGeneration
 
+        source = SOURCE_RESOLVER() if SOURCE_RESOLVER else DEFAULT_MODEL
         device = gpu.current_device()
         dtype = torch.float16 if gpu.is_cuda(device) else torch.float32
         model = Florence2ForConditionalGeneration.from_pretrained(
-            DEFAULT_MODEL, dtype=dtype).to(device)
+            source, dtype=dtype).to(device)
         model.eval()
-        processor = AutoProcessor.from_pretrained(DEFAULT_MODEL)
+        processor = AutoProcessor.from_pretrained(source)
         _RUNTIME = {"model": model, "processor": processor,
                     "torch": torch, "device": device}
         return _RUNTIME

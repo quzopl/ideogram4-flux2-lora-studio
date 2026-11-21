@@ -314,7 +314,7 @@ class _UpscaleHook:
     """
 
     def __init__(self, entry: dict, min_ratio: float = 1.05, token: str = "",
-                 fit: str = "cover", run=None):
+                 fit: str = "cover", run=None, job: dict | None = None):
         self.entry = entry
         self.min_ratio = min_ratio
         self.token = token
@@ -322,7 +322,8 @@ class _UpscaleHook:
         self.used = False
         self.error = ""
         self._run = run or (lambda img, entry, passes: upscaler.upscale(
-            img, entry, passes, token=self.token))
+            img, {**entry, "path": _ensure_model(entry["id"], job)}, passes,
+            token=self.token))
 
     def reset(self) -> None:
         self.used = False
@@ -387,9 +388,10 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
         lm_url = _lmstudio_url() if lm_id is not None else None
         if req.do_caption and lm_id is None:
             job["state"] = "loading_model"
-            job["current"] = "Loading the VLM model (first run downloads the weights)…"
             quant = req.quant if req.quant in ("4bit", "none") else "4bit"
-            captioner.ensure_loaded(req.model, quant)
+            source = _ensure_model(req.model, job)
+            job["current"] = "Loading the VLM model…"
+            captioner.ensure_loaded(req.model, quant, source=source)
 
         hook = None
         if req.upscale_model:
@@ -400,7 +402,7 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
                 job["current"] = "Loading the upscale model…"
                 hook = _UpscaleHook(entry, req.upscale_min_ratio,
                                     hf_auth.load_token(HF_TOKEN_PATH),
-                                    fit=req.fit)
+                                    fit=req.fit, job=job)
 
         job["state"] = "processing"
         prefix = (req.mode or "img")
@@ -505,6 +507,49 @@ def _model_ctx() -> dict:
     return {"settings": settings.load(),
             "upscale_cfg": upscaler.load_config(UPSCALER_CONFIG_PATH),
             "custom_vlms": _load_named(CUSTOM_MODELS_PATH)}
+
+
+class _UnknownModel(RuntimeError):
+    """A model id missing from the registry (a 400, unlike a failed download)."""
+
+
+def _ensure_model(model_id: str, job: dict | None) -> str:
+    """Local path of ``model_id``, downloaded into the Models folder when missing.
+
+    While downloading, ``job["current"]`` shows the progress. Every failure
+    carries a readable message: ModelsFolderNotSet, ValueError (folder
+    unusable, not enough space), RuntimeError (unknown model, failed download).
+    """
+    ctx = _model_ctx()
+    on_progress = None
+    if job is not None:
+        entry = model_store.find(model_id, ctx)
+        label = entry["label"] if entry else model_id
+
+        def on_progress(done: int, total: int) -> None:
+            if total > 0:
+                job["current"] = f"Downloading {label}… {int(done * 100 / total)}%"
+            else:
+                job["current"] = f"Downloading {label}… {done / 1e9:.1f} GB"
+
+    try:
+        return model_store.ensure_local(model_id, ctx, hf_auth.load_token(HF_TOKEN_PATH),
+                                        on_progress)
+    except KeyError:
+        raise _UnknownModel(f"Unknown model: {model_id}") from None
+
+
+def _ensure_model_http(model_id: str) -> str:
+    """_ensure_model for synchronous endpoints: a setup problem is a 400, a failed download a 502."""
+    try:
+        return _ensure_model(model_id, None)
+    except (model_store.ModelsFolderNotSet, _UnknownModel, ValueError) as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+florence.SOURCE_RESOLVER = lambda: _ensure_model(florence.DEFAULT_MODEL, None)
 
 
 def _model_dir_info(path: Path) -> dict:
@@ -784,6 +829,10 @@ def _run_crop_auto(job_id: str, req: CropAutoRequest, files: list[Path]) -> None
     job = JOBS[job_id]
     try:
         job["state"] = "processing"
+        # Before the loop: suggest_crop swallows detection errors, so a missing
+        # model would otherwise end as a "done" job without any crops.
+        if req.mode not in crop_auto.NO_AUTO_MODES:
+            _ensure_model(florence.DEFAULT_MODEL, job)
         for i, src in enumerate(files):
             job["current"] = src.name
             try:
@@ -960,10 +1009,22 @@ class UpscaleDownloadRequest(BaseModel):
     model_id: str
 
 
+def _upscale_registry(cfg: dict) -> list[dict]:
+    """upscaler.registry with ``cached`` from the model store (Models folder,
+    chosen location or HF cache) instead of the HF cache alone."""
+    ctx = _model_ctx()
+    store = {e["id"]: e for e in model_store.entries(ctx)}
+    out = upscaler.registry(cfg)
+    for m in out:
+        if m["id"] in store:
+            m["cached"] = model_store.resolve_path(store[m["id"]], ctx) is not None
+    return out
+
+
 @app.get("/api/upscale/models")
 def api_upscale_models():
     cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
-    return {"models": upscaler.registry(cfg), "folder": cfg.get("folder", "")}
+    return {"models": _upscale_registry(cfg), "folder": cfg.get("folder", "")}
 
 
 @app.post("/api/upscale/models/scan")
@@ -1004,11 +1065,8 @@ def api_upscale_download(req: UpscaleDownloadRequest):
     entry = upscaler.resolve(req.model_id, cfg)
     if not entry:
         raise HTTPException(404, "Unknown upscale model.")
-    try:
-        path = upscaler.weights_path(entry, hf_auth.load_token(HF_TOKEN_PATH))
-    except Exception as e:  # noqa: BLE001 - surface a readable message in the UI
-        raise HTTPException(400, f"Download failed: {e}") from e
-    return {"ok": True, "path": path, "models": upscaler.registry(cfg)}
+    path = _ensure_model_http(entry["id"])
+    return {"ok": True, "path": path, "models": _upscale_registry(cfg)}
 
 
 # --------------------------------------------------------------------------- #
@@ -1063,6 +1121,7 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> 
         token = hf_auth.load_token(HF_TOKEN_PATH)
         job["state"] = "loading_model"
         job["current"] = "Loading the upscale model…"
+        entry = {**entry, "path": _ensure_model(entry["id"], job)}
         scale = int(entry.get("scale") or 0) or 4
         job["state"] = "processing"
         for i, src in enumerate(files):
@@ -2078,7 +2137,8 @@ def _vlm_image_to_v15(image, instruction: str, model: str, quant: str,
     if lm_id is not None:
         raw = lmstudio.caption_image(_lmstudio_url(), lm_id, image, instruction, max_tokens)
     else:
-        captioner.ensure_loaded(model, quant if quant in ("4bit", "none") else "4bit")
+        captioner.ensure_loaded(model, quant if quant in ("4bit", "none") else "4bit",
+                                source=_ensure_model_http(model))
         raw = captioner.query_image(image, instruction, max_new_tokens=max_tokens)
     return prompts.normalize_ideogram_v15(raw, default_ratio=default_ratio)
 
@@ -2111,12 +2171,14 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
                                       model, quant, max_tokens, ratio)
             used_model = model
         elif engine == "hybrid":
+            _ensure_model_http(florence.DEFAULT_MODEL)
             caption, elements = florence.analyze_image(image)
             base = florence.build_v15_draft(caption, elements, image.width, image.height)
             draft = _vlm_image_to_v15(image, prompts.build_hybrid_v15_instruction(base),
                                       model, quant, max_tokens, ratio)
             used_model = f"{florence.DEFAULT_MODEL} + {model}"
         else:
+            _ensure_model_http(florence.DEFAULT_MODEL)
             caption, elements = florence.analyze_image(image)
             draft = florence.build_v15_draft(caption, elements, image.width, image.height)
     except HTTPException:
@@ -2150,7 +2212,7 @@ def api_prompt(req: PromptRequest):
         if lm_id is not None:
             raw = lmstudio.generate_text(_lmstudio_url(), lm_id, system, text, req.max_tokens)
         else:
-            captioner.ensure_loaded(req.model, quant)
+            captioner.ensure_loaded(req.model, quant, source=_ensure_model_http(req.model))
             raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
         if req.caption_format in ("ideogram", "aitoolkit"):
             final = prompts.normalize_ideogram_v15(raw)
@@ -2161,6 +2223,8 @@ def api_prompt(req: PromptRequest):
         library_id = _save_prompt_to_library(
             _prompt_category(req.caption_format), req.action, text, final)
         return {"prompt": final, "library_id": library_id, "warnings": warnings}
+    except HTTPException:
+        raise
     except lmstudio.LMStudioError as e:
         raise HTTPException(502, f"LM Studio: {e}")
     except Exception as e:  # noqa: BLE001

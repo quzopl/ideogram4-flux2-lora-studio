@@ -1,9 +1,9 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const api = async (path, body) => {
+const api = async (path, body, method) => {
   const res = await fetch(path, {
-    method: body ? "POST" : "GET",
+    method: method || (body ? "POST" : "GET"),
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -49,6 +49,7 @@ function populateModels(models, def, selectKey) {
     if ($("lmstudioUrl")) $("lmstudioUrl").value = cfg.url;
     loadUpscaleModels();
     refreshHfToken();
+    refreshModelsDir();
   } catch (e) {
     console.error(e);
   }
@@ -118,6 +119,29 @@ $("hfClearBtn").addEventListener("click", async () => {
     refreshHfToken();
   } catch (e) {
     $("hfInfo").textContent = "Error: " + e.message;
+  }
+});
+
+// Models folder: where every local model is downloaded (settings models_dir).
+async function refreshModelsDir() {
+  try {
+    const s = await api("/api/settings");
+    $("modelsDir").value = s.models_dir || "";
+  } catch (e) {
+    $("modelsDirMsg").textContent = "Error: " + e.message;
+  }
+}
+
+$("modelsDirSave").addEventListener("click", async () => {
+  try {
+    const s = await api("/api/settings", { models_dir: $("modelsDir").value.trim() }, "PATCH");
+    $("modelsDir").value = s.models_dir;
+    $("modelsDirMsg").textContent = "Saved.";
+    loadUpscaleModels();
+  } catch (e) {
+    let msg = e.message;
+    try { msg = JSON.parse(e.message).detail || msg; } catch (_) {}
+    $("modelsDirMsg").textContent = msg;
   }
 });
 

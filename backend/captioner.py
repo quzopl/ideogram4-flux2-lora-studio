@@ -28,8 +28,12 @@ def _device():
     return gpu.current_device()
 
 
-def ensure_loaded(model_name: str, quant: str) -> None:
-    """Load the requested model if it is not already the active one."""
+def ensure_loaded(model_name: str, quant: str, source: str | None = None) -> None:
+    """Load the requested model if it is not already the active one.
+
+    ``source`` is where the weights are read from (a local folder); the model
+    is still known as ``model_name``, so the GPU status keeps showing its id.
+    """
     import torch
     from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
@@ -62,13 +66,13 @@ def ensure_loaded(model_name: str, quant: str) -> None:
             load_kwargs["device_map"] = device
 
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_name, **load_kwargs
+            source or model_name, **load_kwargs
         )
         model.eval()
 
         # Cap the visual token budget to keep VRAM/latency predictable.
         processor = AutoProcessor.from_pretrained(
-            model_name,
+            source or model_name,
             min_pixels=256 * 28 * 28,
             max_pixels=1024 * 28 * 28,
         )
