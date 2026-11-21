@@ -335,6 +335,13 @@ class _UpscaleHook:
 
     def __call__(self, img, target):
         try:
+            # Any scale > 1 plans the same number of passes, so images that
+            # need none are returned before the model is ensured or loaded.
+            if upscaler.plan_passes(
+                    (img.width, img.height), target,
+                    int(self.entry.get("scale") or 0) or 2,
+                    self.min_ratio, fit=self.fit) <= 0:
+                return img
             entry = self.entry
             if not self._injected:
                 entry = {**entry, "path": _ensure_model(entry["id"], self.job)}
@@ -877,7 +884,7 @@ def api_crop_auto(req: CropAutoRequest):
             "total": len(files), "processed": 0, "current": "", "error": "",
             "crops": {}, "skipped": [],
         }
-    threading.Thread(target=_run_crop_auto, args=(job_id, req, files, resolved),
+    threading.Thread(target=_run_crop_auto, args=(job_id, req, files),
                      daemon=True).start()
     return {"job_id": job_id, "total": len(files)}
 

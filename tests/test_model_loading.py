@@ -472,5 +472,18 @@ def test_dataset_upscale_hook_uses_real_scale_for_local_models(monkeypatch):
     hook = server._UpscaleHook({"id": "local:/m/local.pth", "scale": 0}, min_ratio=1.05, job={})
     hook(Image.new("RGB", (100, 100)), (400, 400))
     hook(Image.new("RGB", (100, 100)), (400, 400))
-    assert planned == [2, 2] and scales == ["/m/local.pth"]  # probed once, memoised
+    assert set(planned) == {2} and scales == ["/m/local.pth"]  # probed once, memoised
     assert hook.used and not hook.error
+
+
+def test_dataset_upscale_hook_skips_model_when_no_pass_needed(monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("must not touch the model")
+
+    monkeypatch.setattr(server, "_ensure_model", boom)
+    monkeypatch.setattr(server.upscaler, "model_scale", boom)
+    for entry in ({"id": X4, "scale": 4}, {"id": "local:/m/x.pth", "scale": 0}):
+        hook = server._UpscaleHook(entry, min_ratio=1.05, job={})
+        img = Image.new("RGB", (1000, 1000))
+        assert hook(img, (500, 500)) is img
+        assert hook.error == "" and not hook.used

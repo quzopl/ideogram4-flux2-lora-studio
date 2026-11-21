@@ -68,3 +68,16 @@ def test_safe_source_path_rejects_missing_file(tmp_path):
 def test_safe_source_path_accepts_real_file(tmp_path):
     Image.new("RGB", (10, 10)).save(tmp_path / "ok.png")
     assert server._safe_source_path(str(tmp_path), "ok.png").name == "ok.png"
+
+
+def test_crop_auto_endpoint_starts_job(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    Image.new("RGB", (10, 10)).save(tmp_path / "a.png")
+    started = []
+    monkeypatch.setattr(server, "_run_crop_auto",
+                        lambda *args: started.append(args))
+    monkeypatch.setattr(server, "JOBS", {})
+    r = TestClient(server.app).post("/api/crop/auto", json={"folder": str(tmp_path)})
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 1 and r.json()["job_id"] in server.JOBS
