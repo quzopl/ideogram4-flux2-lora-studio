@@ -189,6 +189,33 @@ def test_captioner_passes_source_to_from_pretrained(monkeypatch, fake_ml):
                     ("processor", "Qwen/Qwen2.5-VL-3B-Instruct")]
 
 
+def test_captioner_failed_swap_forgets_the_old_model(monkeypatch, fake_ml):
+    loads = []
+
+    def fake_model(name, **kw):
+        loads.append(name)
+        if name == "/m/broken":
+            raise OSError("no weights in /m/broken")
+        return _FakeModel()
+
+    fake_ml.transformers.Qwen2_5_VLForConditionalGeneration = SimpleNamespace(
+        from_pretrained=fake_model)
+    fake_ml.transformers.AutoProcessor = SimpleNamespace(from_pretrained=lambda name, **kw: object())
+    monkeypatch.setattr(gpu, "probe", lambda: [])
+    monkeypatch.setattr(gpu, "empty_cache", lambda: None)
+    monkeypatch.setattr(captioner, "_state", {"model": None, "processor": None, "key": None})
+
+    captioner.ensure_loaded(QWEN7, "none", source="/m/qwen7")
+    with pytest.raises(OSError, match="no weights"):
+        captioner.ensure_loaded("Qwen/Qwen2.5-VL-3B-Instruct", "none", source="/m/broken")
+    # The old model was released for the swap, so nothing may claim it is loaded.
+    assert captioner._state["key"] is None
+    assert not captioner.is_loaded() and captioner.loaded_device() == ""
+    captioner.ensure_loaded(QWEN7, "none", source="/m/qwen7")
+    assert loads == ["/m/qwen7", "/m/broken", "/m/qwen7"]
+    assert captioner.is_loaded() and captioner._state["key"] == (QWEN7, "none", "cpu")
+
+
 def test_florence_loads_from_source_resolver(monkeypatch, fake_ml):
     transformers = fake_ml.transformers
 

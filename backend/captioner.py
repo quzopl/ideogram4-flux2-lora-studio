@@ -45,9 +45,11 @@ def ensure_loaded(model_name: str, quant: str, source: str | None = None) -> Non
         if _state["key"] == key:
             return
 
-        # Free any previously loaded model before swapping.
+        # Free any previously loaded model before swapping. The key goes too:
+        # if the new load fails, nothing is loaded under the old one.
         _state["model"] = None
         _state["processor"] = None
+        _state["key"] = None
         gpu.empty_cache()
 
         # transformers 5.x renamed torch_dtype -> dtype.
