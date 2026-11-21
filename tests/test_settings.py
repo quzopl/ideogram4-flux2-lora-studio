@@ -1,3 +1,4 @@
+import json
 import threading
 
 import pytest
@@ -135,3 +136,34 @@ def test_import_rejects_bad_preset_name(tmp_path, name):
     with pytest.raises(ValueError):
         settings.import_doc({"version": 1, "presets": {"upscale": {name: {}}}}, p)
     assert not p.exists()
+
+
+BAD_LOCATIONS = {"Qwen/Qwen2.5-VL-7B-Instruct": 5, "empty": "", "rel": "models/x",
+                 "none": None, "list": ["/m/x"], 7: "/m/int-key", "ok": "/m/ok"}
+
+
+def test_load_keeps_only_absolute_string_locations(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"version": 1, "model_locations": {
+        k: v for k, v in BAD_LOCATIONS.items() if isinstance(k, str)}}))
+    assert settings.load(p)["model_locations"] == {"ok": "/m/ok"}
+
+
+def test_import_keeps_only_absolute_string_locations(tmp_path):
+    p = tmp_path / "s.json"
+    d = settings.import_doc({"version": 1, "model_locations": BAD_LOCATIONS}, p)
+    assert d["model_locations"] == {"ok": "/m/ok"}
+    assert settings.load(p)["model_locations"] == {"ok": "/m/ok"}
+
+
+@pytest.mark.parametrize("models_dir", ["rel/models", "models", "~/models"])
+def test_import_rejects_relative_models_dir(tmp_path, models_dir):
+    p = tmp_path / "s.json"
+    with pytest.raises(ValueError, match=r"^Use an absolute path\.$"):
+        settings.import_doc({"version": 1, "models_dir": models_dir}, p)
+    assert not p.exists()
+
+
+def test_import_allows_empty_models_dir(tmp_path):
+    p = tmp_path / "s.json"
+    assert settings.import_doc({"version": 1, "models_dir": ""}, p)["models_dir"] == ""

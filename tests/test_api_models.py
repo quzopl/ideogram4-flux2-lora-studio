@@ -27,6 +27,18 @@ def test_store_models_lists_builtin_vlm_florence_upscale():
     assert all(m["status"] in ("ready", "downloading", "missing") for m in body["models"])
 
 
+def test_store_models_survives_import_of_bad_location():
+    r = client.post("/api/settings/import", json={
+        "version": 1, "model_locations": {"Qwen/Qwen2.5-VL-7B-Instruct": 5}})
+    assert r.status_code == 200
+    assert r.json()["model_locations"] == {}
+    r = client.get("/api/store/models")
+    assert r.status_code == 200
+    row = next(m for m in r.json()["models"] if m["id"] == "Qwen/Qwen2.5-VL-7B-Instruct")
+    assert row["status"] == "missing"
+    assert client.get("/api/upscale/models").status_code == 200
+
+
 def test_download_without_any_folder_400():
     mid = client.get("/api/store/models").json()["models"][0]["id"]
     r = client.post("/api/store/download", json={"model_id": mid})

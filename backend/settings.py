@@ -43,12 +43,15 @@ def defaults() -> dict:
 
 
 def _normalize(raw: dict) -> dict:
-    """Overlay known keys of ``raw`` on the defaults; unknown keys are dropped."""
+    """Overlay known keys of ``raw`` on the defaults; unknown keys are dropped,
+    and so are model locations other than id -> absolute path strings."""
     doc = defaults()
     if isinstance(raw.get("models_dir"), str):
         doc["models_dir"] = raw["models_dir"]
     if isinstance(raw.get("model_locations"), dict):
-        doc["model_locations"] = copy.deepcopy(raw["model_locations"])
+        doc["model_locations"] = {k: v for k, v in raw["model_locations"].items()
+                                  if isinstance(k, str) and isinstance(v, str)
+                                  and v and Path(v).is_absolute()}
     if isinstance(raw.get("gpu"), dict):
         for role in ROLES:
             if isinstance(raw["gpu"].get(role), str) and raw["gpu"][role]:
@@ -148,6 +151,8 @@ def import_doc(doc: dict, path: Path | None = None) -> dict:
     if not isinstance(doc, dict) or doc.get("version") != VERSION:
         raise ValueError(f"unsupported settings version; expected {VERSION}")
     clean = _normalize(doc)
+    if clean["models_dir"] and not Path(clean["models_dir"]).is_absolute():
+        raise ValueError("Use an absolute path.")  # "" stays allowed: no folder chosen
     clean["presets"] = {v: {_check_name(n): x for n, x in ps.items()}
                         for v, ps in clean["presets"].items()}
 
