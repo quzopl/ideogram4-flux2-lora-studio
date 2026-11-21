@@ -162,7 +162,7 @@ def test_gpu_status_reports_the_selected_card(tmp_path, monkeypatch):
         "vram_used_gb": 9.9, "vram_total_gb": 99.9})
     monkeypatch.setattr(server.upscaler, "status", lambda: {
         "loaded": False, "key": "", "device": "", "note": ""})
-    monkeypatch.setattr(gpu, "vram_gb", lambda dev: (1.5, 12.5) if dev["index"] == 0 else (0.5, 16.6))
+    monkeypatch.setattr(gpu, "smi_stats", lambda: {"uuid-4070ti": (1.5, 12.5), "uuid-5080": (0.5, 16.6)})
     st = server._gpu_status()
     assert st["gpu_label"] == "RTX 4070 Ti · 12 GB"
     assert (st["vram_used_gb"], st["vram_total_gb"]) == (1.5, 12.5)

@@ -943,14 +943,36 @@ def _gpu_status() -> dict:
     info["upscale_device"] = up["device"]
     info["upscale_note"] = up["note"]
     info["loaded"] = bool(info.get("loaded")) or up["loaded"]
-    # VRAM of the card the models actually use (captioner measures the torch
-    # default device, which is not necessarily the chosen one).
-    devices = gpu.probe()
-    chosen = gpu.resolve(gpu.load_selected(gpu.CONFIG_PATH), devices)
-    info["gpu_label"] = gpu.label(chosen, devices) if chosen else ""
-    if chosen:
-        info["vram_used_gb"], info["vram_total_gb"] = gpu.vram_gb(chosen)
+    # The legacy topbar shows one card: the VLM role's (none when it runs on
+    # the CPU). "cards" carries all of them for the v2 topbar.
+    cards = _gpu_cards(gpu.probe(), settings.load())
+    vlm = next((c for c in cards if "vlm" in c["roles"]), None)
+    info["gpu_label"] = vlm["label"] if vlm else ""
+    if vlm:
+        info["vram_used_gb"], info["vram_total_gb"] = vlm["vram_used_gb"], vlm["vram_total_gb"]
+    info["cards"] = cards
     return info
+
+
+def _gpu_cards(devices: list[dict], doc: dict) -> list[dict]:
+    """``gpu.listing`` rows plus each card's VRAM (nvidia-smi; None when it did
+    not report the card), the roles assigned to it and the roles whose model
+    is loaded on it. ``selected`` marks the VLM role's card, as the legacy
+    select expects."""
+    stats = gpu.smi_stats()
+    assigned = {role: gpu.device_for(role, doc, devices) for role in settings.ROLES}
+    loaded = {"vlm": captioner.loaded_device(), "florence": florence.loaded_device(),
+              "upscale": upscaler.status()["device"]}
+    by_uuid = {d["uuid"]: d for d in devices}
+    rows = gpu.listing(devices, None)
+    for row in rows:
+        dev = gpu.device_string(by_uuid[row["uuid"]])
+        row["vram_used_gb"], row["vram_total_gb"] = stats.get(
+            gpu.normalize_uuid(row["uuid"]), (None, None))
+        row["roles"] = [r for r in settings.ROLES if assigned[r] == dev]
+        row["loaded"] = [r for r in settings.ROLES if loaded[r] == dev]
+        row["selected"] = "vlm" in row["roles"]
+    return rows
 
 
 @app.get("/api/gpu")
@@ -972,24 +994,50 @@ class GpuSelectRequest(BaseModel):
     uuid: str
 
 
+class GpuAssignRequest(BaseModel):
+    role: str
+    device: str
+
+
 @app.get("/api/gpus")
 def api_gpus():
-    """Cards for the topbar select, labelled by name — never by CUDA index."""
+    """Cards for the topbar select, labelled by name — never by CUDA index —
+    and what each role is set to ("auto", "cpu" or a card's UUID)."""
     devices = gpu.probe()
-    chosen = gpu.resolve(gpu.load_selected(gpu.CONFIG_PATH), devices)
-    return {"gpus": gpu.listing(devices, chosen["uuid"] if chosen else None),
-            "selected": chosen["uuid"] if chosen else None}
+    doc = settings.load()
+    cards = _gpu_cards(devices, doc)
+    vlm = next((c for c in cards if c["selected"]), None)
+    return {"gpus": cards, "selected": vlm["uuid"] if vlm else None,
+            "roles": dict(doc["gpu"])}
+
+
+@app.post("/api/gpu/assign")
+def api_gpu_assign(req: GpuAssignRequest):
+    """Move one role to another card ("auto" = most memory, or "cpu"). Only
+    that role's model is released — it sits on the old card; the other roles
+    keep theirs loaded."""
+    if _busy():
+        raise HTTPException(409, "Processing in progress — wait for it to finish.")
+    if req.role not in settings.ROLES:
+        raise HTTPException(400, "Unknown role.")
+    if not gpu.assign_value_ok(req.device, gpu.probe()):
+        raise HTTPException(400, "Unknown GPU.")
+    settings.update(lambda d: d["gpu"].__setitem__(req.role, req.device))
+    {"vlm": captioner.unload, "florence": florence.unload,
+     "upscale": upscaler.unload}[req.role]()
+    return _gpu_status()
 
 
 @app.post("/api/gpu/select")
 def api_gpu_select(req: GpuSelectRequest):
-    """Switch the card the models load on. Loaded models sit on the old card,
-    so they are released; the next use loads them on the new one."""
+    """Legacy UI: put every role on one card. Loaded models sit on the old
+    card, so they are released; the next use loads them on the new one."""
     if _busy():
         raise HTTPException(409, "Processing in progress — wait for it to finish.")
     if not any(d["uuid"] == req.uuid for d in gpu.probe()):
         raise HTTPException(400, "Unknown GPU.")
     gpu.save_selected(gpu.CONFIG_PATH, req.uuid)
+    settings.update(lambda d: d.__setitem__("gpu", {role: req.uuid for role in settings.ROLES}))
     captioner.unload()
     florence.unload()
     upscaler.unload()

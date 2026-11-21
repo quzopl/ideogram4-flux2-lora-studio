@@ -178,17 +178,25 @@ def build_v15_draft(caption: str, elements: list[dict],
 # Model (lazily loaded)
 # --------------------------------------------------------------------------- #
 def _get_runtime() -> dict:
+    """The loaded model, (re)loaded on the Florence-2 role's device: when the
+    role has moved since the last load, the old copy is released first."""
     global _RUNTIME
-    if _RUNTIME is not None:
-        return _RUNTIME
+    device = gpu.device_for("florence")
+    rt = _RUNTIME
+    if rt is not None and rt["device"] == device:
+        return rt
     with _LOCK:
-        if _RUNTIME is not None:
+        if _RUNTIME is not None and _RUNTIME["device"] == device:
             return _RUNTIME
+        if _RUNTIME is not None:
+            _RUNTIME = None
+            import gc
+            gc.collect()
+            gpu.empty_cache()
         import torch
         from transformers import AutoProcessor, Florence2ForConditionalGeneration
 
         source = SOURCE_RESOLVER() if SOURCE_RESOLVER else DEFAULT_MODEL
-        device = gpu.current_device()
         dtype = torch.float16 if gpu.is_cuda(device) else torch.float32
         model = Florence2ForConditionalGeneration.from_pretrained(
             source, dtype=dtype).to(device)
@@ -209,6 +217,12 @@ def unload() -> None:
         import gc
         gc.collect()
         gpu.empty_cache()
+
+
+def loaded_device() -> str:
+    """Device the loaded model sits on ("" when nothing is loaded)."""
+    rt = _RUNTIME
+    return rt["device"] if rt else ""
 
 
 def _run_task(image, task: str) -> dict | str:

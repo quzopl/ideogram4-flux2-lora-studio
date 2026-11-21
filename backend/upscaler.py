@@ -182,7 +182,7 @@ def _load(entry: dict, token: str = "") -> dict:
         model = ModelLoader().load_from_file(path)
         if not isinstance(model, ImageModelDescriptor):
             raise RuntimeError(f"{entry['filename']} is not an image upscaler.")
-        device = gpu.current_device()
+        device = gpu.device_for("upscale")
         # fp16 halves both the weights and the activations, but only where the
         # architecture says it is safe (spandrel knows which ones overflow).
         half = gpu.is_cuda(device) and bool(getattr(model, "supports_half", False))

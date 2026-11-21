@@ -33,11 +33,14 @@ def ensure_loaded(model_name: str, quant: str, source: str | None = None) -> Non
 
     ``source`` is where the weights are read from (a local folder); the model
     is still known as ``model_name``, so the GPU status keeps showing its id.
+    The device is part of the key: after the VLM role moves to another card
+    the next call reloads the model there.
     """
     import torch
     from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-    key = (model_name, quant)
+    device = gpu.device_for("vlm")
+    key = (model_name, quant, device)
     with _lock:
         if _state["key"] == key:
             return
@@ -49,7 +52,6 @@ def ensure_loaded(model_name: str, quant: str, source: str | None = None) -> Non
 
         # transformers 5.x renamed torch_dtype -> dtype.
         load_kwargs: dict = {"dtype": torch.float16}
-        device = gpu.current_device()
         on_cuda = gpu.is_cuda(device)
 
         if quant == "4bit" and on_cuda:
@@ -102,12 +104,18 @@ def is_loaded() -> bool:
     return _state["model"] is not None
 
 
+def loaded_device() -> str:
+    """Device the loaded model sits on ("" when nothing is loaded)."""
+    key = _state["key"]
+    return key[2] if key else ""
+
+
 def gpu_status() -> dict:
     """Report whether a model is loaded.
 
-    VRAM is measured by the server on the chosen card (``gpu.vram_gb``): a
-    bare ``torch.cuda.mem_get_info()`` here would read — and open a CUDA
-    context on — cuda:0, which is not necessarily the card in use.
+    VRAM is read by the server from nvidia-smi (``gpu.smi_stats``): a bare
+    ``torch.cuda.mem_get_info()`` here would read — and open a CUDA context
+    on — cuda:0, which is not necessarily the card in use.
     """
     import torch
 

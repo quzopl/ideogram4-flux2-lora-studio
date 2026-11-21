@@ -177,7 +177,7 @@ def test_captioner_passes_source_to_from_pretrained(monkeypatch):
     captioner.ensure_loaded(QWEN7, "none", source="/models/Qwen--Qwen2.5-VL-7B-Instruct")
     assert seen == [("model", "/models/Qwen--Qwen2.5-VL-7B-Instruct"),
                     ("processor", "/models/Qwen--Qwen2.5-VL-7B-Instruct")]
-    assert captioner._state["key"] == (QWEN7, "none")
+    assert captioner._state["key"] == (QWEN7, "none", "cpu")
 
     seen.clear()
     captioner.ensure_loaded("Qwen/Qwen2.5-VL-3B-Instruct", "none")
