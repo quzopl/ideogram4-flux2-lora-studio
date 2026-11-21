@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import io
 import re
+import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -20,6 +22,9 @@ from starlette.datastructures import Headers, UploadFile
 
 from backend import captioner, florence, gpu, server, settings, upscaler
 from backend import model_store as ms
+from tests.conftest import ML_MODULES
+
+pytestmark = pytest.mark.usefixtures("ml_modules_at_start")
 
 ROOT = Path(__file__).resolve().parent.parent
 QWEN7 = "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -154,8 +159,8 @@ class _FakeModel:
         return self
 
 
-def test_captioner_passes_source_to_from_pretrained(monkeypatch):
-    import transformers
+def test_captioner_passes_source_to_from_pretrained(monkeypatch, fake_ml):
+    transformers = fake_ml.transformers
 
     seen = []
 
@@ -167,9 +172,8 @@ def test_captioner_passes_source_to_from_pretrained(monkeypatch):
         seen.append(("processor", name))
         return object()
 
-    monkeypatch.setattr(transformers.Qwen2_5_VLForConditionalGeneration, "from_pretrained",
-                        fake_model)
-    monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", fake_processor)
+    transformers.Qwen2_5_VLForConditionalGeneration = SimpleNamespace(from_pretrained=fake_model)
+    transformers.AutoProcessor = SimpleNamespace(from_pretrained=fake_processor)
     monkeypatch.setattr(gpu, "probe", lambda: [])
     monkeypatch.setattr(gpu, "empty_cache", lambda: None)
     monkeypatch.setattr(captioner, "_state", {"model": None, "processor": None, "key": None})
@@ -185,14 +189,14 @@ def test_captioner_passes_source_to_from_pretrained(monkeypatch):
                     ("processor", "Qwen/Qwen2.5-VL-3B-Instruct")]
 
 
-def test_florence_loads_from_source_resolver(monkeypatch):
-    import transformers
+def test_florence_loads_from_source_resolver(monkeypatch, fake_ml):
+    transformers = fake_ml.transformers
 
     seen = []
-    monkeypatch.setattr(transformers.Florence2ForConditionalGeneration, "from_pretrained",
-                        lambda name, **kw: seen.append(name) or _FakeModel())
-    monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained",
-                        lambda name, **kw: seen.append(name) or object())
+    transformers.Florence2ForConditionalGeneration = SimpleNamespace(
+        from_pretrained=lambda name, **kw: seen.append(name) or _FakeModel())
+    transformers.AutoProcessor = SimpleNamespace(
+        from_pretrained=lambda name, **kw: seen.append(name) or object())
     monkeypatch.setattr(gpu, "probe", lambda: [])
     monkeypatch.setattr(florence, "_RUNTIME", None)
     monkeypatch.setattr(florence, "SOURCE_RESOLVER", lambda: "/models/florence")
@@ -488,3 +492,11 @@ def test_dataset_upscale_hook_skips_model_when_no_pass_needed(monkeypatch):
         img = Image.new("RGB", (1000, 1000))
         assert hook(img, (500, 500)) is img
         assert hook.error == "" and not hook.used
+
+
+# --------------------------------------------------------------------------- #
+# Keep last: guards the tests above
+# --------------------------------------------------------------------------- #
+def test_file_never_imports_real_torch_or_transformers(ml_modules_at_start):
+    # Vacuous for a module an earlier file already imported (test_gpu.py loads torch).
+    assert {m for m in ML_MODULES if m in sys.modules} <= ml_modules_at_start

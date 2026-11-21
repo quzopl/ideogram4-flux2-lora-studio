@@ -1,10 +1,15 @@
 """Per-role GPU assignment: the VLM, Florence-2 and the upscaler each get a card."""
 import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend import captioner, florence, gpu, server, settings
+from tests.conftest import ML_MODULES
+
+pytestmark = pytest.mark.usefixtures("ml_modules_at_start")
 
 DEVICES = [
     {"index": 0, "uuid": "GPU-4070", "name": "NVIDIA GeForce RTX 4070 Ti",
@@ -103,13 +108,13 @@ def test_legacy_select_sets_all_roles(fake_gpus):
 # --------------------------------------------------------------------------- #
 # Models follow their role's card
 # --------------------------------------------------------------------------- #
-def test_captioner_reloads_when_vlm_device_changes(fake_gpus, monkeypatch):
-    import transformers
+def test_captioner_reloads_when_vlm_device_changes(fake_gpus, fake_ml, monkeypatch):
+    transformers = fake_ml.transformers
 
     loads = []
-    monkeypatch.setattr(transformers.Qwen2_5_VLForConditionalGeneration, "from_pretrained",
-                        lambda name, **kw: loads.append(kw.get("device_map")) or _FakeModel())
-    monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", lambda name, **kw: object())
+    transformers.Qwen2_5_VLForConditionalGeneration = SimpleNamespace(
+        from_pretrained=lambda name, **kw: loads.append(kw.get("device_map")) or _FakeModel())
+    transformers.AutoProcessor = SimpleNamespace(from_pretrained=lambda name, **kw: object())
     monkeypatch.setattr(gpu, "empty_cache", lambda: None)
     monkeypatch.setattr(captioner, "_state", {"model": None, "processor": None, "key": None})
     model = "Qwen/Qwen2.5-VL-3B-Instruct"
@@ -125,13 +130,13 @@ def test_captioner_reloads_when_vlm_device_changes(fake_gpus, monkeypatch):
     assert loads == ["cuda:1", "cuda:0"]
 
 
-def test_florence_reloads_when_its_device_changes(fake_gpus, monkeypatch):
-    import transformers
+def test_florence_reloads_when_its_device_changes(fake_gpus, fake_ml, monkeypatch):
+    transformers = fake_ml.transformers
 
     loads = []
-    monkeypatch.setattr(transformers.Florence2ForConditionalGeneration, "from_pretrained",
-                        lambda name, **kw: loads.append(name) or _FakeModel())
-    monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", lambda name, **kw: object())
+    transformers.Florence2ForConditionalGeneration = SimpleNamespace(
+        from_pretrained=lambda name, **kw: loads.append(name) or _FakeModel())
+    transformers.AutoProcessor = SimpleNamespace(from_pretrained=lambda name, **kw: object())
     monkeypatch.setattr(gpu, "empty_cache", lambda: None)
     monkeypatch.setattr(florence, "_RUNTIME", None)
     monkeypatch.setattr(florence, "SOURCE_RESOLVER", lambda: "/models/florence")
@@ -173,15 +178,14 @@ def test_smi_stats_missing_binary_returns_empty(monkeypatch, error):
     assert gpu.smi_stats() == {}
 
 
-def test_gpus_endpoint_never_calls_torch_mem_get_info(tmp_path, monkeypatch):
+def test_gpus_endpoint_never_calls_torch_mem_get_info(tmp_path, monkeypatch, fake_ml):
     # mem_get_info(i) opens a ~200 MB CUDA context on card i; the v2 topbar
     # polls these endpoints every 2 s.
-    import torch
-
     def boom(*a, **kw):
         raise AssertionError("torch.cuda.mem_get_info must not be called")
 
-    monkeypatch.setattr(torch.cuda, "mem_get_info", boom)
+    # CUDA "available", so a guarded mem_get_info call would be reached.
+    fake_ml.torch.cuda = SimpleNamespace(mem_get_info=boom, is_available=lambda: True)
     monkeypatch.setattr(gpu, "probe", lambda: DEVICES)
     monkeypatch.setattr(gpu, "CONFIG_PATH", tmp_path / "gpu.json")
     monkeypatch.setattr(gpu.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
@@ -216,3 +220,11 @@ def test_gpus_reports_roles_vram_and_loaded_per_card(fake_gpus, monkeypatch):
     st = client.get("/api/gpu").json()
     assert st["gpu_label"] == ""
     assert "vram_total_gb" not in st
+
+
+# --------------------------------------------------------------------------- #
+# Keep last: guards the tests above
+# --------------------------------------------------------------------------- #
+def test_file_never_imports_real_torch_or_transformers(ml_modules_at_start):
+    # Vacuous for a module an earlier file already imported (test_gpu.py loads torch).
+    assert {m for m in ML_MODULES if m in sys.modules} <= ml_modules_at_start
