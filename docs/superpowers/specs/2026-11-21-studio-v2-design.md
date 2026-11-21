@@ -217,7 +217,9 @@ Statusy: `ready`, `downloading` (z postępem) i `missing`.
   jest pomijane. Każdy błąd ma czytelny komunikat z liczbami w GB.
 - Po sukcesie zapisywany jest marker ukończenia i `model_locations[id]`.
 - Po anulowaniu lub błędzie zostają częściowe pliki, ale bez markera. Kolejne
-  pobranie wznawia się (cache metadanych HF w `local_dir`).
+  pobranie pomija pliki ukończone wcześniej (cache metadanych HF w
+  `local_dir`), ale plik przerwany w połowie pobiera od zera: Xet wznawia
+  tylko całe pliki (pomiar w planie, Task 4, Step 0).
 - Drugie żądanie pobrania tego samego modelu zwraca już trwający job.
 
 **Joby a brakujący model:**
