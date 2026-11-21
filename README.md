@@ -48,17 +48,27 @@ prompting:
   `.safetensors` files. Target either the model's **native scale**, a fixed
   **x2**, or a **long-side pixel count** (the pipeline runs extra passes and
   downsamples to hit it); export the results to a folder or a `.zip`, same as
-  the dataset tab.
+  the dataset tab. Through the API, `POST /api/upscale/run` also takes
+  `"mode": "factor"` with any `"factor"` above 1 up to 8 (x2, x3, x4, 1.5…:
+  model passes, then Lanczos down to the exact size) and a per-job `"device"`
+  (`"cpu"`, a card's UUID, or empty for the Upscale role's card); the tab does
+  not offer these two yet.
 
 The top bar shows the GPU status (loaded model and VRAM usage) and a
-**⏏ Release GPU** button that unloads the models from the card. On a machine
-with more than one NVIDIA card, a picker next to it lists the cards **by name
-and memory** (e.g. `RTX 5080 · 16 GB`) — never by CUDA number, which can
-disagree with `nvidia-smi`. The choice is remembered by the card's UUID, the
-card with the most memory is used until you pick one, and switching releases
-the loaded models so they reload on the new card. It applies to the local
-models (VLM, Florence-2, upscaler); ComfyUI and LM Studio are separate
-processes and keep their own GPU settings.
+**⏏ Release GPU** button that unloads the models from the card. The local
+models run on a card per **role** — **VLM**, **Florence-2** and **Upscale** —
+each set to a card, `cpu` or `auto` (the card with the most memory, the
+default). On a machine with more than one NVIDIA card, a picker in the top bar
+lists the cards **by name and memory** (e.g. `RTX 5080 · 16 GB`) — never by
+CUDA number, which can disagree with `nvidia-smi` — and puts all three roles
+on the chosen card. To give one role its own card, call
+`POST /api/gpu/assign` with `{"role": …, "device": …}` — role `vlm`,
+`florence` or `upscale`; device `auto`, `cpu` or a card's UUID
+(`GET /api/gpus` lists the cards and the roles); only that role's model is
+released. Choices are remembered by the card's UUID (a card that is gone falls
+back to `auto`), and a switch releases the affected models so they reload on
+the new card. ComfyUI and LM Studio are separate processes and keep their own
+GPU settings.
 
 ## Screenshots
 
@@ -107,9 +117,50 @@ cd ~/flux-lora-prep
 ./run.sh
 ```
 
-Then open **http://127.0.0.1:8123**. The first use of captioning downloads the
-VLM weights (a few GB) from Hugging Face; the first use of **📷 From image**
-downloads Florence-2 (~0.7 GB). Later runs are fast.
+Then open **http://127.0.0.1:8123**.
+
+### Models folder (set it first)
+
+The local models (Qwen2.5-VL, Florence-2, the upscalers) live in one **Models
+folder**. Set it before the first captioning, **📷 From image** or upscale
+run: Dataset → **Settings** → **Models folder** (an absolute path) → **Save**.
+Until then a model that has to be downloaded fails with *No models folder
+chosen*. A model that is not there yet downloads into it on first use (the
+VLM a few GB, Florence-2 ~0.7 GB), with progress in the job status, as a plain
+folder named `<owner>--<repo>` (e.g. `Qwen--Qwen2.5-VL-7B-Instruct`).
+
+Models you already have are used without a download when they are in that
+folder or in a Hugging Face cache (the default one, or the one `HF_HOME`
+points at), or once you point the app at their folder or weight file with
+`POST /api/store/locate` (`{"model_id": …, "path": …}`; the path is checked
+first). `GET /api/store/models` lists every model with its status and path.
+
+**Coming from v1:** v1's `run.sh` set `HF_HOME=/mnt/intel/huggingface`, so
+the weights it downloaded are in that cache. To reuse them without
+downloading again, start with
+
+```bash
+export HF_HOME=/mnt/intel/huggingface
+./run.sh
+```
+
+or set the Models folder somewhere else and let the models download there.
+
+### Settings and the local API
+
+Settings (Models folder, per-role GPUs, saved form values and named presets)
+are kept in `.work/settings.json`. The store and its presets have an API, with
+the UI coming in a later version: `GET`/`PATCH /api/settings`,
+`PUT /api/settings/forms/{view}`,
+`PUT`/`DELETE /api/settings/presets/{view}/{name}`,
+`GET /api/settings/export` and `POST /api/settings/import` (views: `dataset`,
+`prompts`, `bbox`, `comfy`, `upscale`). The export never contains the Hugging
+Face token.
+
+The API answers only the app itself: requests with a non-loopback `Host`, and
+state-changing requests from another web origin (any other site open in your
+browser), are rejected with 403. curl and scripts that send no `Origin` header
+work as before.
 
 ## How it works (step by step in the UI)
 
