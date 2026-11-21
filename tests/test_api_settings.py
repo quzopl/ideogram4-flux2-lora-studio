@@ -62,13 +62,19 @@ def test_unknown_view_400():
 
 
 def test_export_has_attachment_header_and_no_token(tmp_path, monkeypatch):
-    hf = tmp_path / "hf.json"
-    hf.write_text('{"token": "hf_secret123"}')
-    monkeypatch.setattr(server, "HF_TOKEN_PATH", hf)
+    monkeypatch.setattr(server, "HF_TOKEN_PATH", tmp_path / "hf.json")
+    monkeypatch.setenv("HF_TOKEN", "")  # restored on teardown; the endpoint sets it
+    saved = client.post("/api/hf/token", json={"token": "hf_SECRETsaved123"})
+    assert saved.status_code == 200
+    assert (tmp_path / "hf.json").read_text().count("hf_SECRETsaved123") == 1
+    imp = client.post("/api/settings/import",
+                      json={"version": 1, "hf_token": "hf_SECRETimported456"})
+    assert imp.status_code == 200
     r = client.get("/api/settings/export")
     assert r.status_code == 200
     assert r.headers["content-disposition"] == 'attachment; filename="flux-lora-prep-settings.json"'
-    assert "hf_" not in r.text
+    for leak in ("hf_SECRETsaved123", "hf_SECRETimported456", "hf_"):
+        assert leak not in r.text
 
 
 def test_import_roundtrip():
