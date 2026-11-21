@@ -160,13 +160,12 @@ def resolve(model_id: str, cfg: dict) -> dict | None:
 # without a torch install, and the test suite never triggers a real load)
 # --------------------------------------------------------------------------- #
 def weights_path(entry: dict, token: str = "") -> str:
-    """Local path to the weights, downloading them from HF when needed."""
+    """Local path to the weights: the entry's ``path``, which callers resolve
+    through the model store (server._ensure_model). Never downloads, so the
+    weights never land in an HF cache folder nobody chose."""
     if entry.get("path"):
         return entry["path"]
-    from huggingface_hub import hf_hub_download
-    return hf_hub_download(
-        repo_id=entry["repo_id"], filename=entry["filename"],
-        token=token or None)
+    raise RuntimeError("Model weights are not available locally.")
 
 
 def _instantiate(path: str, device: str) -> dict:

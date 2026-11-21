@@ -50,6 +50,22 @@ def test_load_caches_per_model_and_device(fake_cards, monkeypatch):
     assert len(calls) == 2
 
 
+def test_weights_path_never_downloads_into_the_hf_cache(fake_cards, monkeypatch):
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download",
+                        lambda *a, **kw: pytest.fail("must not download into the HF cache"))
+    monkeypatch.setattr(upscaler, "_instantiate",
+                        lambda path, device: pytest.fail("must not load without weights"))
+    assert upscaler.weights_path({"id": "m", "path": "/m/x.pth"}) == "/m/x.pth"
+    entry = {"id": "realesrgan-x4", "repo_id": "ai-forever/Real-ESRGAN",
+             "filename": "RealESRGAN_x4.pth"}
+    for call in (lambda: upscaler.weights_path(entry, "hf_x"),
+                 lambda: upscaler._load(entry, "", "cuda:0")):
+        with pytest.raises(RuntimeError, match=r"^Model weights are not available locally\.$"):
+            call()
+
+
 def test_resolve_device_cases(fake_cards):
     assert server._resolve_device("") == ("cuda:1", "RTX 5080 · 16 GB")
     assert server._resolve_device("cpu") == ("cpu", "CPU")
