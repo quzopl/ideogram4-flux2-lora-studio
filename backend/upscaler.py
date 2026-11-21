@@ -169,39 +169,52 @@ def weights_path(entry: dict, token: str = "") -> str:
         token=token or None)
 
 
-def _load(entry: dict, token: str = "") -> dict:
-    """Load (and cache) the spandrel descriptor for one registry entry."""
+def _instantiate(path: str, device: str) -> dict:
+    """Load the weights onto ``device``; the one place torch/spandrel are imported."""
+    import torch
+    from spandrel import ImageModelDescriptor, ModelLoader
+
+    model = ModelLoader().load_from_file(path)
+    if not isinstance(model, ImageModelDescriptor):
+        raise RuntimeError(f"{Path(path).name} is not an image upscaler.")
+    # fp16 halves both the weights and the activations, but only where the
+    # architecture says it is safe (spandrel knows which ones overflow).
+    half = gpu.is_cuda(device) and bool(getattr(model, "supports_half", False))
+    dtype = torch.float16 if half else torch.float32
+    model.to(device)
+    if half:
+        model.to(dtype=dtype)
+    model.eval()
+    return {"model": model, "torch": torch, "device": device,
+            "dtype": dtype, "scale": int(model.scale)}
+
+
+def _load(entry: dict, token: str = "", device: str | None = None) -> dict:
+    """Load (and cache) the runtime for one registry entry on one device.
+
+    Only one runtime is held: a different (model, device) releases the old one
+    before the new one is loaded.
+    """
     global _RUNTIME
     with _LOCK:
-        if _RUNTIME is not None and _RUNTIME["key"] == entry["id"]:
+        if device is None:
+            device = gpu.device_for("upscale")
+        cache_key = (entry["id"], device)
+        if _RUNTIME is not None and _RUNTIME["cache_key"] == cache_key:
             return _RUNTIME
-        import torch
-        from spandrel import ImageModelDescriptor, ModelLoader
-
-        path = weights_path(entry, token)
-        model = ModelLoader().load_from_file(path)
-        if not isinstance(model, ImageModelDescriptor):
-            raise RuntimeError(f"{entry['filename']} is not an image upscaler.")
-        device = gpu.device_for("upscale")
-        # fp16 halves both the weights and the activations, but only where the
-        # architecture says it is safe (spandrel knows which ones overflow).
-        half = gpu.is_cuda(device) and bool(getattr(model, "supports_half", False))
-        dtype = torch.float16 if half else torch.float32
-        model.to(device)
-        if half:
-            model.to(dtype=dtype)
-        model.eval()
-        _RUNTIME = {"model": model, "torch": torch, "device": device,
-                    "dtype": dtype, "key": entry["id"], "scale": int(model.scale)}
+        if _RUNTIME is not None:
+            _RUNTIME = None
+            import gc
+            gc.collect()
+            gpu.empty_cache()
+        rt = _instantiate(weights_path(entry, token), device)
+        _RUNTIME = {**rt, "key": entry["id"], "cache_key": cache_key}
         return _RUNTIME
 
 
 def model_scale(entry: dict, token: str = "", device: str | None = None) -> int:
-    """The loaded model's real scale factor (local entries register scale 0).
-
-    ``device`` is accepted for Task 9 (per-job devices) and ignored until then.
-    """
-    return _load(entry, token)["scale"]
+    """The loaded model's real scale factor (local entries register scale 0)."""
+    return _load(entry, token, device)["scale"]
 
 
 def unload() -> None:
@@ -306,7 +319,8 @@ def _empty_cache(rt: dict) -> None:
     gpu.empty_cache()
 
 
-def upscale(img, entry: dict, passes: int, token: str = ""):
+def upscale(img, entry: dict, passes: int, token: str = "",
+            device: str | None = None):
     """Run ``passes`` model passes over the image, shrinking tiles on OOM.
 
     Ladder: tile 512 -> 256 -> 128, and if even the smallest tile runs out of
@@ -315,7 +329,7 @@ def upscale(img, entry: dict, passes: int, token: str = ""):
     """
     if passes <= 0:
         return img
-    rt = _load(entry, token)
+    rt = _load(entry, token, device)
     for _ in range(passes):
         img = _run_pass(rt, img)
     return img

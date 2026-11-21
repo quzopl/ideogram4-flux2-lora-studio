@@ -323,22 +323,31 @@ class _UpscaleHook:
         self.fit = fit
         self.used = False
         self.error = ""
+        self.job = job
+        self._injected = run is not None
+        self._scale = 0
         self._run = run or (lambda img, entry, passes: upscaler.upscale(
-            img, {**entry, "path": _ensure_model(entry["id"], job)}, passes,
-            token=self.token))
+            img, entry, passes, token=self.token))
 
     def reset(self) -> None:
         self.used = False
         self.error = ""
 
     def __call__(self, img, target):
-        scale = int(self.entry.get("scale") or 0) or 4
-        passes = upscaler.plan_passes(
-            (img.width, img.height), target, scale, self.min_ratio, fit=self.fit)
-        if passes <= 0:
-            return img
         try:
-            out = self._run(img, self.entry, passes)
+            entry = self.entry
+            if not self._injected:
+                entry = {**entry, "path": _ensure_model(entry["id"], self.job)}
+            if not self._scale:
+                # Local models register scale 0: ask the loaded model, once.
+                self._scale = (int(entry.get("scale") or 0)
+                               or upscaler.model_scale(entry, self.token))
+            passes = upscaler.plan_passes(
+                (img.width, img.height), target, self._scale, self.min_ratio,
+                fit=self.fit)
+            if passes <= 0:
+                return img
+            out = self._run(img, entry, passes)
         except Exception as e:  # noqa: BLE001 - fall back to plain resizing
             self.error = str(e)
             return img
@@ -868,7 +877,7 @@ def api_crop_auto(req: CropAutoRequest):
             "total": len(files), "processed": 0, "current": "", "error": "",
             "crops": {}, "skipped": [],
         }
-    threading.Thread(target=_run_crop_auto, args=(job_id, req, files),
+    threading.Thread(target=_run_crop_auto, args=(job_id, req, files, resolved),
                      daemon=True).start()
     return {"job_id": job_id, "total": len(files)}
 
@@ -1130,7 +1139,7 @@ class UpscaleRunRequest(BaseModel):
     factor: float = Field(2.0, gt=1.0, le=8.0)
     fmt: str = "png"         # "png" | "jpg"
     jpg_quality: int = 95
-    device: str = ""         # used from Task 9 on
+    device: str = ""         # "" = the upscale role's card, "cpu", or a GPU UUID
 
 
 class UpscaleExportRequest(BaseModel):
@@ -1161,7 +1170,27 @@ def _upscale_out_name(idx: int, src: Path, ext: str) -> str:
     return f"{idx:04d}_{src.stem}_up.{ext}"
 
 
-def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> None:
+def _resolve_device(value: str) -> tuple[str, str]:
+    """An upscale job's device choice -> (torch device, label shown in results).
+
+    "" is the upscale role's card, "cpu" the CPU, otherwise a card's UUID.
+    """
+    devices = gpu.probe()
+    if value == "":
+        device = gpu.device_for("upscale", devices=devices)
+        dev = next((d for d in devices if gpu.device_string(d) == device), None)
+        return device, gpu.label(dev, devices) if dev else "CPU"
+    if value == "cpu":
+        return "cpu", "CPU"
+    want = gpu.normalize_uuid(value)
+    for dev in devices:
+        if gpu.normalize_uuid(dev["uuid"]) == want:
+            return gpu.device_string(dev), gpu.label(dev, devices)
+    raise ValueError("Unknown GPU.")
+
+
+def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path],
+                     resolved: tuple[str, str] | None = None) -> None:
     job = JOBS[job_id]
     out_dir = WORK / job_id / "upscaled"
     thumb_dir = WORK / job_id / "thumbs"
@@ -1169,6 +1198,7 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> 
     thumb_dir.mkdir(parents=True, exist_ok=True)
     ext = "jpg" if req.fmt == "jpg" else "png"
     try:
+        device, device_label = resolved or _resolve_device(req.device)
         cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
         entry = upscaler.resolve(req.model_id, cfg)
         if not entry:
@@ -1177,7 +1207,7 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> 
         job["state"] = "loading_model"
         job["current"] = "Loading the upscale model…"
         entry = {**entry, "path": _ensure_model(entry["id"], job)}
-        scale = int(entry.get("scale") or 0) or upscaler.model_scale(entry, token)
+        scale = int(entry.get("scale") or 0) or upscaler.model_scale(entry, token, device)
         job["state"] = "processing"
         for i, src in enumerate(files):
             job["current"] = src.name
@@ -1187,7 +1217,8 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> 
                                          req.long_side, scale, req.factor)
                 passes = upscaler.plan_passes((img.width, img.height), target,
                                               scale, min_ratio=1.0)
-                big = upscaler.upscale(img, entry, passes, token=token)
+                big = upscaler.upscale(img, entry, passes, token=token,
+                                      device=device)
                 if (big.width, big.height) != target:
                     big = big.resize(target, Image.LANCZOS)
                 out_name = _upscale_out_name(i, src, ext)
@@ -1198,12 +1229,13 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path]) -> 
                 job["results"].append({
                     "idx": i, "src_name": src.name, "out_name": out_name,
                     "width": big.width, "height": big.height, "error": "",
-                    "passes": passes,
+                    "passes": passes, "device": device_label,
                 })
             except Exception as e:  # noqa: BLE001 - keep going on per-file errors
                 job["results"].append({
                     "idx": i, "src_name": src.name, "out_name": "",
                     "width": 0, "height": 0, "error": str(e),
+                    "passes": 0, "device": device_label,
                 })
             job["processed"] = i + 1
         job["current"] = ""
@@ -1218,6 +1250,10 @@ def api_upscale_run(req: UpscaleRunRequest):
     files = _list_images(req.folder)
     if not files:
         raise HTTPException(400, "No supported images in the folder.")
+    try:
+        resolved = _resolve_device(req.device)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     job_id = uuid.uuid4().hex
     with JOBS_LOCK:
         JOBS[job_id] = {
@@ -1225,7 +1261,7 @@ def api_upscale_run(req: UpscaleRunRequest):
             "total": len(files), "processed": 0, "current": "", "error": "",
             "config": req.model_dump(), "results": [],
         }
-    threading.Thread(target=_run_upscale_job, args=(job_id, req, files),
+    threading.Thread(target=_run_upscale_job, args=(job_id, req, files, resolved),
                      daemon=True).start()
     return {"job_id": job_id, "total": len(files)}
 

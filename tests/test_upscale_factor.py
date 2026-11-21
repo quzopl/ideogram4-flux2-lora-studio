@@ -33,13 +33,14 @@ def _run_job(tmp_path, monkeypatch, entry, factor, model_scale=None):
     monkeypatch.setattr(server, "_ensure_model", lambda mid, job: "/fake")
     monkeypatch.setattr(upscaler, "resolve", lambda mid, cfg: dict(entry))
     monkeypatch.setattr(upscaler, "load_config", lambda p: {})
+    monkeypatch.setattr(server, "_resolve_device", lambda v: ("cpu", "CPU"))
     if model_scale is not None:
         monkeypatch.setattr(upscaler, "model_scale",
                             lambda e, token="", device=None: model_scale)
     scale = entry["scale"] or model_scale
     monkeypatch.setattr(
         upscaler, "upscale",
-        lambda img, e, passes, token="": img.resize(
+        lambda img, e, passes, token="", device=None: img.resize(
             (img.width * scale ** passes, img.height * scale ** passes)))
     job_id = "test-upscale-factor-job"
     server.JOBS[job_id] = {"id": job_id, "kind": "upscale", "state": "pending",

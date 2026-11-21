@@ -249,11 +249,12 @@ def test_upscale_job_uses_resolved_path(tmp_path, monkeypatch):
                         lambda model_id, job: ensured.append(model_id) or "/m/x4.pth")
     paths = []
 
-    def fake_upscale(img, entry, passes, token=""):
+    def fake_upscale(img, entry, passes, token="", device=None):
         paths.append(entry["path"])
         return img.resize((img.width * 4, img.height * 4))
 
     monkeypatch.setattr(server.upscaler, "upscale", fake_upscale)
+    monkeypatch.setattr(server, "_resolve_device", lambda v: ("cpu", "CPU"))
     job_id = "test-model-loading-upscale"
     server.JOBS[job_id] = {"id": job_id, "kind": "upscale", "state": "pending", "total": 1,
                            "processed": 0, "current": "", "error": "", "results": []}
@@ -273,6 +274,7 @@ def test_upscale_job_without_folder_fails_with_readable_error(tmp_path, monkeypa
     monkeypatch.setattr(server, "WORK", tmp_path / "work")
     monkeypatch.setattr(server.upscaler, "upscale",
                         lambda *a, **kw: pytest.fail("must not upscale without weights"))
+    monkeypatch.setattr(server, "_resolve_device", lambda v: ("cpu", "CPU"))
     src = tmp_path / "src"
     src.mkdir()
     _png(src / "a.png")
@@ -454,3 +456,21 @@ def test_run_sh_has_no_hardcoded_hf_home():
     assert "/mnt/intel" not in text
     assert "export HF_HOME" not in text
     assert "Models folder: set it in the app (Settings → Models folder)" in text
+
+
+def test_dataset_upscale_hook_uses_real_scale_for_local_models(monkeypatch):
+    monkeypatch.setattr(server, "_ensure_model", lambda model_id, j: "/m/local.pth")
+    scales = []
+    monkeypatch.setattr(server.upscaler, "model_scale",
+                        lambda entry, token="", device=None: scales.append(entry["path"]) or 2)
+    planned = []
+    real_plan = server.upscaler.plan_passes
+    monkeypatch.setattr(server.upscaler, "plan_passes",
+                        lambda size, target, scale, *a, **kw:
+                        planned.append(scale) or real_plan(size, target, scale, *a, **kw))
+    monkeypatch.setattr(server.upscaler, "upscale", lambda img, entry, passes, token="": img)
+    hook = server._UpscaleHook({"id": "local:/m/local.pth", "scale": 0}, min_ratio=1.05, job={})
+    hook(Image.new("RGB", (100, 100)), (400, 400))
+    hook(Image.new("RGB", (100, 100)), (400, 400))
+    assert planned == [2, 2] and scales == ["/m/local.pth"]  # probed once, memoised
+    assert hook.used and not hook.error
