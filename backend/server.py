@@ -28,10 +28,11 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
-from . import api_settings
+from . import api_models as models_api, api_settings
 from .origin_guard import OriginGuard
 from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence, gpu,
-               hf_auth, ideogram_workflow, image_utils, lmstudio, model_store, prompts,
+               fsutil, hf_auth, ideogram_workflow, image_utils, lmstudio, model_store,
+               prompts, settings,
                upscaler, v15_lint)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -485,6 +486,27 @@ def _list_subdirs(path: Path) -> list[str]:
     return sorted(out, key=str.lower)
 
 
+def _list_weight_files(path: Path) -> list[str]:
+    """Sorted names of weight files (upscaler.WEIGHT_EXT) in ``path``; unreadable ones skipped."""
+    out: list[str] = []
+    try:
+        for entry in path.iterdir():
+            try:
+                if entry.is_file() and entry.suffix.lower() in upscaler.WEIGHT_EXT:
+                    out.append(entry.name)
+            except OSError:
+                continue
+    except OSError:
+        return []
+    return sorted(out, key=str.lower)
+
+
+def _model_ctx() -> dict:
+    return {"settings": settings.load(),
+            "upscale_cfg": upscaler.load_config(UPSCALER_CONFIG_PATH),
+            "custom_vlms": _load_named(CUSTOM_MODELS_PATH)}
+
+
 def _model_dir_info(path: Path) -> dict:
     """Czy `path` to folder z modelem Qwen2.5-VL. {ok, reason, label}."""
     if not path.is_dir():
@@ -560,17 +582,44 @@ def api_models():
 
 
 @app.get("/api/fs/list")
-def api_fs_list(path: str = ""):
+def api_fs_list(path: str = "", files: str = ""):
     base = (Path(path).expanduser() if path else Path.home()).resolve()
     if not base.is_dir():
         raise HTTPException(400, f"Not a folder: {base}")
     parent = None if base.parent == base else str(base.parent)
-    return {
+    out = {
         "path": str(base),
         "parent": parent,
         "dirs": _list_subdirs(base),
         "is_model": _model_dir_info(base)["ok"],
+        "free_bytes": fsutil.free_bytes(base),
+        "writable": os.access(base, os.W_OK),
     }
+    if files == "weights":
+        out["files"] = _list_weight_files(base)
+    return out
+
+
+class MkdirReq(BaseModel):
+    path: str
+
+
+@app.post("/api/fs/mkdir")
+def api_fs_mkdir(req: MkdirReq):
+    p = Path(req.path).expanduser()
+    if not p.is_absolute():
+        raise HTTPException(400, "Use an absolute path.")
+    if not p.parent.is_dir():
+        raise HTTPException(400, f"Parent folder does not exist: {p.parent}")
+    if not os.access(p.parent, os.W_OK):
+        raise HTTPException(400, f"Folder is not writable: {p.parent}")
+    if p.exists():
+        raise HTTPException(400, f"Already exists: {p}")
+    try:
+        p.mkdir()
+    except OSError:
+        raise HTTPException(400, f"Cannot create folder: {p}")
+    return {"path": str(p.resolve())}
 
 
 @app.post("/api/models/custom")
@@ -2165,4 +2214,6 @@ def health():
 
 
 app.include_router(api_settings.router)
+models_api.configure(_model_ctx, lambda: hf_auth.load_token(HF_TOKEN_PATH))
+app.include_router(models_api.router)
 app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
