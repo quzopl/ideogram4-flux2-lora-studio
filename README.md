@@ -130,8 +130,13 @@ browser, otherwise it starts `./run.sh` and opens the browser as soon as
 stays at **`/legacy/`** (it understands a `#<view>` hash, e.g.
 `/legacy/#prompts`). If `web/dist` does not exist, `/` redirects to
 `/legacy/`. `run.sh` runs `pnpm install` and `pnpm build` in `web/` when
-`web/dist` is missing or older than `web/src`; without `pnpm` it prints a
-message and skips the build, so you get the classic UI only.
+`web/dist` is missing or older than its sources (`web/src`, `web/public`,
+`web/index.html`, `package.json`, `pnpm-lock.yaml`, `vite.config.ts`); without
+`pnpm` it prints a message and skips the build, so you get the classic UI
+only. A failed build does not stop the server: `run.sh` prints a message and
+starts it with the previous build, or with only the classic UI if there is
+none. `launch.sh` waits up to 30 minutes for the server, since the first run
+installs PyTorch.
 
 The v2 views so far: **Upscale** (x2 / x3 / x4, a custom factor 1.5–8, long
 side or native scale; model and GPU per job; drag-and-drop; before/after
@@ -199,9 +204,10 @@ The API answers only the app itself: requests with a non-loopback `Host`, and
 state-changing requests from another web origin (any other site open in your
 browser), are rejected with 403. An origin is accepted when it is a loopback
 address on the same port as the server, or exactly one of
-`FLUX_PREP_DEV_ORIGINS` (comma-separated; default
-`http://localhost:5173,http://127.0.0.1:5173`, the Vite dev server). curl and
-scripts that send no `Origin` header work as before.
+`FLUX_PREP_DEV_ORIGINS` (comma-separated, empty by default). The Vite dev
+server needs no entry there: its proxy keeps the `Host` header, so `Host` and
+`Origin` both carry port 5173. curl and scripts that send no `Origin` header
+work as before.
 
 `/api/fs/pick` (the native folder-picker dialog) is `POST`, since it has a
 side effect. The upscale result of image `idx` in a job is served at
