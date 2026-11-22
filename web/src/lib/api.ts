@@ -12,7 +12,7 @@ export class ApiError extends Error {
 }
 
 /** FastAPI errors: `{"detail": "..."}`, or a 422 with `{"detail": [{"msg": ...}]}`. */
-function detailOf(body: unknown, fallback: string): string {
+export function detailOf(body: unknown, fallback: string): string {
   const detail = (body as { detail?: unknown } | null)?.detail
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {

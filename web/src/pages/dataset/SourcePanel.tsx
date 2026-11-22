@@ -19,6 +19,9 @@ interface SourcePanelProps {
   folder: string
   disabled: boolean
   scanning: boolean
+  /** An upload is in flight (no scan may start meanwhile). */
+  uploading: boolean
+  onUploading: (busy: boolean) => void
   status: SourceStatus | null
   onScan: (folder: string) => void
   onUploaded: (folder: string, files: string[]) => void
@@ -26,7 +29,7 @@ interface SourcePanelProps {
 }
 
 /** Step 1: a folder on disk (typed or picked, then scanned) or uploaded images. */
-export function SourcePanel({ folder, disabled, scanning, status, onScan, onUploaded, onEmptyUpload }: SourcePanelProps) {
+export function SourcePanel({ folder, disabled, scanning, uploading, onUploading, status, onScan, onUploaded, onEmptyUpload }: SourcePanelProps) {
   const [path, setPath] = useState(folder)
   const [picking, setPicking] = useState(false)
   // A new source (scan, upload, saved form) replaces the typed text.
@@ -39,7 +42,7 @@ export function SourcePanel({ folder, disabled, scanning, status, onScan, onUplo
   const submit = (e: FormEvent) => {
     e.preventDefault()
     const p = path.trim()
-    if (p) onScan(p)
+    if (p && !uploading) onScan(p)
   }
 
   return (
@@ -54,7 +57,7 @@ export function SourcePanel({ folder, disabled, scanning, status, onScan, onUplo
           onChange={(e) => setPath(e.target.value)}
           className="font-mono text-xs"
         />
-        <Button type="submit" variant="outline" size="sm" disabled={disabled || scanning || !path.trim()}>
+        <Button type="submit" variant="outline" size="sm" disabled={disabled || scanning || uploading || !path.trim()}>
           <Search />
           Scan
         </Button>
@@ -64,7 +67,7 @@ export function SourcePanel({ folder, disabled, scanning, status, onScan, onUplo
           size="icon-sm"
           aria-label="Choose folder…"
           title="Choose folder…"
-          disabled={disabled}
+          disabled={disabled || uploading}
           onClick={() => setPicking(true)}
         >
           <FolderOpen />
@@ -72,7 +75,9 @@ export function SourcePanel({ folder, disabled, scanning, status, onScan, onUplo
       </form>
       <DropZone
         accept={ACCEPT}
-        disabled={disabled}
+        // One source at a time: no upload while a scan runs (and no scan while uploading).
+        disabled={disabled || scanning}
+        onBusyChange={onUploading}
         onUploaded={(f, _count, files) => onUploaded(f, files)}
         onEmpty={onEmptyUpload}
       />

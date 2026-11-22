@@ -1,4 +1,4 @@
-import { useCallback, useId, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
 import { ModelSelect } from '@/components/ModelSelect'
 import { PresetBar } from '@/components/PresetBar'
 import { Input } from '@/components/ui/input'
@@ -46,11 +46,19 @@ function Choice({ id, label, options, value, onChange, disabled }: {
   )
 }
 
-/** A whole-number input that only reports valid numbers (no NaN is ever saved). */
-function NumberInput({ id, value, onChange, min, max, step, title }: {
+export type NumberField = 'jpg_quality' | 'max_tokens'
+
+/**
+ * A whole-number input that only reports valid numbers (no NaN is ever saved).
+ * Text that is not one (empty, a fraction, out of range) stays as typed, is
+ * marked invalid with its error, and is reported through `onValidity`.
+ */
+function NumberInput({ id, field, value, onChange, onValidity, min, max, step, title }: {
   id: string
+  field: NumberField
   value: number
   onChange: (v: number) => void
+  onValidity: (field: NumberField, error: string) => void
   min: number
   max: number
   step?: number
@@ -63,24 +71,33 @@ function NumberInput({ id, value, onChange, min, max, step, title }: {
     setShown(value)
     setText(String(value))
   }
+  const n = text.trim() === '' ? NaN : Number(text)
+  const error = Number.isInteger(n) && n >= min && n <= max ? '' : `Enter a whole number from ${min} to ${max}`
+  useEffect(() => onValidity(field, error), [field, error, onValidity])
   return (
-    <Input
-      id={id}
-      type="number"
-      inputMode="numeric"
-      min={min}
-      max={max}
-      step={step}
-      title={title}
-      value={text}
-      onChange={(e) => {
-        setText(e.target.value)
-        const n = e.target.valueAsNumber
-        if (Number.isInteger(n)) onChange(n)
-      }}
-      onBlur={() => setText(String(value))}
-      className="font-mono"
-    />
+    <>
+      <Input
+        id={id}
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        step={step}
+        title={title}
+        value={text}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? `${id}-error` : undefined}
+        onChange={(e) => {
+          setText(e.target.value)
+          const v = e.target.valueAsNumber
+          if (Number.isInteger(v) && v >= min && v <= max) onChange(v)
+        }}
+        // A valid number is shown as saved ("0100" -> "100"); an invalid one stays to be fixed.
+        onBlur={() => !error && setText(String(value))}
+        className="font-mono"
+      />
+      {error && <p id={`${id}-error`} className="text-xs text-danger">{error}</p>}
+    </>
   )
 }
 
@@ -103,9 +120,11 @@ interface SettingsPanelProps {
   cropReady: boolean
   /** True when the plan has no crops (Auto then falls back to the centre crop). */
   planEmpty: boolean
+  /** Told when a number field becomes invalid ("" when it is fine again). Must be stable. */
+  onValidity: (field: NumberField, error: string) => void
 }
 
-export function SettingsPanel({ form, setForm, cropMode, onCropMode, cropReady, planEmpty }: SettingsPanelProps) {
+export function SettingsPanel({ form, setForm, cropMode, onCropMode, cropReady, planEmpty, onValidity }: SettingsPanelProps) {
   const uid = useId()
   const id = (k: string) => `${uid}-${k}`
   const set = <K extends keyof DatasetForm>(k: K, v: DatasetForm[K]) => setForm((f) => ({ ...f, [k]: v }))
@@ -177,7 +196,7 @@ export function SettingsPanel({ form, setForm, cropMode, onCropMode, cropReady, 
         </Field>
         {choice('fmt', 'Format')}
         <Field label="JPG quality" htmlFor={id('jpgq')}>
-          <NumberInput id={id('jpgq')} min={50} max={100} value={form.jpg_quality} onChange={(v) => set('jpg_quality', v)} />
+          <NumberInput id={id('jpgq')} field="jpg_quality" onValidity={onValidity} min={50} max={100} value={form.jpg_quality} onChange={(v) => set('jpg_quality', v)} />
         </Field>
 
         <Field label="VLM model" htmlFor={id('model')} wide>
@@ -187,6 +206,8 @@ export function SettingsPanel({ form, setForm, cropMode, onCropMode, cropReady, 
         <Field label="Max caption length (tokens)" htmlFor={id('maxtok')}>
           <NumberInput
             id={id('maxtok')}
+            field="max_tokens"
+            onValidity={onValidity}
             min={64}
             max={8192}
             step={32}

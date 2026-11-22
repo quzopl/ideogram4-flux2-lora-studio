@@ -152,7 +152,8 @@ export function CropBar({ folder, files, settings }: CropBarProps) {
         <Button
           size="sm"
           variant="ghost"
-          disabled={!crops.loaded || running || Object.keys(crops.plan).length === 0}
+          // Crops of files no longer in the folder do not count (plans are never pruned).
+          disabled={!crops.loaded || running || existing === 0}
           onClick={() => setConfirmClear(true)}
         >
           <Eraser />

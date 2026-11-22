@@ -125,3 +125,28 @@ export interface CropAutoJob {
   crops: CropPlan
   skipped: string[]
 }
+
+/** One row of GET /api/job/{id} `results`. A failed file has `out_name: ""` and `[ERROR: …]` as caption. */
+export interface DatasetResult {
+  idx: number
+  src_name: string
+  out_name: string
+  width: number
+  height: number
+  caption: string
+  upscaled: boolean
+  upscale_error: string
+}
+
+/** GET /api/job/{id} (a Dataset processing job). `error` carries a traceback. */
+export interface DatasetJob {
+  id: string
+  state: string
+  total: number
+  processed: number
+  current: string
+  error: string
+  /** The ProcessRequest the job runs with. */
+  config: { caption_format?: string; mode?: string }
+  results: DatasetResult[]
+}

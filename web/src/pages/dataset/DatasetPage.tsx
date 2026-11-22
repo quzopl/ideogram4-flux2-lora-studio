@@ -1,13 +1,17 @@
 import { useMutation } from '@tanstack/react-query'
-import { Images, Wand2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Images } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CropEditorDialog } from '@/components/CropEditorDialog'
-import { Button } from '@/components/ui/button'
 import { useSavedForm } from '@/hooks/useAutosave'
 import { useCropPlan } from '@/hooks/useCropPlan'
 import { api, ApiError } from '@/lib/api'
-import { DATASET_DEFAULTS, type DatasetForm } from './datasetForm'
-import { SettingsPanel } from './SettingsPanel'
+import { useMutationWithToast } from '@/lib/queries'
+import { DATASET_DEFAULTS, toProcessRequest, type DatasetForm } from './datasetForm'
+import { ExportPanel } from './ExportPanel'
+import { ResultsGrid } from './ResultsGrid'
+import { RunPanel } from './RunPanel'
+import { flushRun, startRun, useDatasetJob, useRun } from './runStore'
+import { SettingsPanel, type NumberField } from './SettingsPanel'
 import { CropBar, SourceGrid } from './SourceGrid'
 import { SourcePanel, type SourceStatus } from './SourcePanel'
 
@@ -27,6 +31,19 @@ export function DatasetPage() {
   const [status, setStatus] = useState<SourceStatus | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const crops = useCropPlan(source?.folder ?? null)
+  const [uploading, setUploading] = useState(false)
+  // Number fields whose text is not a valid number (it is not in the form).
+  const [invalid, setInvalid] = useState<Partial<Record<NumberField, string>>>({})
+  const onValidity = useCallback(
+    (field: NumberField, error: string) => setInvalid((v) => ((v[field] ?? '') === error ? v : { ...v, [field]: error })),
+    [],
+  )
+  const settingsRef = useRef<HTMLFieldSetElement>(null)
+
+  // This tab's run (kept in sessionStorage, so leaving the view resumes it).
+  const run = useRun()
+  const job = useDatasetJob(run?.jobId ?? null)
+  useEffect(() => flushRun, [])
 
   const takeSource = (s: Source) => {
     setSource(s)
@@ -60,7 +77,22 @@ export function DatasetPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on entry
   }, [loaded])
 
-  const canProcess = loaded && !scanner.isPending && source !== null && source.count > 0
+  const start = useMutationWithToast((body: ReturnType<typeof toProcessRequest>) =>
+    api<{ job_id: string; total: number }>('/api/process', { method: 'POST', json: body }))
+
+  const canProcess = loaded && !scanner.isPending && !uploading && source !== null && source.count > 0 &&
+    crops.loaded && !start.isPending && !job.running
+
+  const process = () => {
+    if (!source || !canProcess) return
+    // A number field that is not a number is not sent; its error shows next to it.
+    if (Object.values(invalid).some(Boolean)) {
+      settingsRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+      return
+    }
+    const body = toProcessRequest({ ...form, folder: source.folder }, { plan: crops.plan, mode: crops.mode })
+    start.mutate(body, { onSuccess: (r) => startRun(r.job_id, body.folder) })
+  }
 
   return (
     <div className="flex flex-col gap-6 px-10 py-8">
@@ -70,18 +102,23 @@ export function DatasetPage() {
       </div>
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(24rem,32rem)_1fr]">
-        <fieldset disabled={!loaded} className="flex min-w-0 flex-col gap-6">
+        <fieldset ref={settingsRef} disabled={!loaded} className="flex min-w-0 flex-col gap-6">
           <SourcePanel
             folder={form.folder}
             disabled={!loaded}
             scanning={scanner.isPending}
+            uploading={uploading}
+            onUploading={setUploading}
             status={status}
             onScan={scan}
             onUploaded={(folder, files) => {
+              // A scan answered later must not replace the upload (its callbacks are dropped).
+              scanner.reset()
               takeSource({ folder, count: files.length, files })
               setStatus({ text: `Uploaded ${images(files.length)}.`, tone: 'ok' })
             }}
             onEmptyUpload={(folder) => {
+              scanner.reset()
               takeSource({ folder, count: 0, files: [] })
               setStatus({ text: 'No supported images in the upload', tone: 'err' })
             }}
@@ -94,16 +131,9 @@ export function DatasetPage() {
             cropReady={crops.loaded}
             // Crops of files no longer in the folder do not count (plans are never pruned).
             planEmpty={!source?.files.some((f) => crops.plan[f])}
+            onValidity={onValidity}
           />
-          {/* The run itself comes with the processing step. */}
-          <Button
-            size="lg"
-            disabled={!canProcess}
-            className="bg-linear-to-r from-accent-from to-accent-to text-white shadow-[0_0_24px_rgba(139,92,246,0.25)] transition-shadow hover:shadow-[0_0_32px_rgba(34,211,238,0.3)]"
-          >
-            <Wand2 />
-            Process images
-          </Button>
+          <RunPanel canProcess={canProcess} onProcess={process} job={run ? job : null} />
         </fieldset>
 
         <section aria-label="Photos" className="flex min-w-0 flex-col gap-4">
@@ -126,6 +156,23 @@ export function DatasetPage() {
           )}
         </section>
       </div>
+
+      {run && (
+        <>
+          {job.data && (
+            <ResultsGrid key={`grid-${run.jobId}`} job={job.data} run={run} trigger={form.trigger} prependTrigger={form.prepend_trigger} />
+          )}
+          <ExportPanel
+            key={`export-${run.jobId}`}
+            job={job.data}
+            run={run}
+            trigger={form.trigger}
+            prependTrigger={form.prepend_trigger}
+            outputFolder={form.output_folder}
+            onOutputFolder={(output_folder) => setForm((f) => ({ ...f, output_folder }))}
+          />
+        </>
+      )}
 
       {source && editing && (
         <CropEditorDialog

@@ -1,6 +1,6 @@
 import { ImageUp, LoaderCircle } from 'lucide-react'
 import { motion } from 'motion/react'
-import { useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { useMutationWithToast } from '@/lib/queries'
@@ -20,10 +20,12 @@ interface DropZoneProps {
   /** The file input's `accept`. */
   accept?: string
   disabled?: boolean
+  /** Told when an upload starts (true) and when it ends (false). */
+  onBusyChange?: (busy: boolean) => void
 }
 
 /** Drop (or pick) images; they go to POST /api/upload and become a source folder. */
-export function DropZone({ onUploaded, onEmpty, accept = 'image/*', disabled = false }: DropZoneProps) {
+export function DropZone({ onUploaded, onEmpty, accept = 'image/*', disabled = false, onBusyChange }: DropZoneProps) {
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
 
@@ -52,6 +54,7 @@ export function DropZone({ onUploaded, onEmpty, accept = 'image/*', disabled = f
   }
 
   const busy = upload.isPending
+  useEffect(() => onBusyChange?.(busy), [busy, onBusyChange])
   const pick = () => !busy && !disabled && input.current?.click()
   return (
     <>

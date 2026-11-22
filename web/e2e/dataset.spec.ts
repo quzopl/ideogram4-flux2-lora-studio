@@ -241,3 +241,316 @@ test('crop source is per folder', async ({ page }) => {
   await scan(page, A, 2)
   await expect(source).toHaveText('Manual (per-image crops)')
 })
+
+// ---------------------------------------------------------------------------
+// Processing, caption review and export (the job endpoints are mocked).
+
+interface Result {
+  idx: number
+  src_name: string
+  out_name: string
+  width: number
+  height: number
+  caption: string
+  upscaled: boolean
+  upscale_error: string
+}
+
+const result = (idx: number, extra: Partial<Result> = {}): Result => ({
+  idx,
+  src_name: `${'abc'[idx]}.png`,
+  out_name: `person_000${idx}.png`,
+  width: 1024,
+  height: 768,
+  caption: `Caption ${idx}`,
+  upscaled: false,
+  upscale_error: '',
+  ...extra,
+})
+
+const failed = (idx: number): Result =>
+  result(idx, { out_name: '', width: 0, height: 0, caption: '[ERROR: cannot identify image]' })
+
+interface JobPhase {
+  state: string
+  processed?: number
+  current?: string
+  error?: string
+  results?: Result[]
+  caption_format?: string
+}
+
+/**
+ * Mocks POST /api/process (bodies collected) and GET /api/job/job1, which
+ * answers with `phases[phase.i]`; the test moves `phase.i` on.
+ */
+async function mockJob(page: Page, phases: JobPhase[]) {
+  const bodies: Record<string, unknown>[] = []
+  const phase = { i: 0, polls: 0 }
+  await page.route('**/api/process', (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { job_id: 'job1', total: 3 } })
+  })
+  await page.route('**/api/job/*', (route) => {
+    phase.polls++
+    const p = phases[Math.min(phase.i, phases.length - 1)]
+    return route.fulfill({
+      json: {
+        id: 'job1',
+        state: p.state,
+        total: 3,
+        processed: p.processed ?? p.results?.length ?? 0,
+        current: p.current ?? '',
+        error: p.error ?? '',
+        config: { mode: 'person', caption_format: p.caption_format ?? 'flux' },
+        results: p.results ?? [],
+      },
+    })
+  })
+  await page.route('**/api/thumb/**', (route) => route.fulfill({ path: path.join(FIXTURES, 'a.png') }))
+  return { bodies, phase }
+}
+
+const cards = (page: Page) => page.getByTestId('result-card')
+const caption = (page: Page, out: string) => page.getByRole('textbox', { name: `Caption of ${out}`, exact: true })
+const toasts = (page: Page) => page.locator('[data-sonner-toast]')
+
+/** Scans A and starts processing it (the job is mocked). */
+async function processA(page: Page) {
+  await page.goto('/dataset')
+  await scan(page, A, 2)
+  await processBtn(page).click()
+}
+
+test('process sends the form', async ({ page, request }) => {
+  const plan = { 'a.png': [1, 2, 30, 40] }
+  await request.put('/api/crops', { data: { folder: A, plan, mode: 'manual' } })
+  const { bodies } = await mockJob(page, [{ state: 'processing' }])
+  await page.goto('/dataset')
+  await scan(page, A, 2)
+  await expect(combo(page, 'Crop source')).toHaveText('Manual (per-image crops)')
+  await processBtn(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  // toProcessRequest: the form without the export-only fields, plus the folder's crop plan.
+  expect(bodies[0]).toEqual({
+    folder: A,
+    mode: 'person',
+    style: 'concise',
+    caption_format: 'flux',
+    resolution: 1024,
+    step: 64,
+    square: false,
+    fit: 'cover',
+    pad_color: '#000000',
+    centering_x: 'center',
+    centering_y: 'center',
+    fmt: 'png',
+    jpg_quality: 95,
+    model: expect.any(String),
+    quant: '4bit',
+    max_tokens: 512,
+    do_caption: true,
+    upscale_model: '',
+    crop_mode: 'manual',
+    crops: plan,
+  })
+  await expect(processBtn(page)).toBeDisabled()
+})
+
+test('results arrive while processing', async ({ page }) => {
+  const { phase } = await mockJob(page, [
+    { state: 'loading_model', current: 'Loading the VLM model…' },
+    { state: 'processing', current: 'b.png', results: [result(0, { upscaled: true })] },
+    { state: 'done', results: [result(0, { upscaled: true }), result(1)] },
+  ])
+  await processA(page)
+  const progress = page.getByTestId('job-progress')
+  await expect(progress).toHaveAttribute('data-state', 'loading_model')
+  await expect(progress).toContainText('Loading the VLM model…')
+  await expect(cards(page)).toHaveCount(0)
+  await expect(processBtn(page)).toBeDisabled()
+
+  phase.i = 1
+  await expect(progress).toHaveAttribute('data-state', 'processing')
+  await expect(progress).toContainText('b.png')
+  await expect(cards(page)).toHaveCount(1)
+  await expect(cards(page).first()).toContainText('person_0000.png')
+  await expect(cards(page).first()).toContainText('1024×768')
+  await expect(cards(page).first()).toContainText('✨')
+  await expect(caption(page, 'person_0000.png')).toHaveValue('Caption 0')
+  await expect(page.getByRole('button', { name: 'Save to folder', exact: true })).toBeDisabled()
+
+  phase.i = 2
+  await expect(progress).toHaveAttribute('data-state', 'done')
+  await expect(cards(page)).toHaveCount(2)
+  await expect(cards(page).nth(1)).toContainText('person_0001.png')
+  await expect(cards(page).nth(1)).not.toContainText('✨')
+  await expect(processBtn(page)).toBeEnabled()
+  await expect(page.getByText('To export: 2 images')).toBeVisible()
+})
+
+test('caption edits survive navigation and polling', async ({ page }) => {
+  const { phase } = await mockJob(page, [
+    { state: 'processing', results: [result(0)] },
+    { state: 'processing', results: [result(0), result(1)] },
+  ])
+  await processA(page)
+  await expect(cards(page)).toHaveCount(1)
+  await caption(page, 'person_0000.png').fill('My own caption')
+
+  // A later poll (it brings the second card) keeps the edit.
+  phase.i = 1
+  await expect(cards(page)).toHaveCount(2)
+  await expect(caption(page, 'person_0000.png')).toHaveValue('My own caption')
+
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  // Wait until the exit transition has unmounted the view (a quick return would revive it).
+  await expect(cards(page)).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Dataset', exact: true })).toHaveCount(0)
+  await nav.getByRole('link', { name: 'Dataset', exact: true }).click()
+  await expect(page).toHaveURL(/\/dataset$/)
+  await expect(cards(page)).toHaveCount(2)
+  await expect(caption(page, 'person_0000.png')).toHaveValue('My own caption')
+  await expect(caption(page, 'person_0001.png')).toHaveValue('Caption 1')
+
+  // The run and its edits are kept in sessionStorage.
+  await page.reload()
+  await expect(cards(page)).toHaveCount(2)
+  await expect(caption(page, 'person_0000.png')).toHaveValue('My own caption')
+})
+
+test('remove and undo', async ({ page }) => {
+  await mockJob(page, [{ state: 'done', results: [result(0), result(1)] }])
+  await processA(page)
+  await expect(cards(page)).toHaveCount(2)
+  await expect(page.getByText('To export: 2 images', { exact: true })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Remove person_0001.png', exact: true }).click()
+  await expect(cards(page)).toHaveCount(1)
+  await expect(page.getByText('To export: 1 image (1 removed)', { exact: true })).toBeVisible()
+
+  await toasts(page).getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(cards(page)).toHaveCount(2)
+  await expect(cards(page).nth(1)).toContainText('person_0001.png')
+  await expect(page.getByText('To export: 2 images', { exact: true })).toBeVisible()
+})
+
+test('export sends only edits and exclusions', async ({ page }) => {
+  const out = path.join(WORK, 'ds-out')
+  await mockJob(page, [{ state: 'done', results: [result(0), result(1), failed(2)] }])
+  const bodies: Record<string, unknown>[] = []
+  await page.route('**/api/export', (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { output_folder: out, written: 1 } })
+  })
+  await processA(page)
+  await expect(cards(page)).toHaveCount(3)
+
+  // A failed file: red card with the error, nothing to edit, not exported.
+  const bad = cards(page).nth(2)
+  await expect(bad).toContainText('c.png')
+  await expect(bad).toContainText('cannot identify image')
+  await expect(bad.getByRole('textbox')).toHaveCount(0)
+  await expect(page.getByText('To export: 2 images', { exact: true })).toBeVisible()
+
+  await page.getByRole('textbox', { name: 'Trigger word', exact: true }).fill('  ohwx ')
+  await expect(cards(page).first().getByTestId('trigger-preview')).toHaveText('ohwx,')
+  await caption(page, 'person_0000.png').fill('Edited caption')
+  await page.getByRole('button', { name: 'Remove person_0001.png', exact: true }).click()
+  await expect(page.getByText('To export: 1 image (1 removed)', { exact: true })).toBeVisible()
+
+  const save = page.getByRole('button', { name: 'Save to folder', exact: true })
+  await expect(save).toBeDisabled()
+  await page.getByRole('textbox', { name: 'Output folder', exact: true }).fill(out)
+  await save.click()
+  await expect.poll(() => bodies.length).toBe(1)
+  expect(bodies[0]).toEqual({
+    job_id: 'job1',
+    output_folder: out,
+    trigger: 'ohwx',
+    prepend_trigger: true,
+    captions: { 0: 'Edited caption' },
+    exclude_idx: [1],
+  })
+  await expect(toasts(page).filter({ hasText: `Saved 1 pair to ${out}` })).toBeVisible()
+})
+
+test('json formats preview the trigger in words', async ({ page }) => {
+  await mockJob(page, [{ state: 'done', caption_format: 'ideogram', results: [result(0)] }])
+  await processA(page)
+  await expect(cards(page)).toHaveCount(1)
+  await expect(cards(page).getByTestId('trigger-preview')).toHaveCount(0)
+  await page.getByRole('textbox', { name: 'Trigger word', exact: true }).fill('ohwx')
+  await expect(cards(page).getByTestId('trigger-preview')).toHaveText('trigger added to high_level_description')
+  await page.getByRole('switch', { name: 'Prepend trigger to captions', exact: true }).click()
+  await expect(cards(page).getByTestId('trigger-preview')).toHaveCount(0)
+})
+
+test('zip downloads with server filename', async ({ page }) => {
+  await mockJob(page, [{ state: 'done', results: [result(0), result(1)] }])
+  const bodies: Record<string, unknown>[] = []
+  await page.route('**/api/zip', (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({
+      body: Buffer.from('PK\x05\x06' + '\0'.repeat(18), 'binary'),
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="dataset_person_job1abcd.zip"',
+      },
+    })
+  })
+  await processA(page)
+  await expect(cards(page)).toHaveCount(2)
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download .zip', exact: true }).click()
+  expect((await download).suggestedFilename()).toBe('dataset_person_job1abcd.zip')
+  expect(bodies[0]).toMatchObject({ job_id: 'job1', captions: {}, exclude_idx: [] })
+})
+
+test('a failed zip shows the server error', async ({ page }) => {
+  await mockJob(page, [{ state: 'done', results: [result(0)] }])
+  await page.route('**/api/zip', (route) => route.fulfill({ status: 400, json: { detail: 'No images to package.' } }))
+  await processA(page)
+  await page.getByRole('button', { name: 'Download .zip', exact: true }).click()
+  await expect(toasts(page).filter({ hasText: 'No images to package.' })).toBeVisible()
+})
+
+test('empty number field is caught before submit', async ({ page }) => {
+  const { bodies } = await mockJob(page, [{ state: 'processing' }])
+  await page.goto('/dataset')
+  await scan(page, A, 2)
+  const field = page.getByRole('spinbutton', { name: 'Max caption length (tokens)', exact: true })
+  await field.fill('')
+  await processBtn(page).click()
+  await expect(field).toHaveAttribute('aria-invalid', 'true')
+  await expect(page.getByText('Enter a whole number from 64 to 8192')).toBeVisible()
+  await page.waitForTimeout(500)
+  expect(bodies).toHaveLength(0)
+
+  await field.fill('1024')
+  await expect(field).not.toHaveAttribute('aria-invalid', 'true')
+  await processBtn(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  expect(bodies[0]).toMatchObject({ max_tokens: 1024 })
+})
+
+test('job errors show their first line', async ({ page }) => {
+  await mockJob(page, [{ state: 'error', error: 'CUDA out of memory\nTraceback (most recent call last):\n  File "x"' }])
+  await processA(page)
+  const progress = page.getByTestId('job-progress')
+  await expect(progress).toHaveAttribute('data-state', 'error')
+  await expect(progress).toContainText('CUDA out of memory')
+  await expect(progress).not.toContainText('Traceback')
+  await expect(page.locator('[title*="Traceback"]')).toHaveCount(1)
+  await expect(processBtn(page)).toBeEnabled()
+})
+
+test('clear crops ignores crops of files no longer in the folder', async ({ page, request }) => {
+  await request.put('/api/crops', { data: { folder: A, plan: { 'gone.png': [0, 0, 10, 10] }, mode: 'manual' } })
+  await page.goto('/dataset')
+  await scan(page, A, 2)
+  await expect(page.getByText('0 of 2 images have a crop.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Clear crops', exact: true })).toBeDisabled()
+})
