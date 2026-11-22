@@ -309,6 +309,16 @@ document.querySelectorAll(".navtab").forEach((tab) => {
   tab.addEventListener("click", () => switchView(tab.dataset.view));
 });
 
+// /legacy/#<view> opens that view (links from the v2 UI). Run on "load" so
+// view scripts loaded after this file (upscale.js) can initialise it.
+function openViewFromHash() {
+  const view = location.hash.slice(1);
+  const known = [...document.querySelectorAll(".navtab")].some((t) => t.dataset.view === view);
+  if (known) switchView(view);
+}
+window.addEventListener("load", openViewFromHash);
+window.addEventListener("hashchange", openViewFromHash);
+
 // --------------------------------------------------------------------------- //
 // Tabs
 // --------------------------------------------------------------------------- //

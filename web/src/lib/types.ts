@@ -88,3 +88,15 @@ export interface StoreModelsResponse {
   models_dir: string
   models: StoreModel[]
 }
+
+/** GET /api/fs/list (server.py `api_fs_list`). `files` only with `files=weights`. */
+export interface FsListing {
+  /** Resolved absolute path. */
+  path: string
+  parent: string | null
+  dirs: string[]
+  is_model: boolean
+  free_bytes: number
+  writable: boolean
+  files?: string[]
+}

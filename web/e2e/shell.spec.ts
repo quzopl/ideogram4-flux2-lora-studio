@@ -28,6 +28,13 @@ test('classic views link to legacy', async ({ page }) => {
   await expect(link).toHaveAttribute('href', /^\/legacy\//)
 })
 
+test('legacy hash opens view', async ({ page }) => {
+  await page.goto('/legacy/#upscale')
+  await expect(page.locator('.navtab[data-view="upscale"]')).toHaveClass(/\bactive\b/)
+  await expect(page.locator('#view-upscale')).not.toHaveClass(/\bhidden\b/)
+  await expect(page.locator('#view-dataset')).toHaveClass(/\bhidden\b/)
+})
+
 test('gpu bar renders', async ({ page }) => {
   await page.goto('/upscale')
   await expect(page.getByTestId('gpu-bar')).toBeVisible()
