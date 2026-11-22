@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { V15Findings, type V15Finding } from '@/components/V15Findings'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { handOffToBbox } from '@/lib/bboxHandoff'
 import { copyText } from '@/lib/clipboard'
 import { isJsonFormat } from './promptForm'
@@ -49,6 +49,10 @@ export function ResultPanel({ result, edited, onEdit, onRegenerate, regenerateDi
     staleTime: Infinity,
   })
   const findings = relint ? lint.data?.warnings ?? result.warnings : result.warnings
+  // A failed check must not leave the pre-edit findings (maybe "compliant") under the edit.
+  const lintError = relint && lint.isError
+    ? lint.error instanceof ApiError ? lint.error.detail : lint.error.message
+    : ''
 
   const copy = () => {
     if (!text) return
@@ -70,7 +74,11 @@ export function ResultPanel({ result, edited, onEdit, onRegenerate, regenerateDi
         className="min-h-40 w-full resize-y rounded-lg border border-line bg-bg/60 px-3 py-2.5 text-sm leading-relaxed outline-none focus-visible:border-accent-from/60 focus-visible:shadow-glow data-[json=true]:font-mono data-[json=true]:text-xs"
         data-json={json}
       />
-      {json && <V15Findings findings={findings} />}
+      {json && (lintError ? (
+        <p role="alert" className="rounded-lg border border-danger/25 bg-danger/[0.06] px-3 py-2 text-sm text-danger">
+          Could not check the edited prompt: {lintError}
+        </p>
+      ) : <V15Findings findings={findings} />)}
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" size="sm" onClick={copy}>
           <Copy />

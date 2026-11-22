@@ -245,6 +245,17 @@ test('edited result is re-linted', async ({ page }) => {
   await expect(findings).toContainText('The prompt is not valid JSON.')
 })
 
+test('a failed re-lint is not shown as compliant', async ({ page }) => {
+  await mockJobs(page, () => done(IDEOGRAM, 'ideogram'))
+  await generate(page)
+  const findings = page.getByTestId('v15-findings')
+  await expect(findings).toContainText('No warnings — compliant with the v15 guidelines')
+  await page.route('**/api/prompts/lint', (route) => route.fulfill({ status: 500, json: { detail: 'Lint crashed' } }))
+  await output(page).fill('not json')
+  await expect(page.getByText('Could not check the edited prompt: Lint crashed')).toBeVisible()
+  await expect(page.getByText('No warnings — compliant with the v15 guidelines')).toHaveCount(0)
+})
+
 test('warnings follow the result format', async ({ page }) => {
   await mockJobs(page, () =>
     done(IDEOGRAM, 'ideogram', [{ level: 'warn', msg: 'high_level_description is empty.' }]))
