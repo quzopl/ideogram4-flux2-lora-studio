@@ -128,6 +128,8 @@ export function useCropPlan(folder: string | null) {
     plan: query.data?.plan ?? {},
     mode: query.data?.mode ?? 'center',
     loaded: query.isSuccess,
+    /** Why the plan could not be loaded ("" when it loaded or is loading). */
+    error: query.error ? (query.error instanceof ApiError ? query.error.detail : query.error.message) : '',
     set,
     merge,
     clear,

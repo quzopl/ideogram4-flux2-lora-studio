@@ -14,7 +14,7 @@ import type { CropAutoJob, CropPlan } from '@/lib/types'
 
 /** The classic modal's ratio options (value = w/h). */
 const RATIOS = [
-  { value: 'free', label: 'free' },
+  { value: 'free', label: 'Free' },
   { value: '1', label: '1:1' },
   { value: '0.75', label: '3:4' },
   { value: '1.3333', label: '4:3' },
@@ -23,6 +23,8 @@ const RATIOS = [
 /** Files whose aspect ratio is this close get the same crop. */
 const SAME_RATIO = 0.02
 const TERMINAL = ['done', 'error']
+/** The last ratio chosen, kept for the next file opened (as the classic modal did). */
+let lastRatio = 'free'
 
 interface AutoCropSettings {
   /** Caption mode (`person`, `landscape`, …): it decides what Florence looks for. */
@@ -38,8 +40,8 @@ interface CropEditorDialogProps {
   files: string[]
   /** "Square (crop to 1:1)": the ratio is locked to 1:1. */
   square: boolean
-  /** Dataset settings sent with "Auto (Florence)"; the server defaults otherwise. */
-  autoCrop?: AutoCropSettings
+  /** Dataset settings sent with "Auto (Florence)". */
+  autoCrop: AutoCropSettings
   onClose: () => void
 }
 
@@ -53,16 +55,13 @@ interface Source {
  * Manual crop of one source image. Edits stay in the dialog until Save (or
  * Apply to same ratio), which writes the plan and switches the folder's crop
  * source to manual. Cancel and Esc close without saving; so does Auto, which
- * only moves the box.
+ * only moves the box. A new file (or folder) mounts a fresh editor.
  */
-export function CropEditorDialog({
-  folder,
-  name,
-  files,
-  square,
-  autoCrop = { mode: 'person', resolution: 1024, step: 64 },
-  onClose,
-}: CropEditorDialogProps) {
+export function CropEditorDialog(props: CropEditorDialogProps) {
+  return <Editor key={`${props.folder}\n${props.name}`} {...props} />
+}
+
+function Editor({ folder, name, files, square, autoCrop, onClose }: CropEditorDialogProps) {
   const crops = useCropPlan(folder)
   const stageRef = useRef<HTMLDivElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
@@ -71,8 +70,20 @@ export function CropEditorDialog({
   const [loadError, setLoadError] = useState('')
   const [imgReady, setImgReady] = useState(false)
   const [box, setBox] = useState<Box | null>(null)
-  const [ratioValue, setRatioValue] = useState('free')
+  const [ratioValue, setRatioValueState] = useState(lastRatio)
+  const setRatioValue = (v: string) => {
+    lastRatio = v
+    setRatioValueState(v)
+  }
   const [applying, setApplying] = useState(false)
+  // "Apply to same ratio" awaits requests; it must not write after the dialog closed.
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
   const ratio = square ? 1 : ratioValue === 'free' ? null : parseFloat(ratioValue)
 
   // Read when the editor is created, without recreating it on every change.
@@ -158,7 +169,11 @@ export function CropEditorDialog({
     if (found) editorRef.current?.setBox(found)
     setNothingFound(!found)
   }, [autoState, autoJob, job.data, name])
-  const autoError = autoState === 'error' ? (job.data?.error ?? '') : ''
+  const autoError = autoState === 'error'
+    ? (job.data?.error ?? '')
+    : job.isError && isGone(job.error)
+      ? 'The auto-crop job is gone (was the server restarted?)'
+      : ''
 
   const save = () => {
     if (!box) return
@@ -177,6 +192,7 @@ export function CropEditorDialog({
     const sizes = await Promise.allSettled(
       files.map((n) => api<{ width: number; height: number }>(`/api/src/size?${new URLSearchParams({ folder, name: n })}`)),
     )
+    if (!alive.current) return
     const boxes: CropPlan = {}
     sizes.forEach((res, i) => {
       if (res.status !== 'fulfilled') return
@@ -213,7 +229,9 @@ export function CropEditorDialog({
         </div>
 
         <div className="flex min-h-40 min-w-0 items-center justify-center rounded-xl bg-[repeating-conic-gradient(#12151c_0%_25%,#181c25_0%_50%)] bg-size-[24px_24px]">
-          {loadError ? (
+          {crops.error ? (
+            <p className="p-6 text-sm text-danger">Cannot load the crop plan: {crops.error}</p>
+          ) : loadError ? (
             <p className="p-6 text-sm text-danger">Cannot load the image: {loadError}</p>
           ) : !src ? (
             <Loader2 className="size-5 animate-spin text-text-dim" />
@@ -229,6 +247,7 @@ export function CropEditorDialog({
                 alt={name}
                 draggable={false}
                 onLoad={() => setImgReady(true)}
+                onError={() => setLoadError('the browser cannot display it')}
                 className="block h-auto max-h-[65vh] w-auto max-w-full select-none"
               />
             </div>
@@ -273,7 +292,7 @@ export function CropEditorDialog({
             <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
             <Button
               size="sm"
-              disabled={!ready}
+              disabled={!ready || applying}
               onClick={save}
               className="bg-linear-to-r from-accent-from to-accent-to text-white"
             >

@@ -14,12 +14,16 @@ interface UploadResult {
 
 interface DropZoneProps {
   /** Called with the server folder that now holds the uploaded images. */
-  onUploaded: (folder: string, count: number) => void
+  onUploaded: (folder: string, count: number, files: string[]) => void
+  /** Called (instead of a toast) when none of the files is a supported image. */
+  onEmpty?: (folder: string) => void
+  /** The file input's `accept`. */
+  accept?: string
   disabled?: boolean
 }
 
 /** Drop (or pick) images; they go to POST /api/upload and become a source folder. */
-export function DropZone({ onUploaded, disabled = false }: DropZoneProps) {
+export function DropZone({ onUploaded, onEmpty, accept = 'image/*', disabled = false }: DropZoneProps) {
   const input = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
 
@@ -34,8 +38,9 @@ export function DropZone({ onUploaded, disabled = false }: DropZoneProps) {
     if (!files.length || disabled) return
     upload.mutate(files, {
       onSuccess: (r) => {
-        if (r.count === 0) toast.error('None of those files is a supported image.')
-        else onUploaded(r.folder, r.count)
+        if (r.count > 0) onUploaded(r.folder, r.count, r.files)
+        else if (onEmpty) onEmpty(r.folder)
+        else toast.error('None of those files is a supported image.')
       },
     })
   }
@@ -89,7 +94,7 @@ export function DropZone({ onUploaded, disabled = false }: DropZoneProps) {
         ref={input}
         type="file"
         multiple
-        accept="image/*"
+        accept={accept}
         aria-label="Upload images"
         className="hidden"
         onChange={(e) => {

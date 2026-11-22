@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes, type Location } from 'react-router'
 import { ClassicPlaceholder } from '@/pages/ClassicPlaceholder'
+import { DatasetPage } from '@/pages/dataset/DatasetPage'
 import { ModelsPage } from '@/pages/ModelsPage'
 import { Playground } from '@/pages/Playground'
 import { SettingsPage } from '@/pages/SettingsPage'
@@ -10,7 +11,7 @@ export function AppRoutes({ location }: { location: Location }) {
   return (
     <Routes location={location}>
       <Route index element={<Navigate to="/upscale" replace />} />
-      <Route path="/dataset" element={<ClassicPlaceholder view="dataset" title="Dataset" />} />
+      <Route path="/dataset" element={<DatasetPage />} />
       <Route path="/prompts" element={<ClassicPlaceholder view="prompts" title="Prompt studio" />} />
       <Route path="/bbox" element={<ClassicPlaceholder view="bbox" title="Bbox editor" />} />
       <Route path="/comfy" element={<ClassicPlaceholder view="comfy" title="ComfyUI" />} />

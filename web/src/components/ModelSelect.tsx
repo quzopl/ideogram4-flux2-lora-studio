@@ -48,9 +48,16 @@ interface ModelSelectProps {
   value: string
   onChange: (id: string) => void
   id?: string
+  /** The trigger's accessible name. */
+  label?: string
+  /** Adds a first option meaning "no model" (value ""), with this label. */
+  noneLabel?: string
 }
 
-export function ModelSelect({ kind, value, onChange, id }: ModelSelectProps) {
+// Radix Select items cannot have the value "".
+const NONE = '__none__'
+
+export function ModelSelect({ kind, value, onChange, id, label = 'Model', noneLabel }: ModelSelectProps) {
   const store = useStoreModels()
   const [downloading, setDownloading] = useState(false)
   const models = store.data?.models.filter((m) => m.kind === kind) ?? []
@@ -65,11 +72,15 @@ export function ModelSelect({ kind, value, onChange, id }: ModelSelectProps) {
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger id={id} aria-label="Model" className="min-w-72">
+      <Select
+        value={noneLabel !== undefined && value === '' ? NONE : value}
+        onValueChange={(v) => onChange(v === NONE ? '' : v)}
+      >
+        <SelectTrigger id={id} aria-label={label} className="min-w-72">
           <SelectValue placeholder="Choose a model" />
         </SelectTrigger>
         <SelectContent>
+          {noneLabel !== undefined && <SelectItem value={NONE}>{noneLabel}</SelectItem>}
           {models.map((m) => (
             <SelectItem key={m.id} value={m.id}>
               <span className="truncate">{m.label}</span>

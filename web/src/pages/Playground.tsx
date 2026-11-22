@@ -108,6 +108,7 @@ export function Playground() {
                 name={cropping}
                 files={cropFiles}
                 square={params.get('cropSquare') === '1'}
+                autoCrop={{ mode: 'person', resolution: 1024, step: 64 }}
                 onClose={() => setCropping(null)}
               />
             )}

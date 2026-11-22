@@ -212,3 +212,27 @@ test('auto (Florence) shows the first line of a job error', async ({ page }) => 
   await expect(err).toHaveText('Models folder not set')
   await expect(err).toHaveAttribute('title', /Traceback/)
 })
+
+test('ratio choice persists across opens', async ({ page }) => {
+  await page.goto(playground())
+  let dialog = await openEditor(page, 'a.png')
+  const ratio = dialog.getByRole('combobox', { name: 'Aspect ratio' })
+  await expect(ratio).toHaveText('Free')
+  await ratio.click()
+  await page.getByRole('option', { name: '1:1', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  dialog = await openEditor(page, 'b.png')
+  await expect(dialog.getByRole('combobox', { name: 'Aspect ratio' })).toHaveText('1:1')
+  await expect(dialog.getByTestId('crop-size')).toHaveText('crop 600 × 600 px')
+})
+
+test('auto (Florence) explains a job that is gone', async ({ page }) => {
+  await page.route('**/api/crop/auto', (route) => route.fulfill({ json: { job_id: 'c3', total: 1 } }))
+  await page.route('**/api/crop/auto/c3', (route) => route.fulfill({ status: 404, json: { detail: 'Unknown job.' } }))
+  await page.goto(playground())
+  const dialog = await openEditor(page, 'a.png')
+  await dialog.getByRole('button', { name: 'Auto (Florence)', exact: true }).click()
+  await expect(dialog.getByTestId('crop-auto-error')).toHaveText('The auto-crop job is gone (was the server restarted?)')
+  await expect(dialog.getByRole('button', { name: 'Auto (Florence)', exact: true })).toBeEnabled()
+})
