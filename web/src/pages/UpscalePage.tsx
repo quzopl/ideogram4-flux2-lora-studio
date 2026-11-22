@@ -66,6 +66,23 @@ interface UpscaleJob {
   results: UpscaleResult[]
 }
 
+/** This view's job and the folder it read (for the "before" images). */
+interface Run {
+  id: string
+  folder: string
+}
+
+const RUN_KEY = 'flux.upscale.run'
+
+function loadRun(): Run | null {
+  try {
+    const r = JSON.parse(sessionStorage.getItem(RUN_KEY) ?? 'null') as Run | null
+    return r && typeof r.id === 'string' && typeof r.folder === 'string' ? r : null
+  } catch {
+    return null
+  }
+}
+
 const SCALES: [Scale, string][] = [
   ['x2', 'x2'], ['x3', 'x3'], ['x4', 'x4'], ['custom', 'Custom'], ['long_side', 'Long side'], ['native', 'Native'],
 ]
@@ -81,6 +98,12 @@ function scaleError(f: UpscaleForm): string {
   return ''
 }
 
+/**
+ * The run's device: "", "cpu" or a UUID. A form saved with "auto" (which the
+ * run endpoint rejects) reads as "" (Role default).
+ */
+const deviceOf = (f: UpscaleForm) => (f.device === 'auto' ? '' : f.device)
+
 /** The form as a POST /api/upscale/run body (factor must be valid even when unused). */
 function runBody(f: UpscaleForm) {
   const factor = f.scale === 'custom' ? f.factor : FIXED_FACTOR[f.scale]
@@ -92,7 +115,7 @@ function runBody(f: UpscaleForm) {
     long_side: Number.isInteger(f.long_side) ? f.long_side : 2048,
     fmt: f.fmt,
     jpg_quality: f.jpg_quality,
-    device: f.device,
+    device: deviceOf(f),
   }
 }
 
@@ -301,8 +324,16 @@ export function UpscalePage() {
   const [sourcePicker, setSourcePicker] = useState(false)
   const [exportPicker, setExportPicker] = useState(false)
   const [adding, setAdding] = useState(false)
-  // The job of this view and the folder it read (for the "before" images).
-  const [run, setRun] = useState<{ id: string; folder: string } | null>(null)
+  // Kept for the session, so leaving the view and coming back resumes it.
+  const [run, setRunState] = useState<Run | null>(loadRun)
+  const setRun = (r: Run) => {
+    setRunState(r)
+    try {
+      sessionStorage.setItem(RUN_KEY, JSON.stringify(r))
+    } catch {
+      // Storage blocked: the job is still shown until the view unmounts.
+    }
+  }
   // The previewed result stays set while the dialog animates closed.
   const [preview, setPreview] = useState<UpscaleResult | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -431,7 +462,7 @@ export function UpscalePage() {
           </Field>
 
           <Field label="Device">
-            <GpuSelect includeDefault value={form.device} onChange={(v) => set('device', v)} />
+            <GpuSelect includeDefault hideAuto value={deviceOf(form)} onChange={(v) => set('device', v)} />
           </Field>
 
           <Field label="Format">

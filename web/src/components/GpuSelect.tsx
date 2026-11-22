@@ -13,12 +13,14 @@ interface GpuSelectProps {
   includeDefault?: boolean
   /** Leaves out "CPU" (for roles that must not run there) unless it is the value. */
   hideCpu?: boolean
+  /** Leaves out "Auto" (for callers that take only "", "cpu" or a UUID) unless it is the value. */
+  hideAuto?: boolean
   /** Accessible name of the trigger. */
   label?: string
   id?: string
 }
 
-export function GpuSelect({ value, onChange, includeDefault = false, hideCpu = false, label = 'Device', id }: GpuSelectProps) {
+export function GpuSelect({ value, onChange, includeDefault = false, hideCpu = false, hideAuto = false, label = 'Device', id }: GpuSelectProps) {
   const gpus = useGpus()
   return (
     <Select
@@ -30,7 +32,7 @@ export function GpuSelect({ value, onChange, includeDefault = false, hideCpu = f
       </SelectTrigger>
       <SelectContent>
         {includeDefault && <SelectItem value={DEFAULT}>Role default</SelectItem>}
-        <SelectItem value="auto">Auto (most memory)</SelectItem>
+        {(!hideAuto || value === 'auto') && <SelectItem value="auto">Auto (most memory)</SelectItem>}
         {gpus.isPending && <Skeleton className="mx-1.5 my-1 h-6" />}
         {gpus.data?.gpus.map((g) => (
           <SelectItem key={g.uuid} value={g.uuid}>{g.label}</SelectItem>

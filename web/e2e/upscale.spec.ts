@@ -207,3 +207,43 @@ test('add custom model sends repo and file', async ({ page }) => {
   await expect(dialog).toBeHidden()
   expect(bodies).toEqual([{ repo_id: 'someone/upscalers', filename: '4x-Test.pth' }])
 })
+
+test('device list has no Auto and a saved "auto" runs on the role default', async ({ page, request }) => {
+  // A form saved before Auto was hidden.
+  await request.put('/api/settings/forms/upscale', { data: { values: { device: 'auto' } } })
+  const bodies = await mockRun(page)
+  await mockJob(page, [job('done', [])])
+  await ready(page)
+  const device = page.getByRole('combobox', { name: 'Device' })
+  await expect(device).toHaveText('Role default')
+  await device.click()
+  await expect(page.getByRole('option', { name: 'Role default' })).toBeVisible()
+  await expect(page.getByRole('option', { name: 'Auto (most memory)' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+
+  await upscale(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  expect(bodies[0]).toMatchObject({ device: '' })
+})
+
+test('a running job survives leaving the view', async ({ page }) => {
+  await mockRun(page)
+  await mockJob(page, [job('processing', [result(0)])])
+  await ready(page)
+  await page.getByRole('button', { name: 'x2', exact: true }).click()
+  await upscale(page).click()
+  await expect(page.getByTestId('result-card')).toHaveCount(1)
+  await expect(upscale(page)).toBeDisabled()
+
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  // Wait until the exit transition has unmounted the view (a quick return would revive it).
+  await expect(page.getByTestId('job-progress')).toHaveCount(0)
+  await nav.getByRole('link', { name: 'Upscale', exact: true }).click()
+  await expect(page).toHaveURL(/\/upscale$/)
+
+  await expect(page.getByTestId('job-progress')).toHaveAttribute('data-state', 'processing')
+  await expect(page.getByTestId('result-card')).toHaveCount(1)
+  await expect(upscale(page)).toBeDisabled()
+})
