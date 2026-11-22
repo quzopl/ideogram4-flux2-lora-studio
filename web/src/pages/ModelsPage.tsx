@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { DownloadDialog } from '@/components/DownloadDialog'
 import { FolderPicker } from '@/components/FolderPicker'
-import { StatusBadge } from '@/components/ModelSelect'
+import { DownloadError, StatusBadge } from '@/components/ModelSelect'
 import { SpringDialogContent } from '@/components/SpringDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -138,6 +138,7 @@ export function ModelsPage() {
                   <TableCell>
                     <StatusBadge model={m} />
                     {job && <DownloadBar job={job} label={m.label} />}
+                    {m.status === 'missing' && m.last_error && <DownloadError error={m.last_error} className="mt-1.5" />}
                   </TableCell>
                   <TableCell className="max-w-72">
                     {m.local_path ? (

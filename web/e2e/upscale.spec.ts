@@ -63,6 +63,7 @@ async function mockJob(page: Page, states: unknown[]) {
   const png = (route: Route) => route.fulfill({ path: path.join(FIXTURES, 'big.png') })
   await page.route('**/api/upscale/thumb/**', png)
   await page.route('**/api/upscale/image/**', png)
+  await page.route('**/api/src/image?*', png)
 }
 
 const upscale = (page: Page) => page.getByRole('button', { name: 'Upscale', exact: true })
@@ -119,6 +120,10 @@ test('results grid and before/after', async ({ page }) => {
   await cards.first().click()
   const preview = page.getByTestId('before-after')
   await expect(preview).toBeVisible()
+  // "Before" is the 1600 px source preview, not the 480 px grid thumbnail.
+  const before = new URL((await preview.getByRole('img', { name: 'a.png before' }).getAttribute('src'))!, 'http://x')
+  expect(before.pathname).toBe('/api/src/image')
+  expect(Object.fromEntries(before.searchParams)).toEqual({ folder: SRC, name: 'a.png' })
   const handle = preview.getByRole('slider')
   await expect(handle).toHaveAttribute('aria-valuenow', '50')
   await handle.focus()
@@ -246,4 +251,41 @@ test('a running job survives leaving the view', async ({ page }) => {
   await expect(page.getByTestId('job-progress')).toHaveAttribute('data-state', 'processing')
   await expect(page.getByTestId('result-card')).toHaveCount(1)
   await expect(upscale(page)).toBeDisabled()
+})
+
+test('polling survives a transient error', async ({ page }) => {
+  await mockRun(page)
+  await mockJob(page, [])
+  // Two failures (the request and its one retry) put the query in error; then the job finishes.
+  let i = 0
+  await page.route('**/api/upscale/job/*', (route) =>
+    i++ < 2
+      ? route.fulfill({ status: 502, json: { detail: 'Bad gateway' } })
+      : route.fulfill({ json: job('done', [result(0), result(1)]) }))
+  await ready(page)
+  await page.getByRole('button', { name: 'x2', exact: true }).click()
+  await upscale(page).click()
+  await expect.poll(() => i).toBeGreaterThan(2)
+  await expect(page.getByTestId('job-progress')).toHaveAttribute('data-state', 'done')
+  await expect(page.getByTestId('result-card')).toHaveCount(2)
+})
+
+test('an unknown job (404) stops polling and forgets the run', async ({ page }) => {
+  await mockRun(page)
+  await mockJob(page, [])
+  let i = 0
+  await page.route('**/api/upscale/job/*', (route) => {
+    i++
+    return route.fulfill({ status: 404, json: { detail: 'Job not found.' } })
+  })
+  await ready(page)
+  await page.getByRole('button', { name: 'x2', exact: true }).click()
+  await upscale(page).click()
+  await expect(page.getByTestId('job-progress')).toHaveAttribute('data-state', 'error')
+  await expect(page.getByTestId('job-progress')).toContainText('Job not found.')
+  await expect(upscale(page)).toBeEnabled()
+  expect(await page.evaluate(() => sessionStorage.getItem('flux.upscale.run'))).toBeNull()
+  const seen = i
+  await page.waitForTimeout(1500)
+  expect(i).toBe(seen)
 })

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileArchive, FolderOpen, FolderOutput, ImageOff, Plus, Sparkles, Wand2 } from 'lucide-react'
 import { motion } from 'motion/react'
-import { useId, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { BeforeAfter } from '@/components/BeforeAfter'
 import { DropZone } from '@/components/DropZone'
@@ -346,13 +346,25 @@ export function UpscalePage() {
     retry: false,
   })
 
+  // Polling stops only when the job is over or unknown (404, e.g. after a server
+  // restart); a transient error keeps polling and the last data stays shown.
+  const isGone = (e: unknown) => e instanceof ApiError && e.status === 404
   const job = useQuery({
     queryKey: ['upscale-job', run?.id],
     queryFn: () => api<UpscaleJob>(`/api/upscale/job/${run!.id}`),
     enabled: run !== null,
-    refetchInterval: (q) => (q.state.status === 'error' || TERMINAL.includes(q.state.data?.state ?? '') ? false : 700),
+    refetchInterval: (q) => (isGone(q.state.error) || TERMINAL.includes(q.state.data?.state ?? '') ? false : 700),
   })
-  const running = run !== null && !job.isError && !TERMINAL.includes(job.data?.state ?? '')
+  const gone = job.isError && isGone(job.error)
+  const running = run !== null && !gone && !TERMINAL.includes(job.data?.state ?? '')
+  useEffect(() => {
+    if (!gone) return
+    try {
+      sessionStorage.removeItem(RUN_KEY)
+    } catch {
+      // Storage blocked: nothing was kept.
+    }
+  }, [gone])
 
   const start = useMutationWithToast((body: ReturnType<typeof runBody>) =>
     api<{ job_id: string; total: number }>('/api/upscale/run', { method: 'POST', json: body }))
@@ -515,7 +527,7 @@ export function UpscalePage() {
           ) : (
             <>
               <div className="rounded-xl border border-line bg-surface p-4">
-                {job.isError ? (
+                {job.isError && (gone || !job.data) ? (
                   <JobProgress
                     state="error"
                     processed={0}
@@ -606,7 +618,7 @@ export function UpscalePage() {
           {preview && run && (
             <BeforeAfter
               alt={preview.src_name}
-              before={`/api/src/thumb?${new URLSearchParams({ folder: run.folder, name: preview.src_name })}`}
+              before={`/api/src/image?${new URLSearchParams({ folder: run.folder, name: preview.src_name })}`}
               after={`/api/upscale/image/${run.id}/${preview.idx}`}
             />
           )}

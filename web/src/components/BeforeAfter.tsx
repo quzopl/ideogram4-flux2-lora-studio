@@ -10,8 +10,8 @@ interface BeforeAfterProps {
 const clamp = (n: number) => Math.min(100, Math.max(0, n))
 
 /**
- * Two images stacked in one box (both `object-contain`, so a small "before"
- * thumbnail lines up with the full-size "after"). The handle reveals "after"
+ * Two images stacked in one box (both `object-contain`, so the smaller "before"
+ * preview lines up with the full-size "after"). The handle reveals "after"
  * to its right; drag it, or focus it and use the arrow keys (5% a step).
  */
 export function BeforeAfter({ before, after, alt }: BeforeAfterProps) {

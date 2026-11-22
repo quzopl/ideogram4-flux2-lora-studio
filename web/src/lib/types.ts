@@ -81,6 +81,8 @@ export interface StoreModel {
   status: 'ready' | 'missing' | 'downloading'
   local_path: string | null
   download: DownloadJob | null
+  /** Error of the latest download when it failed and the model is still missing. */
+  last_error: string | null
 }
 
 /** GET /api/store/models. */

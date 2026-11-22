@@ -176,6 +176,48 @@ def test_fetch_error_sets_error_state(tmp_path, monkeypatch):
         ms.ensure_local(QWEN7, _ctx(md))
 
 
+def test_listing_reports_last_error_until_retry_or_ready(tmp_path, monkeypatch):
+    md = tmp_path / "models"
+    release = threading.Event()
+    outcome = {"fail": True}
+
+    def fetch(entry, target_dir, token, progress):
+        if outcome["fail"]:
+            raise RuntimeError("401 Client Error: gated repo")
+        release.wait(5)
+        return _write_snapshot(target_dir)
+
+    monkeypatch.setattr(ms, "_fetch", fetch)
+    assert _row(_ctx(md), QWEN7)["last_error"] is None
+    _wait(ms.start_download(QWEN7, str(md), _ctx()), {"error"})
+    row = _row(_ctx(md), QWEN7)
+    assert row["status"] == "missing" and "gated repo" in row["last_error"]
+    assert _row(_ctx(md), X4)["last_error"] is None
+
+    # A new attempt clears it while it runs; success keeps it cleared.
+    outcome["fail"] = False
+    job = ms.start_download(QWEN7, str(md), _ctx())
+    row = _row(_ctx(md), QWEN7)
+    assert row["status"] == "downloading" and row["last_error"] is None
+    release.set()
+    _wait(job, {"done"})
+    assert _row(_ctx(md), QWEN7)["last_error"] is None
+
+
+def test_listing_last_error_hidden_once_model_ready(tmp_path, monkeypatch):
+    md = tmp_path / "models"
+
+    def fetch(entry, target_dir, token, progress):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ms, "_fetch", fetch)
+    _wait(ms.start_download(QWEN7, str(md), _ctx()), {"error"})
+    # The model turns up some other way (e.g. Use existing…).
+    (_write_snapshot(md / ms.folder_name(QWEN7)) / ms.MARKER).write_text("")
+    row = _row(_ctx(md), QWEN7)
+    assert row["status"] == "ready" and row["last_error"] is None
+
+
 def test_not_enough_space_message_has_gb(tmp_path, monkeypatch):
     md = tmp_path / "models"
     monkeypatch.setattr(ms, "_remote_size", lambda entry, token: int(16.6e9))

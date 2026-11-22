@@ -160,6 +160,49 @@ test('downloading row shows progress and cancels', async ({ page }) => {
   expect(cancelled).toBe('/api/store/downloads/job-e2e/cancel')
 })
 
+test('failed download shows its error in the row and toasts once', async ({ page }) => {
+  // The first listing has the first model downloading, every later one has it failed.
+  let calls = 0
+  await page.route('**/api/store/models', async (route) => {
+    const response = await route.fetch()
+    const json = await response.json()
+    const m = json.models[0]
+    if (calls++ === 0) {
+      Object.assign(m, {
+        status: 'downloading',
+        last_error: null,
+        download: {
+          id: 'job-err', model_id: m.id, label: m.label, dest: `${WORK}/models`, state: 'downloading',
+          done_bytes: 1, total_bytes: 10, error: '', path: '',
+        },
+      })
+    } else {
+      Object.assign(m, { status: 'missing', download: null, last_error: '401 Client Error: gated repo' })
+    }
+    await route.fulfill({ response, json })
+  })
+
+  await page.goto('/models')
+  const row = page.locator('tr[data-model-id]').first()
+  await expect(row.getByRole('progressbar')).toBeVisible()
+  await expect(row.getByText('Download failed: 401 Client Error: gated repo')).toBeVisible()
+  await expect(row.getByText('missing', { exact: true })).toBeVisible()
+  const toast = page.locator('[data-sonner-toast]').filter({ hasText: 'gated repo' })
+  await expect(toast).toHaveCount(1)
+  // Fetching the same failure again (a remount refetches) does not toast again.
+  await expect(toast).toHaveCount(0, { timeout: 10_000 })
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Settings', exact: true }).click()
+  await expect(page).toHaveURL(/\/settings$/)
+  // Wait until the exit transition has unmounted the view (a quick return would revive it).
+  await expect(page.locator('tr[data-model-id]')).toHaveCount(0)
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(row.getByText('Download failed: 401 Client Error: gated repo')).toBeVisible()
+  await expect.poll(() => calls).toBeGreaterThan(2)
+  await page.waitForTimeout(500)
+  await expect(toast).toHaveCount(0)
+})
+
 test('use existing weights, then forget them', async ({ page }) => {
   // The backend only checks a weight file's extension.
   fs.mkdirSync(path.join(WORK, 'weights'), { recursive: true })

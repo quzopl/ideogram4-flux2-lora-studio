@@ -34,6 +34,15 @@ export function StatusBadge({ model }: { model: StoreModel }) {
   )
 }
 
+/** Why the latest download of a still-missing model failed. */
+export function DownloadError({ error, className }: { error: string; className?: string }) {
+  return (
+    <p title={error} className={cn('line-clamp-2 max-w-56 text-xs whitespace-normal text-danger', className)}>
+      Download failed: {error}
+    </p>
+  )
+}
+
 interface ModelSelectProps {
   kind: Role
   value: string
@@ -76,6 +85,7 @@ export function ModelSelect({ kind, value, onChange, id }: ModelSelectProps) {
           Download
         </Button>
       )}
+      {current?.status === 'missing' && current.last_error && <DownloadError error={current.last_error} />}
       {current?.status === 'downloading' && current.download && (
         <Button
           size="sm"

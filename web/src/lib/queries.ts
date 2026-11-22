@@ -7,11 +7,26 @@ export function useSettings() {
   return useQuery({ queryKey: ['settings'], queryFn: () => api<Settings>('/api/settings') })
 }
 
-/** Polls every second while any model is downloading, otherwise not at all. */
+/**
+ * Polls every second while any model is downloading, otherwise not at all.
+ * A download that failed since the previous fetch toasts its error once (here
+ * in the shared fetch, not per component using the hook).
+ */
 export function useStoreModels() {
+  const qc = useQueryClient()
   return useQuery({
     queryKey: ['store-models'],
-    queryFn: () => api<StoreModelsResponse>('/api/store/models'),
+    queryFn: async () => {
+      const prev = qc.getQueryData<StoreModelsResponse>(['store-models'])
+      const next = await api<StoreModelsResponse>('/api/store/models')
+      const wasDownloading = new Set(prev?.models.filter((m) => m.status === 'downloading').map((m) => m.id))
+      for (const m of next.models) {
+        if (wasDownloading.has(m.id) && m.status !== 'downloading' && m.last_error) {
+          toast.error(`${m.label}: download failed — ${m.last_error}`)
+        }
+      }
+      return next
+    },
     refetchInterval: (query) =>
       query.state.data?.models.some((m) => m.status === 'downloading') ? 1000 : false,
   })

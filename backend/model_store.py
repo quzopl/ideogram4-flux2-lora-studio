@@ -181,14 +181,21 @@ def find(model_id: str, ctx: dict) -> dict | None:
 
 
 def listing(ctx: dict) -> list[dict]:
+    """Every entry with its status, path, running job and ``last_error``: the
+    error of the model's latest download when that one failed and the model is
+    still missing (a new attempt or the model turning up clears it)."""
     with _LOCK:
         active = {j["model_id"]: dict(j) for j in DOWNLOADS.values() if j["state"] in _ACTIVE}
+        latest = {j["model_id"]: j for j in DOWNLOADS.values()}  # insertion order: last wins
+        failed = {m: j["error"] for m, j in latest.items() if j["state"] == "error"}
     out = []
     for e in entries(ctx):
         p = resolve_path(e, ctx)
         job = active.get(e["id"])
         status = "downloading" if job else ("ready" if p else "missing")
-        out.append({**e, "status": status, "local_path": p, "download": job})
+        last_error = failed.get(e["id"]) if status == "missing" else None
+        out.append({**e, "status": status, "local_path": p, "download": job,
+                    "last_error": last_error})
     return out
 
 
