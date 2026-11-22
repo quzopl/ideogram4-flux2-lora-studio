@@ -7,16 +7,21 @@ ComfyUI exposes a small REST API:
   POST /prompt              - enqueue an API-format workflow; returns prompt_id
   GET  /history/{prompt_id} - poll the result (status + output filenames)
   GET  /view                - fetch a generated image by filename/subfolder/type
+  POST /interrupt           - stop the prompt that is executing right now
+  POST /queue               - {"delete": [prompt_id]} drops a prompt still waiting
 """
 from __future__ import annotations
 
 import json
+import logging
 import urllib.parse
 import urllib.request
 import uuid
 
 
 DEFAULT_URL = "http://127.0.0.1:8188"
+
+log = logging.getLogger(__name__)
 
 
 class ComfyError(RuntimeError):
@@ -93,6 +98,23 @@ def queue_info(base_url: str) -> dict:
     return json.loads(raw)
 
 
+def interrupt(base_url: str) -> None:
+    """Interrupt whatever ComfyUI is executing now. Errors are logged, not raised."""
+    try:
+        _request(_join(base_url, "/interrupt"), data=b"{}", timeout=5)
+    except Exception as e:  # noqa: BLE001 - a failed cancel must not break the caller
+        log.warning("ComfyUI interrupt failed: %s", e)
+
+
+def delete_queued(base_url: str, prompt_id: str) -> None:
+    """Drop a still-queued prompt from ComfyUI's queue. Errors are logged, not raised."""
+    try:
+        _request(_join(base_url, "/queue"),
+                 data=json.dumps({"delete": [prompt_id]}).encode("utf-8"), timeout=5)
+    except Exception as e:  # noqa: BLE001
+        log.warning("ComfyUI queue delete of %s failed: %s", prompt_id, e)
+
+
 def fetch_image(base_url: str, filename: str, subfolder: str = "", type_: str = "output") -> bytes:
     """Pull a generated image's bytes via the /view endpoint."""
     qs = urllib.parse.urlencode(
@@ -101,17 +123,22 @@ def fetch_image(base_url: str, filename: str, subfolder: str = "", type_: str = 
     return _request(_join(base_url, f"/view?{qs}"), timeout=60)
 
 
-def stream_events(base_url: str, client_id: str, prompt_id: str, on_event):
+def stream_events(base_url: str, client_id: str, prompt_id: str, on_event,
+                  should_stop=None):
     """Open a sync WebSocket to ComfyUI and dispatch events for `prompt_id`.
 
     Calls on_event(kind, payload) where kind is one of:
-      - 'progress'  payload={'value': int, 'max': int}
-      - 'executing' payload={'node': str | None}
-      - 'preview'   payload=<png bytes>
-      - 'done'      payload=None
-      - 'error'     payload=<str>
+      - 'started'     payload=None (our prompt left the queue and began executing)
+      - 'progress'    payload={'value': int, 'max': int}
+      - 'executing'   payload={'node': str | None}
+      - 'preview'     payload=<png bytes>
+      - 'done'        payload=None
+      - 'error'       payload=<str>
+      - 'interrupted' payload=<event data>
 
-    Returns when 'done' or 'error' fires, or after `timeout_total` seconds.
+    Returns when 'done', 'error' or 'interrupted' fires, or as soon as
+    ``should_stop()`` is true (checked at least once a second) — a prompt
+    deleted from the queue never sends another event.
     """
     import websocket  # provided by websocket-client
 
@@ -119,9 +146,12 @@ def stream_events(base_url: str, client_id: str, prompt_id: str, on_event):
     ws = websocket.create_connection(
         f"{ws_url.rstrip('/')}/ws?clientId={client_id}", timeout=10
     )
+    started = False
     try:
         while True:
-            ws.settimeout(60)
+            if should_stop is not None and should_stop():
+                return
+            ws.settimeout(60 if should_stop is None else 1)
             try:
                 msg = ws.recv()
             except websocket.WebSocketTimeoutException:
@@ -141,6 +171,11 @@ def stream_events(base_url: str, client_id: str, prompt_id: str, on_event):
             pid = data.get("prompt_id")
             if pid and pid != prompt_id:
                 continue
+            if (not started and pid == prompt_id
+                    and (etype == "execution_start"
+                         or (etype == "executing" and data.get("node") is not None))):
+                started = True
+                on_event("started", None)
             if etype == "progress":
                 on_event("progress", {"value": data.get("value"), "max": data.get("max")})
             elif etype == "executing":
@@ -151,6 +186,9 @@ def stream_events(base_url: str, client_id: str, prompt_id: str, on_event):
                     return
             elif etype == "execution_error":
                 on_event("error", str(data))
+                return
+            elif etype == "execution_interrupted":
+                on_event("interrupted", data)
                 return
     finally:
         try:

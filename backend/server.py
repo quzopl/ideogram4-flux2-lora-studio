@@ -1016,7 +1016,7 @@ def api_export(req: ExportRequest):
 def _busy() -> bool:
     """True while any job is still loading the model or processing images."""
     return any(
-        j["state"] in ("pending", "loading_model", "processing", "generating")
+        j["state"] in ("pending", "loading_model", "processing", "generating", "analyzing")
         for j in JOBS.values()
     )
 
@@ -1613,6 +1613,36 @@ def _progress_update(job: dict, value, maxv) -> None:
     }
 
 
+def _comfy_stream(job: dict, url: str, client_id: str, pid: str, on_event) -> bool:
+    """Drive ``stream_events`` for a queued prompt, tracking what the cancel
+    endpoint needs: ``prompt_id``, ``comfy_url`` and ``executing`` (true only
+    while our prompt runs). Returns True when the run was cancelled or
+    interrupted — the job then ends ``cancelled``. WS failures propagate.
+    """
+    job["prompt_id"] = pid
+    job["comfy_url"] = url
+    job["executing"] = False
+    if job.get("cancel"):  # the cancel landed before the prompt id was known
+        comfy_client.delete_queued(url, pid)
+        return True
+    interrupted = False
+
+    def handler(kind: str, payload) -> None:
+        nonlocal interrupted
+        if kind == "started":
+            job["executing"] = True
+        elif kind == "interrupted":
+            interrupted = True
+        on_event(kind, payload)
+
+    try:
+        comfy_client.stream_events(url, client_id, pid, handler,
+                                   should_stop=lambda: bool(job.get("cancel")))
+    finally:
+        job["executing"] = False
+    return interrupted or bool(job.get("cancel"))
+
+
 def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
     """Background worker: queues `batch` prompts, streams progress via WS,
     saves output PNGs to .work/comfy_gallery and updates job state."""
@@ -1680,10 +1710,14 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
                     job["error"] = payload
 
             try:
-                comfy_client.stream_events(url, client_id, pid, on_event)
+                stopped = _comfy_stream(job, url, client_id, pid, on_event)
             except Exception as e:  # noqa: BLE001
                 # WS hiccup — fall back to polling /history.
+                stopped = False
                 job["current"] = f"Sample {i + 1}/{batch}: WS unavailable ({e}), polling history…"
+            if stopped:
+                job["state"] = "cancelled"
+                return
 
             # Fetch outputs from history (no timeout — wait as long as it takes).
             while True:
@@ -1799,10 +1833,22 @@ def api_comfy_job_preview(job_id: str):
 
 @app.post("/api/comfy/job/{job_id}/cancel")
 def api_comfy_job_cancel(job_id: str):
+    """Stop a render: a queued prompt is deleted from ComfyUI's queue, an
+    executing one is interrupted (``/interrupt`` stops whatever runs now, so it
+    is sent only while our prompt executes). Before the prompt is queued only
+    the flag is set; the runner drops the prompt itself once it gets its id."""
     job = COMFY_JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "Unknown job.")
+    if job["state"] in ("done", "error", "cancelled"):
+        return {"ok": True}
     job["cancel"] = True
+    pid = job.get("prompt_id")
+    if pid:
+        if job.get("executing"):
+            comfy_client.interrupt(job["comfy_url"])
+        else:
+            comfy_client.delete_queued(job["comfy_url"], pid)
     return {"ok": True}
 
 
@@ -2075,7 +2121,7 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
         def on_event(kind: str, payload):
             if kind == "progress":
                 _progress_update(job, payload.get("value"), payload.get("max"))
-                job["current"] = f"Krok {payload.get('value')}/{payload.get('max')}"
+                job["current"] = f"Step {payload.get('value')}/{payload.get('max')}"
             elif kind == "executing":
                 if payload.get("node"):
                     job["current_node"] = payload["node"]
@@ -2086,9 +2132,13 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
                 job["error"] = payload
 
         try:
-            comfy_client.stream_events(url, client_id, pid, on_event)
+            stopped = _comfy_stream(job, url, client_id, pid, on_event)
         except Exception as e:  # noqa: BLE001
+            stopped = False
             job["current"] = f"WS unavailable ({e}), polling history…"
+        if stopped:
+            job["state"] = "cancelled"
+            return
 
         while True:
             if job.get("cancel"):
@@ -2334,17 +2384,108 @@ def api_ideogram_render(req: IdeogramRenderRequest):
     return {"job_id": job_id, "warnings": v15_lint.lint_v15(req.prompt)}
 
 
+class IdeogramNormalizeRequest(BaseModel):
+    text: str
+
+
+_LEGACY_STYLE_KEYS = ("aesthetics", "lighting", "photo", "art_style", "color_palette")
+
+
+def _had_legacy_style(obj: dict) -> bool:
+    """The pre-v15 ``style_description`` with any non-empty style field."""
+    style = obj.get("style_description")
+    if not isinstance(style, dict):
+        return False
+    return any(v.strip() if isinstance(v, str) else bool(v)
+               for v in (style.get(k) for k in _LEGACY_STYLE_KEYS))
+
+
+@app.post("/api/ideogram/normalize")
+def api_ideogram_normalize(req: IdeogramNormalizeRequest):
+    """Pasted text -> v15 prompt (same normaliser as the LLM endpoints).
+
+    A fully double-encoded paste (the text is a JSON string holding the
+    object) is unwrapped once. Text without a JSON object is a 400.
+    """
+    text = req.text
+    obj = prompts._extract_json_object(text)
+    if obj is None:
+        try:
+            inner = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            inner = None
+        if isinstance(inner, str):
+            text = inner
+            obj = prompts._extract_json_object(text)
+    if obj is None:
+        raise HTTPException(400, "No JSON object found in the pasted text.")
+    prompt = prompts.normalize_ideogram_v15(text)
+    return {"prompt": prompt, "warnings": v15_lint.lint_v15(prompt),
+            "legacy_style": _had_legacy_style(prompts._unwrap_v15(obj))}
+
+
 def _vlm_image_to_v15(image, instruction: str, model: str, quant: str,
-                      max_tokens: int, default_ratio: str) -> str:
+                      max_tokens: int, default_ratio: str,
+                      ensure: Callable[[str], str], job: dict | None = None) -> str:
     """Run the chosen vision model (local or LM Studio) and normalize to v15."""
     lm_id = _lmstudio_model_id(model)
     if lm_id is not None:
+        if job is not None:
+            job["state"] = "analyzing"
         raw = lmstudio.caption_image(_lmstudio_url(), lm_id, image, instruction, max_tokens)
     else:
+        if job is not None:
+            job["state"] = "loading_model"
+        source = ensure(model)
+        if job is not None:
+            job["current"] = ""  # the download is over; its "100%" must not stay up
         captioner.ensure_loaded(model, quant if quant in ("4bit", "none") else "4bit",
-                                source=_ensure_model_http(model))
+                                source=source)
+        if job is not None:
+            job["state"] = "analyzing"
         raw = captioner.query_image(image, instruction, max_new_tokens=max_tokens)
     return prompts.normalize_ideogram_v15(raw, default_ratio=default_ratio)
+
+
+def _florence_analyze(image, ensure: Callable[[str], str], job: dict | None):
+    """Florence caption + measured elements; ``job`` follows loading_model -> analyzing."""
+    if job is not None:
+        job["state"] = "loading_model"
+    ensure(florence.DEFAULT_MODEL)
+    if job is not None:
+        job["current"] = ""
+        job["state"] = "analyzing"
+    return florence.analyze_image(image)
+
+
+def _analyze_image(image, engine: str, model: str, quant: str, max_tokens: int,
+                   ensure: Callable[[str], str], job: dict | None = None) -> dict:
+    """Reference image -> v15 draft: {json, elements, model, warnings}.
+
+    Engines: "florence" (caption + measured bboxes + OCR), "vlm" (the chosen
+    vision model drafts the whole JSON, estimating bboxes itself), "hybrid"
+    (Florence measures the bboxes/OCR, the vision model writes the v15 prose);
+    any other value runs Florence. Blocking; errors propagate to the caller.
+    """
+    ratio = florence.nearest_aspect(image.width, image.height)
+    used_model = florence.DEFAULT_MODEL
+    if engine == "vlm":
+        draft = _vlm_image_to_v15(image, prompts.build_image_v15_instruction(),
+                                  model, quant, max_tokens, ratio, ensure, job)
+        used_model = model
+    elif engine == "hybrid":
+        caption, elements = _florence_analyze(image, ensure, job)
+        base = florence.build_v15_draft(caption, elements, image.width, image.height)
+        draft = _vlm_image_to_v15(image, prompts.build_hybrid_v15_instruction(base),
+                                  model, quant, max_tokens, ratio, ensure, job)
+        used_model = f"{florence.DEFAULT_MODEL} + {model}"
+    else:
+        caption, elements = _florence_analyze(image, ensure, job)
+        draft = florence.build_v15_draft(caption, elements, image.width, image.height)
+    n_elements = len((json.loads(draft).get("compositional_deconstruction") or {})
+                     .get("elements") or [])
+    return {"json": draft, "elements": n_elements,
+            "model": used_model, "warnings": v15_lint.lint_v15(draft)}
 
 
 @app.post("/api/ideogram/analyze")
@@ -2352,12 +2493,7 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
                                model: str = Form(captioner.DEFAULT_MODEL),
                                quant: str = Form("4bit"),
                                max_tokens: int = Form(768)):
-    """Reference image -> v15 prompt draft.
-
-    Engines: "florence" (caption + measured bboxes + OCR), "vlm" (the chosen
-    vision model drafts the whole JSON, estimating bboxes itself), "hybrid"
-    (Florence measures the bboxes/OCR, the vision model writes the v15 prose).
-    """
+    """Reference image -> v15 prompt draft (classic, synchronous; see _analyze_image)."""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(400, "Upload an image file.")
     data = await file.read()
@@ -2367,30 +2503,10 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
     except Exception:
         raise HTTPException(400, "Failed to read the image.")
 
-    ratio = florence.nearest_aspect(image.width, image.height)
-
-    def analyze() -> tuple[str, str]:
-        """Model download, load and inference: blocking, so run off the event loop."""
-        used_model = florence.DEFAULT_MODEL
-        if engine == "vlm":
-            draft = _vlm_image_to_v15(image, prompts.build_image_v15_instruction(),
-                                      model, quant, max_tokens, ratio)
-            used_model = model
-        elif engine == "hybrid":
-            _ensure_model_http(florence.DEFAULT_MODEL)
-            caption, elements = florence.analyze_image(image)
-            base = florence.build_v15_draft(caption, elements, image.width, image.height)
-            draft = _vlm_image_to_v15(image, prompts.build_hybrid_v15_instruction(base),
-                                      model, quant, max_tokens, ratio)
-            used_model = f"{florence.DEFAULT_MODEL} + {model}"
-        else:
-            _ensure_model_http(florence.DEFAULT_MODEL)
-            caption, elements = florence.analyze_image(image)
-            draft = florence.build_v15_draft(caption, elements, image.width, image.height)
-        return draft, used_model
-
     try:
-        draft, used_model = await run_in_threadpool(analyze)
+        # Model download, load and inference: blocking, so run off the event loop.
+        return await run_in_threadpool(
+            _analyze_image, image, engine, model, quant, max_tokens, _ensure_model_http)
     except HTTPException:
         raise
     except lmstudio.LMStudioError as e:
@@ -2398,10 +2514,66 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"Image analysis failed: {e}")
 
-    n_elements = len((json.loads(draft).get("compositional_deconstruction") or {})
-                     .get("elements") or [])
-    return {"json": draft, "elements": n_elements,
-            "model": used_model, "warnings": v15_lint.lint_v15(draft)}
+
+def _decode_image(data: bytes):
+    """Decode an upload by content, not MIME (HEIC arrives with an empty type)."""
+    try:
+        return Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _run_analyze_job(job: dict, image, engine: str, model: str, quant: str,
+                     max_tokens: int) -> None:
+    try:
+        job["result"] = _analyze_image(image, engine, model, quant, max_tokens,
+                                       lambda m: _ensure_model_mapped(m, job), job)
+        job["current"] = ""
+        job["state"] = "done"
+    except BaseException as e:  # noqa: BLE001 - a dead thread must never leave the job busy
+        if isinstance(e, HTTPException):
+            msg = str(e.detail)
+        elif isinstance(e, lmstudio.LMStudioError):
+            msg = f"LM Studio: {e}"
+        else:
+            msg = f"Image analysis failed: {e}"
+        job["error"] = f"{msg}\n{traceback.format_exc()}"
+        job["state"] = "error"
+
+
+@app.post("/api/ideogram/analyze/jobs")
+async def api_ideogram_analyze_job_start(
+        file: UploadFile,
+        engine: Literal["florence", "vlm", "hybrid"] = Form("florence"),
+        model: str = Form(captioner.DEFAULT_MODEL),
+        quant: Literal["4bit", "none"] = Form("4bit"),
+        max_tokens: int = Form(1536, ge=64, le=8192)):
+    """Background image analysis (see _analyze_image); poll the GET route."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Upload an image file.")
+    image = await run_in_threadpool(_decode_image, data)
+    if image is None:
+        raise HTTPException(400, "Failed to read the image.")
+    job_id = uuid.uuid4().hex
+    job = {"id": job_id, "kind": "analyze", "state": "pending",
+           "current": "", "error": "", "result": None}
+    with JOBS_LOCK:
+        # Florence (florence, hybrid) and local VLMs use our GPU; only LM Studio does not.
+        lm_only = engine == "vlm" and _lmstudio_model_id(model) is not None
+        if _busy() and not lm_only:
+            raise HTTPException(409, "Processing in progress — wait for it to finish.")
+        JOBS[job_id] = job
+    threading.Thread(target=_run_analyze_job,
+                     args=(job, image, engine, model, quant, max_tokens), daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.get("/api/ideogram/analyze/jobs/{job_id}")
+def api_ideogram_analyze_job(job_id: str):
+    job = _job_of_kind(job_id, "analyze")
+    return {"state": job["state"], "current": job["current"],
+            "error": job["error"], "result": job["result"]}
 
 
 def _generate_prompt(req: PromptRequest | PromptJobRequest, ensure: Callable[[str], str],
