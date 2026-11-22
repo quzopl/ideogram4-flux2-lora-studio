@@ -137,3 +137,24 @@ test('download is disabled when the destination cannot be listed', async ({ page
   await expect(dialog.getByText(/^Not a folder/)).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Download', exact: true })).toBeDisabled()
 })
+
+test('gpu select without CPU still shows CPU when it is the value', async ({ page }) => {
+  await page.goto('/_playground')
+  await expect(page.getByRole('combobox', { name: 'Hidden CPU' })).toHaveText('CPU')
+})
+
+test('folder picker can allow read-only folders', async ({ page }) => {
+  await page.route('**/api/fs/list?*', (route) =>
+    route.fulfill({
+      json: { path: '/ro', parent: '/', dirs: [], is_model: true, free_bytes: 0, writable: false },
+    }))
+  // Default: a folder must be writable.
+  await page.goto('/_playground')
+  await page.getByRole('button', { name: 'Pick a folder' }).click()
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Choose this folder' })).toBeDisabled()
+
+  // Use existing… takes read-only model folders.
+  await page.goto('/models')
+  await page.getByRole('button', { name: 'Use existing…' }).first().click()
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Choose this folder' })).toBeEnabled()
+})

@@ -2,7 +2,7 @@ import { motion } from 'motion/react'
 import { cn } from '@/lib/utils'
 
 interface JobProgressProps {
-  /** Job state from the backend, e.g. "running", "done", "error", "cancelled". */
+  /** Job state from the backend, e.g. "pending", "processing", "done", "error", "cancelled". */
   state: string
   processed: number
   total: number
@@ -14,7 +14,7 @@ interface JobProgressProps {
 export function JobProgress({ state, processed, total, current, error }: JobProgressProps) {
   const pct = total > 0 ? Math.min(100, (processed / total) * 100) : 0
   const failed = state === 'error'
-  const running = state === 'running' || state === 'pending'
+  const running = !['done', 'error', 'cancelled'].includes(state)
 
   return (
     <div data-testid="job-progress" data-state={state} className="flex flex-col gap-1.5">

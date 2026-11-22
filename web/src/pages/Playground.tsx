@@ -26,6 +26,7 @@ export function Playground() {
   const [form, setForm, loaded] = useSavedForm('upscale', { alpha: '' })
   const [gpu, setGpu] = useState('auto')
   const [roleGpu, setRoleGpu] = useState('')
+  const [cpuGpu, setCpuGpu] = useState('cpu')
   const [model, setModel] = useState('')
 
   return (
@@ -64,6 +65,7 @@ export function Playground() {
         <div className="flex flex-wrap gap-3">
           <GpuSelect value={gpu} onChange={setGpu} />
           <GpuSelect value={roleGpu} onChange={setRoleGpu} includeDefault />
+          <GpuSelect value={cpuGpu} onChange={setCpuGpu} hideCpu label="Hidden CPU" />
         </div>
       </Demo>
 

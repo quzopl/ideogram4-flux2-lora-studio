@@ -11,7 +11,7 @@ interface GpuSelectProps {
   onChange: (value: string) => void
   /** Adds "Role default" (value ""). */
   includeDefault?: boolean
-  /** Leaves out "CPU" (for roles that must not run there). */
+  /** Leaves out "CPU" (for roles that must not run there) unless it is the value. */
   hideCpu?: boolean
   /** Accessible name of the trigger. */
   label?: string
@@ -35,7 +35,7 @@ export function GpuSelect({ value, onChange, includeDefault = false, hideCpu = f
         {gpus.data?.gpus.map((g) => (
           <SelectItem key={g.uuid} value={g.uuid}>{g.label}</SelectItem>
         ))}
-        {!hideCpu && <SelectItem value="cpu">CPU</SelectItem>}
+        {(!hideCpu || value === 'cpu') && <SelectItem value="cpu">CPU</SelectItem>}
       </SelectContent>
     </Select>
   )

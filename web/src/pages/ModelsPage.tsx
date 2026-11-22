@@ -216,6 +216,7 @@ export function ModelsPage() {
         title={`Use existing ${locating?.label ?? 'model'}`}
         initialPath={modelsDir || undefined}
         mode={locating?.kind === 'upscale' ? 'weights' : 'dir'}
+        requireWritable={false}
         onPick={(path) => locating && locate.mutate({ model_id: locating.id, path })}
       />
 

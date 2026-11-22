@@ -47,10 +47,12 @@ interface FolderPickerProps {
   initialPath?: string
   /** "weights": pick a weight file from the folder instead of the folder. */
   mode?: 'dir' | 'weights'
+  /** Only offer writable folders (default); false for folders that are only read. */
+  requireWritable?: boolean
   onPick: (path: string) => void
 }
 
-export function FolderPicker({ open, onOpenChange, title, initialPath, mode = 'dir', onPick }: FolderPickerProps) {
+export function FolderPicker({ open, onOpenChange, title, initialPath, mode = 'dir', requireWritable = true, onPick }: FolderPickerProps) {
   const weights = mode === 'weights'
   const [path, setPath] = useState(initialPath ?? '')
   const [file, setFile] = useState<string | null>(null)
@@ -100,7 +102,7 @@ export function FolderPicker({ open, onOpenChange, title, initialPath, mode = 'd
     onOpenChange(false)
   }
 
-  const canChoose = here ? (weights ? file !== null : here.writable) : false
+  const canChoose = here ? (weights ? file !== null : here.writable || !requireWritable) : false
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
