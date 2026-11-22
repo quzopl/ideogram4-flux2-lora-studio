@@ -42,3 +42,13 @@ def ml_modules_at_start():
     """Which of ML_MODULES were imported before the module's first test (use it
     through ``pytestmark`` so it is taken before any test runs)."""
     return {m for m in ML_MODULES if m in sys.modules}
+
+
+@pytest.fixture
+def prompt_db(tmp_path, monkeypatch):
+    """Fresh prompt-library database (not autouse): tests that reach
+    ``_save_prompt_to_library`` take it so they never touch the real one."""
+    from backend import server
+    monkeypatch.setattr(server, "DB_PATH", tmp_path / "flux_prep.db")
+    server._init_db()
+    return tmp_path / "flux_prep.db"

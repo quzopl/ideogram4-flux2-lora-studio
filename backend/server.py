@@ -21,7 +21,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -223,6 +223,23 @@ class PromptRequest(BaseModel):
     desc_detail: str = "balanced"      # brief | balanced | rich
 
 
+class PromptJobRequest(BaseModel):
+    """PromptRequest with strict validation, for the background prompt job."""
+    text: str
+    action: Literal["expand", "refine"] = "expand"
+    subject: Literal["auto", "person", "product", "landscape", "architecture"] = "auto"
+    model: str = captioner.DEFAULT_MODEL
+    quant: Literal["4bit", "none"] = "4bit"
+    max_tokens: int = Field(768, ge=64, le=8192)
+    caption_format: Literal["flux", "ideogram", "aitoolkit"] = "flux"
+    elements_detail: Literal["few", "balanced", "detailed", "maximal"] = "balanced"
+    desc_detail: Literal["brief", "balanced", "rich"] = "balanced"
+
+
+class PromptLintRequest(BaseModel):
+    prompt: str = ""
+
+
 class LibrarySaveRequest(BaseModel):
     category: str            # "flux" | "ideogram"
     prompt: str
@@ -277,7 +294,7 @@ def _job_of_kind(job_id: str, kind: str) -> dict:
     """Job with this id, or 404 when it is missing or of a different kind.
 
     Every job in ``JOBS`` is stamped with ``kind``
-    (``dataset`` | ``crop_auto`` | ``upscale``) at creation, because the three
+    (``dataset`` | ``crop_auto`` | ``upscale`` | ``prompt``) at creation, because the three
     shapes are not interchangeable: only dataset results carry ``caption``,
     only crop-auto jobs carry ``crops``, and each kind has its own routes.
     """
@@ -994,7 +1011,7 @@ def api_export(req: ExportRequest):
 def _busy() -> bool:
     """True while any job is still loading the model or processing images."""
     return any(
-        j["state"] in ("pending", "loading_model", "processing")
+        j["state"] in ("pending", "loading_model", "processing", "generating")
         for j in JOBS.values()
     )
 
@@ -2382,41 +2399,105 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
             "model": used_model, "warnings": v15_lint.lint_v15(draft)}
 
 
+def _generate_prompt(req: PromptRequest, ensure: Callable[[str], str],
+                     job: dict | None = None) -> dict:
+    """Expand or refine ``req.text`` and save the result to the library.
+
+    ``ensure`` turns a model id into a local path (``_ensure_model_http`` for
+    the synchronous endpoint, a job-bound ``_ensure_model`` for the job).
+    When ``job`` is given its ``state`` follows loading_model -> generating.
+    Returns {prompt, warnings, library_id}; errors propagate to the caller.
+    """
+    text = req.text.strip()
+    quant = req.quant if req.quant in ("4bit", "none") else "4bit"
+    if req.caption_format in ("ideogram", "aitoolkit"):
+        system = prompts.build_ideogram_studio_v15(
+            req.action, req.subject, req.elements_detail, req.desc_detail)
+    else:
+        system = prompts.build_studio_system(req.action, req.subject)
+    lm_id = _lmstudio_model_id(req.model)
+    if lm_id is not None:
+        if job is not None:
+            job["state"] = "generating"
+        raw = lmstudio.generate_text(_lmstudio_url(), lm_id, system, text, req.max_tokens)
+    else:
+        if job is not None:
+            job["state"] = "loading_model"
+        captioner.ensure_loaded(req.model, quant, source=ensure(req.model))
+        if job is not None:
+            job["state"] = "generating"
+            job["current"] = ""
+        raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
+    if req.caption_format in ("ideogram", "aitoolkit"):
+        final = prompts.normalize_ideogram_v15(raw)
+        warnings = v15_lint.lint_v15(final)
+    else:
+        final = prompts.clean_prompt(raw)
+        warnings = []
+    library_id = _save_prompt_to_library(
+        _prompt_category(req.caption_format), req.action, text, final)
+    return {"prompt": final, "warnings": warnings, "library_id": library_id}
+
+
 @app.post("/api/prompt")
 def api_prompt(req: PromptRequest):
     """Expand or refine a generation prompt (FLUX.2 or Ideogram 4 JSON) using the local LLM."""
-    text = req.text.strip()
-    if not text:
+    if not req.text.strip():
         raise HTTPException(400, "Type a prompt to expand or refine.")
-
-    quant = req.quant if req.quant in ("4bit", "none") else "4bit"
     try:
-        if req.caption_format in ("ideogram", "aitoolkit"):
-            system = prompts.build_ideogram_studio_v15(
-                req.action, req.subject, req.elements_detail, req.desc_detail)
-        else:
-            system = prompts.build_studio_system(req.action, req.subject)
-        lm_id = _lmstudio_model_id(req.model)
-        if lm_id is not None:
-            raw = lmstudio.generate_text(_lmstudio_url(), lm_id, system, text, req.max_tokens)
-        else:
-            captioner.ensure_loaded(req.model, quant, source=_ensure_model_http(req.model))
-            raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
-        if req.caption_format in ("ideogram", "aitoolkit"):
-            final = prompts.normalize_ideogram_v15(raw)
-            warnings = v15_lint.lint_v15(final)
-        else:
-            final = prompts.clean_prompt(raw)
-            warnings = []
-        library_id = _save_prompt_to_library(
-            _prompt_category(req.caption_format), req.action, text, final)
-        return {"prompt": final, "library_id": library_id, "warnings": warnings}
+        return _generate_prompt(req, _ensure_model_http)
     except HTTPException:
         raise
     except lmstudio.LMStudioError as e:
         raise HTTPException(502, f"LM Studio: {e}")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"Generation error: {e}")
+
+
+def _run_prompt_job(job: dict, req: PromptJobRequest) -> None:
+    try:
+        res = _generate_prompt(req, lambda m: _ensure_model(m, job), job)
+        job["result"] = {**res, "format": req.caption_format}
+        job["current"] = ""
+        job["state"] = "done"
+    except BaseException as e:  # noqa: BLE001 - a dead thread must never leave the job busy
+        if isinstance(e, lmstudio.LMStudioError):
+            job["error"] = f"LM Studio: {e}"
+        elif isinstance(e, (model_store.ModelsFolderNotSet, _UnknownModel, ValueError)):
+            job["error"] = str(e)
+        else:
+            job["error"] = f"Generation error: {e}"
+        job["state"] = "error"
+
+
+@app.post("/api/prompt/jobs")
+def api_prompt_job_start(req: PromptJobRequest):
+    if not req.text.strip():
+        raise HTTPException(400, "Type a prompt to expand or refine.")
+    job_id = uuid.uuid4().hex
+    job = {"id": job_id, "kind": "prompt", "state": "pending",
+           "current": "", "error": "", "result": None}
+    with JOBS_LOCK:
+        # ensure_loaded swaps the shared model; LM Studio never touches our GPU.
+        if _busy() and _lmstudio_model_id(req.model) is None:
+            raise HTTPException(409, "Processing in progress — wait for it to finish.")
+        JOBS[job_id] = job
+    threading.Thread(target=_run_prompt_job, args=(job, req), daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.get("/api/prompt/jobs/{job_id}")
+def api_prompt_job(job_id: str):
+    job = _job_of_kind(job_id, "prompt")
+    return {"state": job["state"], "current": job["current"],
+            "error": job["error"], "result": job["result"]}
+
+
+@app.post("/api/prompts/lint")
+def api_prompts_lint(req: PromptLintRequest):
+    if not req.prompt.strip():
+        return {"warnings": []}
+    return {"warnings": v15_lint.lint_v15(req.prompt)}
 
 
 @app.post("/api/zip")
