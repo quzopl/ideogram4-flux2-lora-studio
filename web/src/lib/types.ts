@@ -1,0 +1,90 @@
+// Response shapes of the FastAPI backend, read from backend/*.py.
+
+export type Role = 'vlm' | 'florence' | 'upscale'
+
+/** GET /api/settings (backend/settings.py `defaults`). */
+export interface Settings {
+  version: number
+  models_dir: string
+  model_locations: Record<string, string>
+  /** "auto", "cpu" or a card's UUID per role. */
+  gpu: Record<Role, string>
+  forms: Record<string, Record<string, unknown>>
+  presets: Record<string, Record<string, Record<string, unknown>>>
+}
+
+/** One row of server.py `_gpu_cards`. VRAM is null when nvidia-smi did not report the card. */
+export interface GpuCard {
+  uuid: string
+  /** e.g. "RTX 5080 · 16 GB" (· PCI xx when two cards share a name). */
+  label: string
+  /** Full name, e.g. "NVIDIA GeForce RTX 5080". */
+  name: string
+  total_bytes: number
+  pci_bus: number
+  selected: boolean
+  vram_used_gb: number | null
+  vram_total_gb: number | null
+  /** Roles assigned to this card. */
+  roles: Role[]
+  /** Roles whose model is loaded on this card. */
+  loaded: Role[]
+}
+
+/** GET /api/gpus. */
+export interface GpusResponse {
+  gpus: GpuCard[]
+  selected: string | null
+  roles: Record<Role, string>
+}
+
+/** GET /api/gpu and POST /api/unload (server.py `_gpu_status`). */
+export interface GpuStatus {
+  loaded: boolean
+  model: string | null
+  quant: string | null
+  cuda: boolean
+  upscale_loaded: boolean
+  upscale_model: string
+  upscale_device: string
+  upscale_note: string
+  gpu_label: string
+  vram_used_gb?: number | null
+  vram_total_gb?: number | null
+  cards: GpuCard[]
+}
+
+/** A download job (backend/model_store.py `start_download`). */
+export interface DownloadJob {
+  id: string
+  model_id: string
+  label: string
+  dest: string
+  state: 'pending' | 'downloading' | 'done' | 'error' | 'cancelled'
+  done_bytes: number
+  total_bytes: number
+  error: string
+  path: string
+}
+
+/** One row of model_store.py `listing`. */
+export interface StoreModel {
+  id: string
+  kind: Role
+  label: string
+  repo_id: string
+  filename: string
+  source: string
+  path?: string
+  scale?: number
+  note?: string
+  status: 'ready' | 'missing' | 'downloading'
+  local_path: string | null
+  download: DownloadJob | null
+}
+
+/** GET /api/store/models. */
+export interface StoreModelsResponse {
+  models_dir: string
+  models: StoreModel[]
+}
