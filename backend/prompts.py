@@ -545,14 +545,14 @@ def _unwrap_v15(obj: dict) -> dict:
     outer = obj
     for key in ("caption", "data", "result", "output"):
         inner = obj.get(key)
+        if isinstance(inner, str):
+            inner = _extract_json_object(inner)
+        # Only a value carrying the v15 keys is a wrapped prompt; anything else
+        # (a stray "output": "{...}" next to a complete prompt) is ignored.
         if isinstance(inner, dict) and (
             "high_level_description" in inner or "compositional_deconstruction" in inner
         ):
             obj = inner
-        elif isinstance(inner, str):
-            parsed = _extract_json_object(inner)
-            if parsed is not None:
-                obj = parsed
     if obj is not outer:
         obj = {**obj, **{k: outer[k] for k in ("aspect_ratio", "size")
                          if k in outer and k not in obj}}

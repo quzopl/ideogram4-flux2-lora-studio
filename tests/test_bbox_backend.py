@@ -84,6 +84,24 @@ def test_normalize_unwraps_every_classic_wrapper(key):
 
 
 @pytest.mark.parametrize("key", ["caption", "data", "result", "output"])
+@pytest.mark.parametrize("stray", ['{"a":1}', {"a": 1}, "not json at all"])
+def test_stray_wrapper_key_keeps_complete_prompt(key, stray):
+    """Only a wrapper value carrying v15 keys replaces the outer object."""
+    text = json.dumps({**V15, key: stray})
+    assert json.loads(prompts.normalize_ideogram_v15(text)) == V15
+    r = _normalize(text)
+    assert r.status_code == 200, r.text
+    assert json.loads(r.json()["prompt"]) == V15
+
+
+@pytest.mark.parametrize("key", ["caption", "data", "result", "output"])
+def test_wrapper_json_text_with_prompt_unwraps(key):
+    r = _normalize(json.dumps({key: json.dumps(V15)}))
+    assert r.status_code == 200, r.text
+    assert json.loads(r.json()["prompt"]) == V15
+
+
+@pytest.mark.parametrize("key", ["caption", "data", "result", "output"])
 def test_normalize_wrapper_inherits_outer_ratio(key):
     inner = {k: v for k, v in V15.items() if k != "aspect_ratio"}
     r = _normalize(json.dumps({"aspect_ratio": "16:9", key: inner}))
@@ -528,6 +546,23 @@ def test_cancel_queue_lookup_failure_only_deletes(comfy):
 def test_cancel_other_prompt_running_deletes_ours(comfy):
     comfy["queue"] = _running("SOMEONE_ELSE")
     _comfy_job(prompt_id="P1", executing=False, comfy_url="http://c")
+    _cancel()
+    assert comfy["delete"] == [("http://c", "P1")]
+    assert comfy["interrupt"] == []
+
+
+def test_cancel_racing_the_runner_is_not_lost(comfy):
+    """The runner records prompt_id just before the flag goes up: the endpoint
+    must read prompt_id after raising the flag, or nobody stops the prompt."""
+    class _Job(dict):
+        def __setitem__(self, k, v):
+            if k == "cancel":  # the runner wins the race to this point
+                super().__setitem__("comfy_url", "http://c")
+                super().__setitem__("prompt_id", "P1")
+                super().__setitem__("executing", False)
+            super().__setitem__(k, v)
+    job = _Job(_comfy_job(state="running"))
+    server.COMFY_JOBS["j"] = job
     _cancel()
     assert comfy["delete"] == [("http://c", "P1")]
     assert comfy["interrupt"] == []

@@ -1871,11 +1871,16 @@ def api_comfy_job_cancel(job_id: str):
         raise HTTPException(404, "Unknown job.")
     if job["state"] in ("done", "error", "cancelled"):
         return {"ok": True}
-    # Read before raising the flag: the flag ends the stream, which clears `executing`.
-    url, pid, executing = job.get("comfy_url"), job.get("prompt_id"), job.get("executing")
+    # Order matters. `executing` is read before the flag goes up, because the
+    # flag ends the stream, which clears it. The prompt id is read after: a
+    # runner that records it just before the flag passes its own cancel check,
+    # so only this read stops that prompt (a late `executing` is covered by the
+    # queue check in _comfy_stop).
+    executing = bool(job.get("executing"))
     job["cancel"] = True
+    url, pid = job.get("comfy_url"), job.get("prompt_id")
     if url and pid:
-        _comfy_stop(url, pid, bool(executing))
+        _comfy_stop(url, pid, executing)
     return {"ok": True}
 
 
