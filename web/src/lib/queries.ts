@@ -52,3 +52,11 @@ export function useMutationWithToast<TVars = void, TData = unknown>(
       Promise.all((opts.invalidate ?? []).map((queryKey) => qc.invalidateQueries({ queryKey }))),
   })
 }
+
+/** PATCH the models folder (an absolute path; the backend creates it). */
+export function useSetModelsDir() {
+  return useMutationWithToast(
+    (models_dir: string) => api<Settings>('/api/settings', { method: 'PATCH', json: { models_dir } }),
+    { success: 'Models folder saved', invalidate: [['settings'], ['store-models']] },
+  )
+}

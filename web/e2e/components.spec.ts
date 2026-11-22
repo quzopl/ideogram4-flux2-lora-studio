@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures.ts'
 import fs from 'node:fs'
 import { E2E_WORK } from './env.ts'
 
@@ -95,4 +95,45 @@ test('autosave does not flush a reverted edit on leave', async ({ page }) => {
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Models', exact: true }).click()
   await page.waitForTimeout(800)
   expect(bodies.filter((b) => b.includes('tmp-edit'))).toEqual([])
+})
+
+test('form unlocks when settings fail to load', async ({ page }) => {
+  await page.route(
+    (url) => url.pathname === '/api/settings',
+    (route) => route.fulfill({ status: 500, json: { detail: 'boom' } }),
+  )
+  await page.goto('/_playground')
+  // One retry (about a second) before the query gives up.
+  await expect(page.getByLabel('alpha', { exact: true })).toBeEnabled({ timeout: 10_000 })
+})
+
+test('preset names cannot contain a slash', async ({ page }) => {
+  await page.goto('/_playground')
+  await page.getByRole('button', { name: 'Save as…' }).click()
+  await page.getByLabel('Preset name').fill('a/b')
+  await expect(page.getByText('Preset names cannot contain “/”.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save preset' })).toBeDisabled()
+})
+
+test('download is disabled when the destination cannot be listed', async ({ page }) => {
+  await page.route(
+    (url) => url.pathname === '/api/settings',
+    async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      const response = await route.fetch()
+      const json = { ...(await response.json()), models_dir: `${WORK}/no-such-folder` }
+      await route.fulfill({ response, json })
+    },
+  )
+  await page.goto('/_playground')
+  await page.getByRole('combobox', { name: 'Model' }).click()
+  const missing = page.getByRole('option').filter({ hasText: /missing$/ })
+  test.skip((await missing.count()) === 0, 'every upscale model is already on disk here')
+  await missing.first().click()
+
+  await page.getByRole('button', { name: 'Download', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByTestId('download-dest')).toHaveText(`${WORK}/no-such-folder`)
+  await expect(dialog.getByText(/^Not a folder/)).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Download', exact: true })).toBeDisabled()
 })

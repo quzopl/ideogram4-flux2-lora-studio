@@ -44,10 +44,13 @@ export function PresetBar({ view, current, onLoad }: PresetBarProps) {
     { success: 'Preset deleted' },
   )
 
+  // A "/" would split the preset URL path.
+  const badName = name.includes('/')
+
   const submit = (e: FormEvent) => {
     e.preventDefault()
     const n = name.trim()
-    if (!n) return
+    if (!n || badName) return
     save.mutate(n, {
       onSuccess: (doc) => {
         store(doc)
@@ -103,13 +106,15 @@ export function PresetBar({ view, current, onLoad }: PresetBarProps) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === 'Escape' && setNaming(false)}
+            aria-invalid={badName || undefined}
             className="h-7 w-44"
           />
-          <Button type="submit" size="sm" aria-label="Save preset" disabled={!name.trim() || save.isPending}>
+          <Button type="submit" size="sm" aria-label="Save preset" disabled={!name.trim() || badName || save.isPending}>
             <Save />
             Save
           </Button>
           <Button type="button" size="sm" variant="ghost" onClick={() => setNaming(false)}>Cancel</Button>
+          {badName && <p className="text-xs text-danger">Preset names cannot contain “/”.</p>}
         </form>
       ) : (
         <Button variant="ghost" size="sm" onClick={() => setNaming(true)}>Save as…</Button>

@@ -11,17 +11,21 @@ interface GpuSelectProps {
   onChange: (value: string) => void
   /** Adds "Role default" (value ""). */
   includeDefault?: boolean
+  /** Leaves out "CPU" (for roles that must not run there). */
+  hideCpu?: boolean
+  /** Accessible name of the trigger. */
+  label?: string
   id?: string
 }
 
-export function GpuSelect({ value, onChange, includeDefault = false, id }: GpuSelectProps) {
+export function GpuSelect({ value, onChange, includeDefault = false, hideCpu = false, label = 'Device', id }: GpuSelectProps) {
   const gpus = useGpus()
   return (
     <Select
       value={value === '' && includeDefault ? DEFAULT : value}
       onValueChange={(v) => onChange(v === DEFAULT ? '' : v)}
     >
-      <SelectTrigger id={id} aria-label="Device" className="min-w-56">
+      <SelectTrigger id={id} aria-label={label} className="min-w-56">
         <SelectValue placeholder="Choose a device" />
       </SelectTrigger>
       <SelectContent>
@@ -31,7 +35,7 @@ export function GpuSelect({ value, onChange, includeDefault = false, id }: GpuSe
         {gpus.data?.gpus.map((g) => (
           <SelectItem key={g.uuid} value={g.uuid}>{g.label}</SelectItem>
         ))}
-        <SelectItem value="cpu">CPU</SelectItem>
+        {!hideCpu && <SelectItem value="cpu">CPU</SelectItem>}
       </SelectContent>
     </Select>
   )

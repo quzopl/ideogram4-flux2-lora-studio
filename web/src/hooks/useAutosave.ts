@@ -53,8 +53,8 @@ export function useAutosave<T>(view: string, value: T, delayMs = 500): void {
 /**
  * Form state for a view: starts at `defaults`, then once the settings arrive
  * becomes `{...defaults, ...settings.forms[view]}` (once; later refetches do
- * not overwrite edits) and autosaves from then on. Do not combine with
- * useAutosave for the same view.
+ * not overwrite edits; the defaults alone if they fail to load) and autosaves
+ * from then on. Do not combine with useAutosave for the same view.
  */
 export function useSavedForm<T extends object>(
   view: string,
@@ -64,11 +64,13 @@ export function useSavedForm<T extends object>(
   const [form, setForm] = useState<T>(defaults)
   const [loaded, setLoaded] = useState(false)
 
+  // If the settings cannot be loaded, carry on with the defaults rather than
+  // leaving the form disabled for good.
   useEffect(() => {
-    if (loaded || !settings.data) return
-    setForm((f) => ({ ...f, ...(settings.data.forms[view] as Partial<T> | undefined) }))
+    if (loaded || !(settings.data || settings.isError)) return
+    setForm((f) => ({ ...f, ...(settings.data?.forms[view] as Partial<T> | undefined) }))
     setLoaded(true)
-  }, [loaded, settings.data, view])
+  }, [loaded, settings.data, settings.isError, view])
 
   useFormSaver(view, form, 500, loaded)
   return [form, setForm, loaded]

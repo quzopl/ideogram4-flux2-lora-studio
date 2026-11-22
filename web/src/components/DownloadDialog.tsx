@@ -82,7 +82,7 @@ export function DownloadDialog({ modelId, open, onOpenChange }: DownloadDialogPr
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button
             size="sm"
-            disabled={!dest || start.isPending}
+            disabled={!dest || target.isError || start.isPending}
             onClick={() => start.mutate(undefined, { onSuccess: () => onOpenChange(false) })}
             className="bg-linear-to-r from-accent-from to-accent-to text-white"
           >

@@ -17,3 +17,10 @@ export function formatGb(n: number): string {
   if (!Number.isFinite(n)) return '—'
   return `${n >= 10 ? n.toFixed(0) : n.toFixed(1)} GB`
 }
+
+/** UI names of the model roles / kinds. */
+export const ROLE_LABEL = {
+  vlm: 'Captioning (VLM)',
+  florence: 'Florence-2',
+  upscale: 'Upscale',
+} as const

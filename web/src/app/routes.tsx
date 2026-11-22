@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes, type Location } from 'react-router'
 import { ClassicPlaceholder } from '@/pages/ClassicPlaceholder'
+import { ModelsPage } from '@/pages/ModelsPage'
 import { Playground } from '@/pages/Playground'
+import { SettingsPage } from '@/pages/SettingsPage'
 
 /** Stand-in for a v2 view that a later task builds. */
 function Placeholder({ title }: { title: string }) {
@@ -22,8 +24,8 @@ export function AppRoutes({ location }: { location: Location }) {
       <Route path="/bbox" element={<ClassicPlaceholder view="bbox" title="Bbox editor" />} />
       <Route path="/comfy" element={<ClassicPlaceholder view="comfy" title="ComfyUI" />} />
       <Route path="/upscale" element={<Placeholder title="Upscale" />} />
-      <Route path="/models" element={<Placeholder title="Models" />} />
-      <Route path="/settings" element={<Placeholder title="Settings" />} />
+      <Route path="/models" element={<ModelsPage />} />
+      <Route path="/settings" element={<SettingsPage />} />
       {/* Component harness for e2e; deliberately not in the sidebar. */}
       <Route path="/_playground" element={<Playground />} />
       <Route path="*" element={<Navigate to="/upscale" replace />} />

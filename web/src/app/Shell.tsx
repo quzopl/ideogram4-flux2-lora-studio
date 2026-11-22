@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useIsPresent } from 'motion/react'
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 import { GpuBar } from './GpuBar'
+import { Onboarding } from './Onboarding'
 import { AppRoutes } from './routes'
 import { Sidebar } from './Sidebar'
 
@@ -38,6 +39,7 @@ export function Shell() {
           </AnimatePresence>
         </main>
       </div>
+      <Onboarding />
     </div>
   )
 }

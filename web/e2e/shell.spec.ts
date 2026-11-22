@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures.ts'
 
 test('sidebar navigates', async ({ page }) => {
   await page.goto('/upscale')
