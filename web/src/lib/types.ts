@@ -102,3 +102,26 @@ export interface FsListing {
   writable: boolean
   files?: string[]
 }
+
+export type CropMode = 'center' | 'auto' | 'manual'
+
+/** Source file name -> [x, y, w, h], integers in true source px (after EXIF). */
+export type CropPlan = Record<string, [number, number, number, number]>
+
+/** GET /api/crops (crop_store.load); `exists` is false only for a folder never saved. */
+export interface CropDoc {
+  plan: CropPlan
+  mode: CropMode
+  exists: boolean
+}
+
+/** GET /api/crop/auto/{id}. `error` carries a traceback. */
+export interface CropAutoJob {
+  state: string
+  total: number
+  processed: number
+  current: string
+  error: string
+  crops: CropPlan
+  skipped: string[]
+}
