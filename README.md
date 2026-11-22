@@ -144,7 +144,7 @@ preview; export to a folder or `.zip`; autosaved form and named presets),
 **Models** (Download… / Use existing… / Forget / Cancel) and **Settings**
 (Models folder, GPU per role — CPU is not offered for the VLM — Hugging Face
 token, LM Studio and ComfyUI URLs, settings export/import), plus a first-run
-onboarding. Prompt studio, Bbox editor and ComfyUI still open the classic UI.
+onboarding. Bbox editor and ComfyUI still open the classic UI.
 
 **Dataset** is in v2 too. The source is a folder scan (folder picker, or
 drag-and-drop upload; HEIC is accepted), shown as a thumbnail grid. The crop
@@ -165,6 +165,29 @@ Caption edits are kept in the browser tab (`sessionStorage`) until export;
 export sends only the edited captions plus the removed indices. Remove has an
 Undo, and export goes to a folder or a `.zip`. `GET /api/src/size` reports the
 pixel size of one source image after EXIF rotation, read from its header.
+
+**Prompt studio** is in v2 too (`/prompts`). Pick Expand or Refine, type the
+subject, choose the target (FLUX.2, Ideogram 4 JSON or ai-toolkit JSON) and,
+for the JSON targets, the element count and description density. The Era /
+Style / Genre selects append an instruction to the request; model (any VLM or
+LM Studio), quantization and max length are set per run.
+
+Generation runs as a background job: `POST /api/prompt/jobs` returns a
+`job_id`, `GET /api/prompt/jobs/{id}` reports `pending`, `loading_model`,
+`generating`, `done` or `error`. It survives leaving the view. A second GPU
+job gets 409 while one is running, unless the model is an `lmstudio:` one.
+The prompt text lives only in the browser tab (`sessionStorage` key
+`flux.prompts.run`), not in `settings.json` or presets. The legacy
+`POST /api/prompt` is unchanged.
+
+The result is editable and re-linted on edit (`POST /api/prompts/lint`).
+**Copy** falls back to a temporary textarea on plain http, **Regenerate**
+reruns the job, **Use as input** moves the result into the prompt field and
+**Edit on canvas** (JSON results) opens it in the Bbox editor. Until the v2
+Bbox editor exists that is the classic one: the prompt is handed over through
+`sessionStorage` (`flux.bbox.handoff`). The library below has All / FLUX.2 /
+Ideogram (JSON) tabs, a client-side filter, copy, open on canvas, delete with
+confirmation and **Export .sql**.
 
 Dev server with hot reload (the backend must run on 8123):
 
