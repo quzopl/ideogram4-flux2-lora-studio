@@ -21,6 +21,14 @@ uv pip install -r requirements.txt
 # Modele pobierają się do folderu wybranego w aplikacji, nie do cache HF.
 # HF_HOME wyeksportowany samodzielnie nadal działa (tylko go tu nie ustawiamy).
 
+# Nowe UI (web/): budowane, gdy brakuje dist albo źródła są nowsze.
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "Brak 'pnpm' — nowe UI nie zostanie zbudowane (zostaje klasyczne pod /legacy/). Zainstaluj: https://pnpm.io/installation"
+elif [ ! -f web/dist/index.html ] || [ -n "$(find web/src web/index.html web/package.json -newer web/dist/index.html 2>/dev/null)" ]; then
+  echo ">> Buduję nowe UI (web/)…"
+  (cd web && pnpm install --frozen-lockfile && pnpm build)
+fi
+
 PORT="${PORT:-8123}"
 echo ""
 echo ">> Otwórz w przeglądarce:  http://127.0.0.1:${PORT}"
