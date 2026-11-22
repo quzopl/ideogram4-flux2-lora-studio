@@ -99,3 +99,33 @@ def test_gpus_concurrent_polls_share_one_smi_run(monkeypatch):
         t.join()
     assert codes == [200, 200]
     assert len(calls) == 1
+
+
+def test_html_responses_are_not_cached(dist):
+    for p in ("/", "/settings", "/upscale", "/legacy/"):
+        r = client.get(p)
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+        assert r.headers.get("cache-control") == "no-cache", p
+
+
+def test_missing_asset_is_404_not_index(dist):
+    r = client.get("/assets/index-OLD.js")
+    assert r.status_code == 404
+    assert not r.headers["content-type"].startswith("text/html")
+
+
+def test_missing_asset_is_404_without_dist(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "WEB_DIST", tmp_path / "missing")
+    assert client.get("/assets/index-OLD.js", follow_redirects=False).status_code == 404
+
+
+def test_legacy_without_slash_redirects(dist):
+    r = client.get("/legacy", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/legacy/"
+
+
+def test_nul_byte_in_path_is_not_a_server_error(dist):
+    r = client.get("/x%00y")
+    assert r.status_code == 200 and 'id="root"' in r.text
+    assert client.get("/assets/%00.js").status_code == 404
+    assert client.get("/legacy/%00").status_code < 500

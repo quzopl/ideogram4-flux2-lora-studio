@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 WORK = Path(os.environ.get("FLUX_PREP_WORK") or ROOT / ".work")
 WEB_DIST = ROOT / "web" / "dist"
-WORK.mkdir(exist_ok=True)
+WORK.mkdir(parents=True, exist_ok=True)
 
 COMFY_CONFIG_PATH = WORK / "comfy_config.json"
 COMFY_MAPPINGS_PATH = WORK / "comfy_mappings.json"
@@ -136,11 +136,14 @@ async def _no_cache_frontend(request, call_next):
     """No browser caching for the frontend — the UI is always fresh after updates.
 
     'no-cache' forces revalidation (ETag/Last-Modified), so unchanged files
-    still go out as 304 — no cost, no stale app.js.
+    still go out as 304 — no cost, no stale app.js. Every HTML response gets it
+    (the SPA index under any deep link, /legacy/), so a rebuilt web/dist is
+    never paired with a cached index.html that names vanished assets.
     """
     response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.endswith((".html", ".js", ".css")):
+    if (path == "/" or path.endswith((".html", ".js", ".css"))
+            or response.headers.get("content-type", "").startswith("text/html")):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -2427,12 +2430,24 @@ def health():
 app.include_router(api_settings.router)
 models_api.configure(_model_ctx, lambda: hf_auth.load_token(HF_TOKEN_PATH))
 app.include_router(models_api.router)
+
+
+@app.get("/legacy", include_in_schema=False)
+def legacy_slash():
+    # The mount below only matches "/legacy/..."; without this, the SPA would answer.
+    return RedirectResponse("/legacy/", 307)
+
+
 app.mount("/legacy", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
 
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa(path: str, request: Request):
-    """The v2 SPA: real files from web/dist, index.html for every other route."""
+    """The v2 SPA: real files from web/dist, index.html for every other route.
+
+    A missing file under assets/ is a 404: a stale page asking for a hashed
+    bundle of an older build must not get index.html back as JavaScript.
+    """
     if path.startswith("api/"):
         # An API route that exists for another method is a 405, not a 404.
         if any(getattr(r, "path", "") != "/{path:path}"
@@ -2440,11 +2455,17 @@ def spa(path: str, request: Request):
                for r in app.routes):
             raise HTTPException(405, "Method not allowed.")
         raise HTTPException(404, "Not found.")
+    root = WEB_DIST.resolve()
+    try:
+        target = (WEB_DIST / path).resolve()
+        found = bool(path) and target.is_file() and target.is_relative_to(root)
+    except ValueError:  # e.g. a NUL byte in the path
+        found = False
+    if found:
+        return FileResponse(str(target))
+    if path.startswith("assets/"):
+        raise HTTPException(404, "Not found.")
     index = WEB_DIST / "index.html"
     if not index.is_file():
         return RedirectResponse("/legacy/", 307)
-    root = WEB_DIST.resolve()
-    target = (WEB_DIST / path).resolve()
-    if path and target.is_file() and target.is_relative_to(root):
-        return FileResponse(str(target))
     return FileResponse(str(index))

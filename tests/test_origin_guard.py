@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import server, settings
-from backend.origin_guard import is_loopback_host
+from backend.origin_guard import OriginGuard, is_loopback_host
 
 client = TestClient(server.app)
 LOCAL = {"host": "127.0.0.1:8123"}
@@ -64,12 +64,6 @@ def test_same_origin_post_allowed():
     assert r.status_code == 200
 
 
-def test_localhost_other_port_origin_allowed():
-    r = client.post("/api/settings/import", json=BODY,
-                    headers={**LOCAL, "origin": "http://localhost:5173"})
-    assert r.status_code == 200
-
-
 def test_no_origin_post_allowed():
     assert client.post("/api/settings/import", json=BODY, headers=LOCAL).status_code == 200
 
@@ -104,7 +98,28 @@ def test_origin_same_port_allowed():
     assert r.status_code == 200
 
 
-def test_dev_origin_allowed():
+def test_vite_dev_origin_rejected_by_default():
+    # No dev origins by default: the Vite server's origin is just another port.
     r = client.post("/api/settings/import", json=BODY,
                     headers={**LOCAL, "origin": "http://localhost:5173"})
+    assert r.status_code == 403
+
+
+def test_vite_proxy_passes_same_port_rule():
+    # The Vite proxy keeps Host (changeOrigin: false), so Host and Origin are both :5173.
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={"host": "localhost:5173", "origin": "http://localhost:5173"})
     assert r.status_code == 200
+
+
+async def _ok_app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok"})
+
+
+def test_dev_origins_allowlist():
+    guarded = TestClient(OriginGuard(_ok_app, dev_origins=["http://localhost:5173/"]))
+    ok = guarded.post("/api/x", headers={**LOCAL, "origin": "http://localhost:5173"})
+    assert ok.status_code == 200
+    other = guarded.post("/api/x", headers={**LOCAL, "origin": "http://localhost:5174"})
+    assert other.status_code == 403

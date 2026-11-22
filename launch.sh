@@ -9,7 +9,8 @@ if curl -sf "${URL}/api/models" >/dev/null 2>&1; then
   exit 0
 fi
 
-( for _ in $(seq 600); do
+# Up to 30 minutes: the first run installs PyTorch.
+( for _ in $(seq 3600); do
     curl -sf "${URL}/api/models" >/dev/null 2>&1 && { xdg-open "${URL}" >/dev/null 2>&1; break; }
     sleep 0.5
   done ) &

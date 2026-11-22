@@ -11,8 +11,10 @@ streamed downloads are unaffected) enforces:
   2. For state-changing methods, a present `Origin` must be loopback AND carry
      the same port as the `Host` header (no port means 80 for http, 443 for
      https), or match exactly an entry of `FLUX_PREP_DEV_ORIGINS` (comma
-     separated, default `http://localhost:5173,http://127.0.0.1:5173`, the Vite
-     dev server). Another loopback port is rejected; so is `Origin: null`.
+     separated, empty by default: the Vite dev server proxies with
+     `changeOrigin: false`, so its Host and Origin share port 5173 and pass
+     the same-port rule). Another loopback port is rejected; so is
+     `Origin: null`.
   3. For state-changing methods, `Sec-Fetch-Site: cross-site` is rejected.
 Requests without `Origin` (curl, scripts, tests) pass if `Host` is fine.
 Static frontend files are not guarded.
@@ -26,7 +28,6 @@ from urllib.parse import urlsplit
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-_DEFAULT_DEV_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
 
 def _port(netloc: str, scheme: str) -> int | None:
@@ -73,7 +74,7 @@ class OriginGuard:
     def __init__(self, app, extra_hosts=(), dev_origins=None):
         self.app = app
         if dev_origins is None:
-            dev_origins = os.environ.get("FLUX_PREP_DEV_ORIGINS", _DEFAULT_DEV_ORIGINS).split(",")
+            dev_origins = os.environ.get("FLUX_PREP_DEV_ORIGINS", "").split(",")
         self.dev_origins = {o.strip().rstrip("/").lower() for o in dev_origins if o.strip()}
         self.extra_hosts = {_bare_host(h) for h in extra_hosts if h.strip()}
 
