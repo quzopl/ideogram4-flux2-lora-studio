@@ -119,6 +119,44 @@ cd ~/flux-lora-prep
 
 Then open **http://127.0.0.1:8123**.
 
+`launch.sh` is the one-click variant (it is what a desktop shortcut should
+run): if the server already answers on `PORT` (default 8123) it only opens the
+browser, otherwise it starts `./run.sh` and opens the browser as soon as
+`/api/models` responds.
+
+### New UI (v2)
+
+`/` serves the new UI (built from `web/` into `web/dist`); the classic UI
+stays at **`/legacy/`** (it understands a `#<view>` hash, e.g.
+`/legacy/#prompts`). If `web/dist` does not exist, `/` redirects to
+`/legacy/`. `run.sh` runs `pnpm install` and `pnpm build` in `web/` when
+`web/dist` is missing or older than `web/src`; without `pnpm` it prints a
+message and skips the build, so you get the classic UI only.
+
+The v2 views so far: **Upscale** (x2 / x3 / x4, a custom factor 1.5–8, long
+side or native scale; model and GPU per job; drag-and-drop; before/after
+preview; export to a folder or `.zip`; autosaved form and named presets),
+**Models** (Download… / Use existing… / Forget / Cancel) and **Settings**
+(Models folder, GPU per role — CPU is not offered for the VLM — Hugging Face
+token, LM Studio and ComfyUI URLs, settings export/import), plus a first-run
+onboarding. Dataset, Prompt studio, Bbox editor and ComfyUI still open the
+classic UI.
+
+Dev server with hot reload (the backend must run on 8123):
+
+```bash
+cd web && pnpm dev        # proxies /api to 127.0.0.1:8123
+```
+
+then open **http://localhost:5173**. Checks and end-to-end tests:
+
+```bash
+cd web && pnpm typecheck && pnpm build && pnpm exec playwright test
+```
+
+`FLUX_PREP_WORK` relocates all state (settings, jobs, databases; default
+`.work/`) — the e2e tests use it to stay out of your real data.
+
 ### Models folder (set it first)
 
 The local models (Qwen2.5-VL, Florence-2, the upscalers) live in one **Models
@@ -150,7 +188,7 @@ or set the Models folder somewhere else and let the models download there.
 
 Settings (Models folder, per-role GPUs, saved form values and named presets)
 are kept in `.work/settings.json`. The store and its presets have an API, with
-the UI coming in a later version: `GET`/`PATCH /api/settings`,
+the Settings page of the v2 UI sits on top of it: `GET`/`PATCH /api/settings`,
 `PUT /api/settings/forms/{view}`,
 `PUT`/`DELETE /api/settings/presets/{view}/{name}`,
 `GET /api/settings/export` and `POST /api/settings/import` (views: `dataset`,
@@ -159,8 +197,15 @@ Face token.
 
 The API answers only the app itself: requests with a non-loopback `Host`, and
 state-changing requests from another web origin (any other site open in your
-browser), are rejected with 403. curl and scripts that send no `Origin` header
-work as before.
+browser), are rejected with 403. An origin is accepted when it is a loopback
+address on the same port as the server, or exactly one of
+`FLUX_PREP_DEV_ORIGINS` (comma-separated; default
+`http://localhost:5173,http://127.0.0.1:5173`, the Vite dev server). curl and
+scripts that send no `Origin` header work as before.
+
+`/api/fs/pick` (the native folder-picker dialog) is `POST`, since it has a
+side effect. The upscale result of image `idx` in a job is served at
+`/api/upscale/image/{job}/{idx}`.
 
 ## How it works (step by step in the UI)
 
