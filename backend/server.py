@@ -1613,34 +1613,63 @@ def _progress_update(job: dict, value, maxv) -> None:
     }
 
 
-def _comfy_stream(job: dict, url: str, client_id: str, pid: str, on_event) -> bool:
-    """Drive ``stream_events`` for a queued prompt, tracking what the cancel
-    endpoint needs: ``prompt_id``, ``comfy_url`` and ``executing`` (true only
-    while our prompt runs). Returns True when the run was cancelled or
-    interrupted — the job then ends ``cancelled``. WS failures propagate.
+def _comfy_prompt_running(url: str, pid: str) -> bool:
+    """Whether ComfyUI is executing ``pid`` now (``queue_running`` items are
+    [number, prompt_id, ...]). False when the queue cannot be read."""
+    try:
+        running = comfy_client.queue_info(url).get("queue_running") or []
+    except Exception:  # noqa: BLE001 - then only the safe queue delete is sent
+        return False
+    return any(isinstance(it, list) and len(it) > 1 and it[1] == pid for it in running)
+
+
+def _comfy_stop(url: str, pid: str, executing: bool) -> None:
+    """Interrupt our prompt when it executes, else drop it from the queue.
+
+    ``executing`` comes from the WS events, which can miss the start (the
+    socket opens after queueing), so when it is false ComfyUI's queue decides.
     """
+    if executing or _comfy_prompt_running(url, pid):
+        comfy_client.interrupt(url, pid)
+    else:
+        comfy_client.delete_queued(url, pid)
+
+
+def _comfy_stream(job: dict, url: str, client_id: str, pid: str, on_event) -> str | None:
+    """Drive ``stream_events`` for a queued prompt, tracking what the cancel
+    endpoint needs: ``comfy_url``, ``prompt_id`` and ``executing`` (true only
+    while our prompt runs). Returns "error" after a ComfyUI execution error
+    (``job["error"]`` holds its text), "cancelled" when the run was cancelled
+    or interrupted, else None. WS failures propagate.
+    """
+    job["comfy_url"] = url  # before prompt_id: the cancel endpoint reads both
     job["prompt_id"] = pid
-    job["comfy_url"] = url
     job["executing"] = False
     if job.get("cancel"):  # the cancel landed before the prompt id was known
-        comfy_client.delete_queued(url, pid)
-        return True
-    interrupted = False
+        _comfy_stop(url, pid, False)
+        return "cancelled"
+    outcome = None
 
     def handler(kind: str, payload) -> None:
-        nonlocal interrupted
+        nonlocal outcome
         if kind == "started":
             job["executing"] = True
         elif kind == "interrupted":
-            interrupted = True
+            outcome = "cancelled"
+        elif kind == "error":
+            outcome = "error"
         on_event(kind, payload)
+        if kind == "error":
+            job["error"] = str(payload) or "ComfyUI execution error."
 
     try:
         comfy_client.stream_events(url, client_id, pid, handler,
                                    should_stop=lambda: bool(job.get("cancel")))
     finally:
         job["executing"] = False
-    return interrupted or bool(job.get("cancel"))
+    if outcome is None and job.get("cancel"):
+        outcome = "cancelled"
+    return outcome
 
 
 def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
@@ -1710,13 +1739,13 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
                     job["error"] = payload
 
             try:
-                stopped = _comfy_stream(job, url, client_id, pid, on_event)
+                outcome = _comfy_stream(job, url, client_id, pid, on_event)
             except Exception as e:  # noqa: BLE001
                 # WS hiccup — fall back to polling /history.
-                stopped = False
+                outcome = None
                 job["current"] = f"Sample {i + 1}/{batch}: WS unavailable ({e}), polling history…"
-            if stopped:
-                job["state"] = "cancelled"
+            if outcome:  # "cancelled" | "error"
+                job["state"] = outcome
                 return
 
             # Fetch outputs from history (no timeout — wait as long as it takes).
@@ -1836,19 +1865,17 @@ def api_comfy_job_cancel(job_id: str):
     """Stop a render: a queued prompt is deleted from ComfyUI's queue, an
     executing one is interrupted (``/interrupt`` stops whatever runs now, so it
     is sent only while our prompt executes). Before the prompt is queued only
-    the flag is set; the runner drops the prompt itself once it gets its id."""
+    the flag is set; the runner stops the prompt itself once it gets its id."""
     job = COMFY_JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "Unknown job.")
     if job["state"] in ("done", "error", "cancelled"):
         return {"ok": True}
+    # Read before raising the flag: the flag ends the stream, which clears `executing`.
+    url, pid, executing = job.get("comfy_url"), job.get("prompt_id"), job.get("executing")
     job["cancel"] = True
-    pid = job.get("prompt_id")
-    if pid:
-        if job.get("executing"):
-            comfy_client.interrupt(job["comfy_url"])
-        else:
-            comfy_client.delete_queued(job["comfy_url"], pid)
+    if url and pid:
+        _comfy_stop(url, pid, bool(executing))
     return {"ok": True}
 
 
@@ -2132,12 +2159,12 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
                 job["error"] = payload
 
         try:
-            stopped = _comfy_stream(job, url, client_id, pid, on_event)
+            outcome = _comfy_stream(job, url, client_id, pid, on_event)
         except Exception as e:  # noqa: BLE001
-            stopped = False
+            outcome = None
             job["current"] = f"WS unavailable ({e}), polling history…"
-        if stopped:
-            job["state"] = "cancelled"
+        if outcome:  # "cancelled" | "error"
+            job["state"] = outcome
             return
 
         while True:
@@ -2405,7 +2432,8 @@ def api_ideogram_normalize(req: IdeogramNormalizeRequest):
     """Pasted text -> v15 prompt (same normaliser as the LLM endpoints).
 
     A fully double-encoded paste (the text is a JSON string holding the
-    object) is unwrapped once. Text without a JSON object is a 400.
+    object) is unwrapped once. Text without a JSON object, or JSON without
+    a v15 prompt after unwrapping, is a 400.
     """
     text = req.text
     obj = prompts._extract_json_object(text)
@@ -2419,9 +2447,12 @@ def api_ideogram_normalize(req: IdeogramNormalizeRequest):
             obj = prompts._extract_json_object(text)
     if obj is None:
         raise HTTPException(400, "No JSON object found in the pasted text.")
+    obj = prompts._unwrap_v15(obj)
+    if "high_level_description" not in obj and "compositional_deconstruction" not in obj:
+        raise HTTPException(400, "No Ideogram prompt found in the JSON.")
     prompt = prompts.normalize_ideogram_v15(text)
     return {"prompt": prompt, "warnings": v15_lint.lint_v15(prompt),
-            "legacy_style": _had_legacy_style(prompts._unwrap_v15(obj))}
+            "legacy_style": _had_legacy_style(obj)}
 
 
 def _vlm_image_to_v15(image, instruction: str, model: str, quant: str,

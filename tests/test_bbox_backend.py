@@ -74,6 +74,36 @@ def test_normalize_wrapped_and_legacy():
     assert out == V15
 
 
+@pytest.mark.parametrize("key", ["caption", "data", "result", "output"])
+def test_normalize_unwraps_every_classic_wrapper(key):
+    r = _normalize(json.dumps({key: V15}))
+    assert r.status_code == 200, r.text
+    assert json.loads(r.json()["prompt"]) == V15
+    styled = {key: {**V15, "style_description": {"lighting": "dusk"}}}
+    assert _normalize(json.dumps(styled)).json()["legacy_style"] is True
+
+
+@pytest.mark.parametrize("key", ["caption", "data", "result", "output"])
+def test_normalize_wrapper_inherits_outer_ratio(key):
+    inner = {k: v for k, v in V15.items() if k != "aspect_ratio"}
+    r = _normalize(json.dumps({"aspect_ratio": "16:9", key: inner}))
+    out = json.loads(r.json()["prompt"])
+    assert out["aspect_ratio"] == "16:9"
+    assert out["high_level_description"] == V15["high_level_description"]
+    r = _normalize(json.dumps({"size": "1024x768", key: inner}))
+    assert json.loads(r.json()["prompt"])["aspect_ratio"] == "4:3"
+    # the inner object's own ratio wins
+    r = _normalize(json.dumps({"aspect_ratio": "16:9", "caption": V15}))
+    assert json.loads(r.json()["prompt"])["aspect_ratio"] == "4:3"
+
+
+def test_normalize_json_without_prompt_400():
+    for text in ('{"foo": 1}', json.dumps({"result": {"foo": 1}}), "{}"):
+        r = _normalize(text)
+        assert r.status_code == 400, text
+        assert r.json()["detail"] == "No Ideogram prompt found in the JSON."
+
+
 def test_normalize_double_encoded_top_level():
     r = _normalize(json.dumps(json.dumps(V15)))
     assert r.status_code == 200, r.text
@@ -308,8 +338,11 @@ def test_interrupt_and_delete_queued_post(monkeypatch):
                         lambda url, data=None, timeout=30.0: calls.append((url, data)) or b"")
     comfy_client.interrupt("http://c:8188/")
     comfy_client.delete_queued("http://c:8188", "pid-1")
-    assert calls[0][0] == "http://c:8188/interrupt" and calls[0][1]  # non-empty body = POST
+    comfy_client.interrupt("http://c:8188", "pid-1")
+    assert calls[0] == ("http://c:8188/interrupt", b"{}")  # non-empty body = POST
     assert calls[1] == ("http://c:8188/queue", json.dumps({"delete": ["pid-1"]}).encode())
+    # newer ComfyUI interrupts only this prompt; older ones ignore the body
+    assert calls[2] == ("http://c:8188/interrupt", json.dumps({"prompt_id": "pid-1"}).encode())
 
 
 def test_interrupt_and_delete_swallow_errors(monkeypatch):
@@ -369,11 +402,33 @@ def test_stream_events_interrupted_returns(monkeypatch):
 def test_stream_events_started_only_for_own_prompt(monkeypatch):
     events, _ = _stream(monkeypatch, [
         {"type": "execution_start", "data": {"prompt_id": "OTHER"}},
-        {"type": "executing", "data": {"node": "3"}},  # no prompt_id: not ours for sure
+        {"type": "executing", "data": {"node": "3", "prompt_id": "OTHER"}},
         {"type": "executing", "data": {"node": "3", "prompt_id": "P"}},
         {"type": "executing", "data": {"node": None, "prompt_id": "P"}},
     ])
-    assert [k for k, _ in events] == ["executing", "started", "executing", "executing", "done"]
+    assert [k for k, _ in events] == ["started", "executing", "executing", "done"]
+
+
+def test_stream_events_started_from_connect_executing(monkeypatch):
+    """On connect ComfyUI replays `executing {node}` without prompt_id, only to the
+    client whose prompt runs — the client id is fresh per job, so it is ours."""
+    calls = iter(range(100))
+    events, _ = _stream(monkeypatch, [{"type": "executing", "data": {"node": "3"}}],
+                        should_stop=lambda: next(calls) > 3)
+    assert [k for k, _ in events] == ["started", "executing"]
+
+
+def test_stream_events_execution_error_text(monkeypatch):
+    events, _ = _stream(monkeypatch, [{"type": "execution_error", "data": {
+        "prompt_id": "P", "node_id": "3", "node_type": "KSampler",
+        "exception_type": "torch.OutOfMemoryError",
+        "exception_message": "CUDA out of memory.\nTried to allocate 2 GiB",
+        "traceback": ["  File \"x.py\", line 1\n", "boom\n"]}}])
+    kind, text = events[-1]
+    assert kind == "error"
+    assert text.split("\n", 1)[0] == (
+        "KSampler (node 3): torch.OutOfMemoryError: CUDA out of memory.")
+    assert "boom" in text
 
 
 def test_stream_events_started_from_progress_when_start_was_missed(monkeypatch):
@@ -402,10 +457,18 @@ def test_stream_events_should_stop_returns_while_queued(monkeypatch):
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def comfy(monkeypatch, tmp_path):
-    calls = {"interrupt": [], "delete": [], "history": 0}
+    calls = {"interrupt": [], "delete": [], "history": 0,
+             "queue": {"queue_running": [], "queue_pending": [[0, "P1", {}, {}, []]]}}
     monkeypatch.setattr(server, "_load_comfy_config", lambda: {"url": "http://c"})
     monkeypatch.setattr(server, "COMFY_GALLERY_DIR", tmp_path)
-    monkeypatch.setattr(comfy_client, "interrupt", lambda url: calls["interrupt"].append(url))
+    monkeypatch.setattr(comfy_client, "interrupt",
+                        lambda url, prompt_id=None: calls["interrupt"].append((url, prompt_id)))
+
+    def queue_info(url):
+        if isinstance(calls["queue"], Exception):
+            raise calls["queue"]
+        return calls["queue"]
+    monkeypatch.setattr(comfy_client, "queue_info", queue_info)
     monkeypatch.setattr(comfy_client, "delete_queued",
                         lambda url, pid: calls["delete"].append((url, pid)))
     monkeypatch.setattr(comfy_client, "queue_prompt", lambda url, wf, client_id=None: "P1")
@@ -436,9 +499,43 @@ def _cancel(jid="j"):
 def test_cancel_running_interrupts_comfy(comfy):
     job = _comfy_job(prompt_id="P1", executing=True, comfy_url="http://c")
     _cancel()
-    assert comfy["interrupt"] == ["http://c"]
+    assert comfy["interrupt"] == [("http://c", "P1")]
     assert comfy["delete"] == []
     assert job["cancel"] is True
+
+
+def _running(pid="P1"):
+    return {"queue_running": [[0, pid, {}, {}, []]], "queue_pending": []}
+
+
+def test_cancel_running_without_start_event_asks_queue(comfy):
+    """The start events can go out before our socket opens (cold model load)."""
+    comfy["queue"] = _running()
+    _comfy_job(prompt_id="P1", executing=False, comfy_url="http://c")
+    _cancel()
+    assert comfy["interrupt"] == [("http://c", "P1")]
+    assert comfy["delete"] == []
+
+
+def test_cancel_queue_lookup_failure_only_deletes(comfy):
+    comfy["queue"] = comfy_client.ComfyError("no connection")
+    _comfy_job(prompt_id="P1", executing=False, comfy_url="http://c")
+    _cancel()
+    assert comfy["delete"] == [("http://c", "P1")]
+    assert comfy["interrupt"] == []
+
+
+def test_cancel_other_prompt_running_deletes_ours(comfy):
+    comfy["queue"] = _running("SOMEONE_ELSE")
+    _comfy_job(prompt_id="P1", executing=False, comfy_url="http://c")
+    _cancel()
+    assert comfy["delete"] == [("http://c", "P1")]
+    assert comfy["interrupt"] == []
+
+
+def test_cancel_without_url_does_not_500(comfy):
+    _comfy_job(prompt_id="P1", executing=True)  # comfy_url not recorded yet
+    _cancel()
 
 
 def test_cancel_queued_deletes_from_queue(comfy):
@@ -518,7 +615,48 @@ def test_cancel_arriving_before_prompt_id_deletes_after_queueing(comfy, monkeypa
     job = _comfy_job(state="pending")
     server._run_comfy_raw_job("j", {})
     assert comfy["delete"] == [("http://c", "P1")]
+    assert comfy["interrupt"] == []
     assert job["state"] == "cancelled"
+
+
+def test_early_cancel_of_already_running_prompt_interrupts(comfy, monkeypatch):
+    def queue(url, wf, client_id=None):
+        server.COMFY_JOBS["j"]["cancel"] = True
+        return "P1"
+    monkeypatch.setattr(comfy_client, "queue_prompt", queue)
+    comfy["queue"] = _running()
+    job = _comfy_job(state="pending")
+    server._run_comfy_raw_job("j", {})
+    assert comfy["interrupt"] == [("http://c", "P1")]
+    assert comfy["delete"] == []
+    assert job["state"] == "cancelled"
+
+
+def _error_stream(url, cid, pid, on_event, **kw):
+    on_event("started", None)
+    on_event("error", "KSampler (node 3): RuntimeError: CUDA out of memory.\nTraceback...")
+
+
+def test_raw_runner_execution_error_ends_error(comfy, monkeypatch):
+    monkeypatch.setattr(comfy_client, "stream_events", _error_stream)
+    job = _comfy_job(state="pending")
+    server._run_comfy_raw_job("j", {})
+    assert job["state"] == "error"
+    assert job["error"].split("\n", 1)[0] == "KSampler (node 3): RuntimeError: CUDA out of memory."
+    assert comfy["history"] == 0
+
+
+def test_mapped_runner_execution_error_ends_error(comfy, monkeypatch):
+    monkeypatch.setattr(server, "_load_comfy_config",
+                        lambda: {"url": "http://c", "workflow": {}, "mapping": {}})
+    monkeypatch.setattr(server.comfy_workflows, "apply_overrides_multi_lora",
+                        lambda *a, **k: {})
+    monkeypatch.setattr(comfy_client, "stream_events", _error_stream)
+    job = _comfy_job(state="pending")
+    server._run_comfy_job("j", server.ComfyGenerateRequest(prompt="p", batch=2))
+    assert job["state"] == "error"
+    assert job["error"].startswith("KSampler (node 3): RuntimeError")
+    assert comfy["history"] == 0
 
 
 def test_runner_passes_should_stop(comfy, monkeypatch):

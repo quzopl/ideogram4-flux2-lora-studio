@@ -98,10 +98,13 @@ def queue_info(base_url: str) -> dict:
     return json.loads(raw)
 
 
-def interrupt(base_url: str) -> None:
-    """Interrupt whatever ComfyUI is executing now. Errors are logged, not raised."""
+def interrupt(base_url: str, prompt_id: str | None = None) -> None:
+    """Interrupt what ComfyUI is executing now. With ``prompt_id`` newer ComfyUI
+    interrupts only that prompt (older versions ignore the body). Errors are
+    logged, not raised."""
+    body = json.dumps({"prompt_id": prompt_id}).encode("utf-8") if prompt_id else b"{}"
     try:
-        _request(_join(base_url, "/interrupt"), data=b"{}", timeout=5)
+        _request(_join(base_url, "/interrupt"), data=body, timeout=5)
     except Exception as e:  # noqa: BLE001 - a failed cancel must not break the caller
         log.warning("ComfyUI interrupt failed: %s", e)
 
@@ -173,9 +176,12 @@ def stream_events(base_url: str, client_id: str, prompt_id: str, on_event,
                 continue
             # The socket opens after queueing, so execution_start may be missed
             # on an idle server; our own progress also proves the prompt runs.
-            if (not started and pid == prompt_id
-                    and (etype in ("execution_start", "progress")
-                         or (etype == "executing" and data.get("node") is not None))):
+            # On connect ComfyUI replays `executing {node}` without prompt_id, and
+            # only to the client whose prompt runs: the client id is ours alone.
+            if (not started
+                    and ((pid == prompt_id and etype in ("execution_start", "progress"))
+                         or (pid in (None, prompt_id) and etype == "executing"
+                             and data.get("node") is not None))):
                 started = True
                 on_event("started", None)
             if etype == "progress":
@@ -187,7 +193,7 @@ def stream_events(base_url: str, client_id: str, prompt_id: str, on_event,
                     on_event("done", None)
                     return
             elif etype == "execution_error":
-                on_event("error", str(data))
+                on_event("error", _execution_error_text(data))
                 return
             elif etype == "execution_interrupted":
                 on_event("interrupted", data)
@@ -197,6 +203,22 @@ def stream_events(base_url: str, client_id: str, prompt_id: str, on_event,
             ws.close()
         except Exception:
             pass
+
+
+def _execution_error_text(data: dict) -> str:
+    """ComfyUI's execution_error payload -> "Node (node 3): Type: message" + traceback."""
+    msg = str(data.get("exception_message") or "").strip()
+    if not msg:
+        return str(data)
+    head = ""
+    if data.get("node_type") or data.get("node_id"):
+        head = f"{data.get('node_type') or 'node'} (node {data.get('node_id')}): "
+    etype = data.get("exception_type")
+    text = f"{head}{etype + ': ' if etype else ''}{msg}"
+    tb = data.get("traceback")
+    if isinstance(tb, list) and tb:
+        text += "\n" + "".join(str(line) for line in tb)
+    return text
 
 
 def collect_output_images(hist: dict, prompt_id: str) -> list[dict]:

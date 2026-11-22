@@ -537,8 +537,13 @@ def _norm_elements_v15(raw_elements) -> list:
 
 
 def _unwrap_v15(obj: dict) -> dict:
-    """Unwrap double-encoded JSON and caption/data wrappers (section 13.1)."""
-    for key in ("caption", "data"):
+    """Unwrap double-encoded JSON and caption/data/result/output wrappers (section 13.1).
+
+    An unwrapped object without its own aspect_ratio/size inherits the
+    wrapper's, as the classic bbox editor did.
+    """
+    outer = obj
+    for key in ("caption", "data", "result", "output"):
         inner = obj.get(key)
         if isinstance(inner, dict) and (
             "high_level_description" in inner or "compositional_deconstruction" in inner
@@ -548,6 +553,9 @@ def _unwrap_v15(obj: dict) -> dict:
             parsed = _extract_json_object(inner)
             if parsed is not None:
                 obj = parsed
+    if obj is not outer:
+        obj = {**obj, **{k: outer[k] for k in ("aspect_ratio", "size")
+                         if k in outer and k not in obj}}
     # Double-encoded JSON inside the hld — possibly fenced in ```json``` by the model.
     # Real prose never contains the schema key names.
     hld = obj.get("high_level_description")
