@@ -269,4 +269,11 @@ test('custom ratio', async ({ page }) => {
   await expect(page.getByRole('button', { name: '4:5', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await page.getByRole('button', { name: '16:9', exact: true }).click()
   await expect(custom).toHaveValue('16:9')
+  // Even the active preset resets a bad entry.
+  await custom.fill('abc')
+  await custom.press('Enter')
+  await expect(custom).toHaveAttribute('aria-invalid', 'true')
+  await page.getByRole('button', { name: '16:9', exact: true }).click()
+  await expect(custom).toHaveValue('16:9')
+  await expect(custom).not.toHaveAttribute('aria-invalid', 'true')
 })

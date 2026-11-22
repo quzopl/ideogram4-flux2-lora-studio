@@ -13,6 +13,8 @@ const RATIOS = ['1:1', '4:5', '9:16', '16:9', '3:1']
 export function BboxPage() {
   const [doc, setDoc, selected, setSelected] = useBboxDoc()
   useEffect(() => flushDraft, [])
+  // Any preset click (even the active one) resets the custom field and its error.
+  const [presetClicks, setPresetClicks] = useState(0)
 
   const setRatio = (aspect_ratio: string) => setDoc((d) => ({ ...d, aspect_ratio }))
   const add = (type: ElType) => {
@@ -34,8 +36,14 @@ export function BboxPage() {
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <section className="flex min-w-0 flex-col gap-3">
           <div className="flex flex-wrap items-start gap-2">
-            <RatioPicker value={doc.aspect_ratio} onChange={setRatio} />
-            <CustomRatio value={doc.aspect_ratio} onChange={setRatio} />
+            <RatioPicker
+              value={doc.aspect_ratio}
+              onChange={(r) => {
+                setRatio(r)
+                setPresetClicks((n) => n + 1)
+              }}
+            />
+            <CustomRatio key={presetClicks} value={doc.aspect_ratio} onChange={setRatio} />
             <Button size="lg" onClick={() => add('obj')}>+ obj</Button>
             <Button size="lg" variant="outline" onClick={() => add('text')}>+ text</Button>
           </div>

@@ -197,7 +197,7 @@ export function BboxCanvas({ doc, selected, onSelect, onChange }: BboxCanvasProp
       onPointerCancel={(e) => endDrag(e, false)}
       onLostPointerCapture={(e) => endDrag(e, false)}
       style={{ padding: PAD, cursor: dragCursor }}
-      className="relative grid h-[max(22rem,calc(100dvh-19rem))] place-items-center overflow-hidden rounded-2xl border border-line bg-[repeating-linear-gradient(45deg,#10131a_0_10px,#0d1016_10px_20px)] select-none"
+      className="relative isolate grid h-[max(22rem,calc(100dvh-19rem))] place-items-center overflow-hidden rounded-2xl border border-line bg-[repeating-linear-gradient(45deg,#10131a_0_10px,#0d1016_10px_20px)] select-none"
     >
       {size && (
         <div
