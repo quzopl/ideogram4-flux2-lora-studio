@@ -131,11 +131,13 @@ test('results grid and before/after', async ({ page }) => {
 
 test('job and file errors show', async ({ page }) => {
   await mockRun(page)
-  await mockJob(page, [job('error', [result(0, { error: 'cannot identify image file', out_name: '', passes: 0 })], 'CUDA out of memory')])
+  await mockJob(page, [job('error', [result(0, { error: 'cannot identify image file', out_name: '', passes: 0 })], 'CUDA out of memory\nTraceback (most recent call last):')])
   await ready(page)
+  await page.getByRole('button', { name: 'x2', exact: true }).click()
   await upscale(page).click()
   await expect(page.getByTestId('job-progress')).toHaveAttribute('data-state', 'error')
   await expect(page.getByTestId('job-progress')).toContainText('CUDA out of memory')
+  await expect(page.getByTestId('job-progress')).not.toContainText('Traceback')
   await expect(page.getByTestId('result-card')).toContainText('cannot identify image file')
 })
 
@@ -159,6 +161,18 @@ test('dropped files are uploaded as the source', async ({ page }) => {
   await page.getByLabel('Upload images').setInputFiles([path.join(FIXTURES, 'a.png'), path.join(FIXTURES, 'b.png')])
   await expect(page.getByRole('textbox', { name: 'Source folder' })).toHaveValue(/\/uploads\/[0-9a-f]+$/)
   await expect(page.getByText('2 images', { exact: true })).toBeVisible()
+
+  // A real drop onto the zone.
+  const png = fs.readFileSync(path.join(FIXTURES, 'b.png')).toString('base64')
+  // A string: the e2e tsconfig has no DOM types.
+  const dataTransfer = await page.evaluateHandle(`(() => {
+    const dt = new DataTransfer()
+    const bytes = Uint8Array.from(atob('${png}'), (c) => c.charCodeAt(0))
+    dt.items.add(new File([bytes], 'dropped.png', { type: 'image/png' }))
+    return dt
+  })()`)
+  await page.getByRole('button', { name: /Drop images here/ }).dispatchEvent('drop', { dataTransfer })
+  await expect(page.getByText('1 image', { exact: true })).toBeVisible()
 })
 
 test('source picker accepts a read-only folder', async ({ page }) => {

@@ -497,7 +497,8 @@ export function UpscalePage() {
                     processed={job.data?.processed ?? 0}
                     total={job.data?.total ?? 0}
                     current={job.data?.current}
-                    error={job.data?.error}
+                    // The backend appends a traceback; the first line is the message.
+                    error={job.data?.error.split('\n')[0]}
                   />
                 )}
               </div>
