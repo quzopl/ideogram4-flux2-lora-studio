@@ -13,7 +13,7 @@ import pytest
 # Must precede any import of backend.server: TestClient sends "Host: testserver".
 os.environ["FLUX_PREP_EXTRA_HOSTS"] = "testserver"
 
-from backend import gpu, settings
+from backend import crop_store, gpu, settings
 
 ML_MODULES = ("torch", "transformers")
 
@@ -22,6 +22,7 @@ ML_MODULES = ("torch", "transformers")
 def _isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "CONFIG_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(gpu, "CONFIG_PATH", tmp_path / "gpu.json")
+    monkeypatch.setattr(crop_store, "PATH", tmp_path / "crop_plans.json")
 
 
 @pytest.fixture

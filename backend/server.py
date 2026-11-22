@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 
 from . import api_models as models_api, api_settings
 from .origin_guard import OriginGuard
-from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence, gpu,
+from . import (crop_store, captioner, comfy_client, comfy_workflows, crop_auto, florence, gpu,
                fsutil, hf_auth, ideogram_workflow, image_utils, lmstudio, model_store,
                prompts, settings,
                upscaler, v15_lint)
@@ -163,20 +163,20 @@ class ProcessRequest(BaseModel):
     folder: str
     mode: str = "person"
     style: str = "concise"  # "concise" | "detailed"
-    resolution: int = 1024
-    step: int = 64
+    resolution: int = Field(1024, ge=256, le=4096)
+    step: int = Field(64, ge=8, le=256)
     square: bool = False
-    fmt: str = "png"  # "png" | "jpg"
-    jpg_quality: int = 95
+    fmt: Literal["png", "jpg"] = "png"
+    jpg_quality: int = Field(95, ge=50, le=100)
     model: str = captioner.DEFAULT_MODEL
     quant: str = "4bit"  # "4bit" | "none"
-    max_tokens: int = 512
+    max_tokens: int = Field(512, ge=64, le=8192)
     do_caption: bool = True
-    caption_format: str = "flux"  # "flux" | "ideogram"
+    caption_format: Literal["flux", "ideogram", "aitoolkit"] = "flux"
 
     # Cropping
-    crop_mode: str = "center"        # "center" | "auto" | "manual"
-    fit: str = "cover"               # "cover" (crop) | "contain" (pad)
+    crop_mode: Literal["center", "auto", "manual"] = "center"
+    fit: Literal["cover", "contain"] = "cover"  # "cover" (crop) | "contain" (pad)
     pad_color: str = "#000000"
     centering_x: str = "center"      # left | center | right
     centering_y: str = "center"      # top | center | bottom
@@ -190,10 +190,16 @@ class ProcessRequest(BaseModel):
 class CropAutoRequest(BaseModel):
     folder: str
     mode: str = "person"
-    resolution: int = 1024
-    step: int = 64
+    resolution: int = Field(1024, ge=256, le=4096)
+    step: int = Field(64, ge=8, le=256)
     square: bool = False
     names: list[str] = []       # empty = all images in the folder
+
+
+class CropPlanRequest(BaseModel):
+    folder: str
+    plan: dict[str, list[int]]
+    mode: Literal["center", "auto", "manual"]
 
 
 class ExportRequest(BaseModel):
@@ -812,6 +818,33 @@ def api_src_image(folder: str, name: str):
         media_type="image/jpeg",
         headers={"X-Src-Width": str(full_w), "X-Src-Height": str(full_h)},
     )
+
+
+@app.get("/api/src/size")
+def api_src_size(folder: str, name: str):
+    """True size of a source image after EXIF rotation, from the header only."""
+    src = _safe_source_path(folder, name)
+    with Image.open(src) as img:
+        w, h = img.size
+        if img.getexif().get(0x0112) in (5, 6, 7, 8):
+            w, h = h, w
+    return {"width": w, "height": h}
+
+
+@app.get("/api/crops")
+def api_crops_get(folder: str):
+    return crop_store.load(folder)
+
+
+@app.put("/api/crops")
+def api_crops_put(req: CropPlanRequest):
+    for name, box in req.plan.items():
+        if not name or name != Path(name).name or name == "..":
+            raise HTTPException(400, f"Invalid file name: {name!r}")
+        if len(box) != 4 or any(v < 0 for v in box) or box[2] == 0 or box[3] == 0:
+            raise HTTPException(
+                400, f"Invalid crop box for {name!r}: need [x, y, w, h], w and h > 0.")
+    return crop_store.save(req.folder, req.plan, req.mode)
 
 
 @app.post("/api/upload")
