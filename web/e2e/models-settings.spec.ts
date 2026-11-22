@@ -98,11 +98,15 @@ test('gpu roles listed', async ({ page }) => {
   await page.keyboard.press('Escape')
 
   // A busy server refuses the move with 409; its detail is shown.
-  await page.route('**/api/gpu/assign', (route) =>
-    route.fulfill({ status: 409, json: { detail: 'Processing in progress — wait for it to finish.' } }))
+  let sent: unknown = null
+  await page.route('**/api/gpu/assign', (route) => {
+    sent = route.request().postDataJSON()
+    return route.fulfill({ status: 409, json: { detail: 'Processing in progress — wait for it to finish.' } })
+  })
   await gpu.getByRole('combobox', { name: 'Upscale' }).click()
   await page.getByRole('option', { name: 'CPU' }).click()
   await expect(page.getByText('Processing in progress — wait for it to finish.')).toBeVisible()
+  expect(sent).toEqual({ role: 'upscale', device: 'cpu' })
 })
 
 test('models table', async ({ page }) => {
@@ -113,8 +117,47 @@ test('models table', async ({ page }) => {
   }
   const missing = table.getByRole('row').filter({ has: page.getByText('missing', { exact: true }) })
   await expect(missing.first()).toBeVisible()
-  // Never click it: that would start a real download.
-  await expect(missing.first().getByRole('button', { name: 'Download…' })).toBeVisible()
+  // Opens the dialog at the models folder; never press its Download (a real download).
+  await missing.first().getByRole('button', { name: 'Download…' }).click()
+  const dialog = page.getByRole('dialog', { name: /^Download / })
+  await expect(dialog.getByTestId('download-dest')).toHaveText(`${WORK}/models`)
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog).toBeHidden()
+})
+
+test('downloading row shows progress and cancels', async ({ page }) => {
+  // Pretend the first model is downloading (the page polls this every second).
+  let id = ''
+  await page.route('**/api/store/models', async (route) => {
+    const response = await route.fetch()
+    const json = await response.json()
+    const m = json.models[0]
+    id = m.id
+    Object.assign(m, {
+      status: 'downloading',
+      download: {
+        id: 'job-e2e', model_id: m.id, label: m.label, dest: `${WORK}/models`, state: 'downloading',
+        done_bytes: 512 * 1024 * 1024, total_bytes: 2048 * 1024 * 1024, error: '', path: '',
+      },
+    })
+    await route.fulfill({ response, json })
+  })
+  let cancelled = ''
+  await page.route('**/api/store/downloads/*/cancel', (route) => {
+    cancelled = new URL(route.request().url()).pathname
+    return route.fulfill({ json: {} })
+  })
+
+  await page.goto('/models')
+  const row = page.locator('tr[data-model-id]').first()
+  await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25')
+  await expect(row.getByText('512 MB / 2.0 GB')).toBeVisible()
+  expect(await row.getAttribute('data-model-id')).toBe(id)
+  await expect(row.getByRole('button', { name: 'Download…' })).toHaveCount(0)
+  await expect(row.getByRole('button', { name: 'Use existing…' })).toHaveCount(0)
+  await row.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByText('Download cancelled')).toBeVisible()
+  expect(cancelled).toBe('/api/store/downloads/job-e2e/cancel')
 })
 
 test('use existing weights, then forget them', async ({ page }) => {

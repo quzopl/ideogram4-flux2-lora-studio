@@ -122,8 +122,9 @@ function HfTokenSection() {
   const status = useQuery({ queryKey: ['hf-token'], queryFn: () => api<TokenStatus>('/api/hf/token') })
   // Held only in this input; never cached or stored by the UI.
   const [token, setToken] = useState('')
+  // No mutation variables: those would keep the token in the mutation cache.
   const save = useMutationWithToast(
-    (t: string) => api<TokenStatus>('/api/hf/token', { method: 'POST', json: { token: t } }),
+    () => api<TokenStatus>('/api/hf/token', { method: 'POST', json: { token: token.trim() } }),
     { success: 'Token saved', invalidate: [['hf-token']] },
   )
   const clear = useMutationWithToast(
@@ -133,7 +134,7 @@ function HfTokenSection() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    save.mutate(token.trim(), { onSuccess: () => setToken('') })
+    save.mutate(undefined, { onSuccess: () => setToken('') })
   }
 
   return (
