@@ -376,6 +376,15 @@ def test_stream_events_started_only_for_own_prompt(monkeypatch):
     assert [k for k, _ in events] == ["executing", "started", "executing", "executing", "done"]
 
 
+def test_stream_events_started_from_progress_when_start_was_missed(monkeypatch):
+    events, _ = _stream(monkeypatch, [
+        {"type": "progress", "data": {"prompt_id": "P", "value": 1, "max": 4}},
+        {"type": "progress", "data": {"prompt_id": "P", "value": 2, "max": 4}},
+        {"type": "executing", "data": {"node": None, "prompt_id": "P"}},
+    ])
+    assert [k for k, _ in events] == ["started", "progress", "progress", "executing", "done"]
+
+
 def test_stream_events_should_stop_returns_while_queued(monkeypatch):
     stop = {"n": 0}
 

@@ -171,8 +171,10 @@ def stream_events(base_url: str, client_id: str, prompt_id: str, on_event,
             pid = data.get("prompt_id")
             if pid and pid != prompt_id:
                 continue
+            # The socket opens after queueing, so execution_start may be missed
+            # on an idle server; our own progress also proves the prompt runs.
             if (not started and pid == prompt_id
-                    and (etype == "execution_start"
+                    and (etype in ("execution_start", "progress")
                          or (etype == "executing" and data.get("node") is not None))):
                 started = True
                 on_event("started", None)
