@@ -22,7 +22,10 @@ function useFormSaver<T>(view: string, value: T, delayMs: number, enabled: boole
       saved.current = json
       return
     }
-    if (json === saved.current) return
+    if (json === saved.current) {
+      pending.current = null // an edit reverted within the delay: nothing to flush
+      return
+    }
     const save = () => {
       pending.current = null
       saved.current = json

@@ -79,3 +79,20 @@ test('download dialog needs a folder when none is set', async ({ page }) => {
   await expect(dialog.getByText(/ free$/)).toBeVisible()
   await expect(download).toBeEnabled()
 })
+
+test('autosave does not flush a reverted edit on leave', async ({ page }) => {
+  await page.goto('/_playground')
+  const alpha = page.getByLabel('alpha', { exact: true })
+  await expect(alpha).toBeEnabled()
+  const original = await alpha.inputValue()
+
+  const bodies: string[] = []
+  page.on('request', (r) => {
+    if (r.url().endsWith('/api/settings/forms/upscale') && r.method() === 'PUT') bodies.push(r.postData() ?? '')
+  })
+  await alpha.fill('tmp-edit')
+  await alpha.fill(original)
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Models', exact: true }).click()
+  await page.waitForTimeout(800)
+  expect(bodies.filter((b) => b.includes('tmp-edit'))).toEqual([])
+})

@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useMutationWithToast, useSettings } from '@/lib/queries'
 import type { Settings } from '@/lib/types'
@@ -75,7 +76,12 @@ export function PresetBar({ view, current, onLoad }: PresetBarProps) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="min-w-48">
-          {names.length === 0 ? (
+          {settings.isPending ? (
+            <div className="flex flex-col gap-1 p-1">
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-full" />
+            </div>
+          ) : names.length === 0 ? (
             <div className="px-2 py-1.5 text-sm text-text-dim">No presets yet</div>
           ) : (
             names.map((n) => (

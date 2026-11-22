@@ -1,4 +1,5 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useGpus } from '@/lib/queries'
 
 // Radix Select forbids an empty item value, so "" (role default) travels as this.
@@ -26,6 +27,7 @@ export function GpuSelect({ value, onChange, includeDefault = false, id }: GpuSe
       <SelectContent>
         {includeDefault && <SelectItem value={DEFAULT}>Role default</SelectItem>}
         <SelectItem value="auto">Auto (most memory)</SelectItem>
+        {gpus.isPending && <Skeleton className="mx-1.5 my-1 h-6" />}
         {gpus.data?.gpus.map((g) => (
           <SelectItem key={g.uuid} value={g.uuid}>{g.label}</SelectItem>
         ))}
