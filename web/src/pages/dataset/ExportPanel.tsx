@@ -128,9 +128,15 @@ export function ExportPanel({ job, run, trigger, prependTrigger, outputFolder, o
         <Button
           type="button"
           size="sm"
-          disabled={!done || busy || !folder}
+          disabled={!done || busy || !folder || count === 0}
           onClick={() =>
-            save.mutate(folder, { onSuccess: (r) => toast.success(`Saved ${pairs(r.written)} to ${r.output_folder}`) })}
+            save.mutate(folder, {
+              // The backend answers 200 even when nothing was written.
+              onSuccess: (r) =>
+                r.written > 0
+                  ? toast.success(`Saved ${pairs(r.written)} to ${r.output_folder}`)
+                  : toast.warning(`Nothing was written to ${r.output_folder}`),
+            })}
           className="bg-linear-to-r from-accent-from to-accent-to text-white"
         >
           <FolderOutput />
@@ -141,7 +147,7 @@ export function ExportPanel({ job, run, trigger, prependTrigger, outputFolder, o
           type="button"
           variant="outline"
           size="sm"
-          disabled={!done || busy}
+          disabled={!done || busy || count === 0}
           onClick={() => zip.mutate(body(), { onSuccess: (name) => toast.success(`Downloaded ${name}`) })}
         >
           <FileArchive />

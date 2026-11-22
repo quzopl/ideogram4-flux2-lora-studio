@@ -435,6 +435,15 @@ test('remove and undo', async ({ page }) => {
   await expect(cards(page)).toHaveCount(2)
   await expect(cards(page).nth(1)).toContainText('person_0001.png')
   await expect(page.getByText('To export: 2 images', { exact: true })).toBeVisible()
+
+  // Nothing left to export: both ways out are off.
+  await page.getByRole('textbox', { name: 'Output folder', exact: true }).fill(path.join(WORK, 'ds-out'))
+  await expect(page.getByRole('button', { name: 'Save to folder', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Remove person_0000.png', exact: true }).click()
+  await page.getByRole('button', { name: 'Remove person_0001.png', exact: true }).click()
+  await expect(page.getByText('To export: 0 images (2 removed)', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save to folder', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Download .zip', exact: true })).toBeDisabled()
 })
 
 test('export sends only edits and exclusions', async ({ page }) => {
@@ -545,6 +554,23 @@ test('job errors show their first line', async ({ page }) => {
   await expect(progress).not.toContainText('Traceback')
   await expect(page.locator('[title*="Traceback"]')).toHaveCount(1)
   await expect(processBtn(page)).toBeEnabled()
+})
+
+test('an unknown job (404) stops polling and forgets the run', async ({ page }) => {
+  await mockJob(page, [])
+  let polls = 0
+  await page.route('**/api/job/*', (route) => {
+    polls++
+    return route.fulfill({ status: 404, json: { detail: 'Unknown job.' } })
+  })
+  await processA(page)
+  await expect(toasts(page).filter({ hasText: 'The processing job is gone (was the server restarted?)' })).toBeVisible()
+  await expect(page.getByTestId('job-progress')).toHaveCount(0)
+  await expect(processBtn(page)).toBeEnabled()
+  expect(await page.evaluate(() => sessionStorage.getItem('flux.dataset.run'))).toBeNull()
+  const seen = polls
+  await page.waitForTimeout(1500)
+  expect(polls).toBe(seen)
 })
 
 test('clear crops ignores crops of files no longer in the folder', async ({ page, request }) => {
