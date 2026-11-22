@@ -108,11 +108,11 @@ export function GpuBar() {
   return (
     <header
       data-testid="gpu-bar"
-      className="flex min-h-20 shrink-0 items-center gap-3 border-b border-line bg-surface/60 px-6 py-3 backdrop-blur-xl"
+      className="flex shrink-0 items-center gap-3 border-b border-line bg-surface/60 px-6 py-3 backdrop-blur-xl"
     >
-      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto">
+      <div className="flex min-h-20 min-w-0 flex-1 items-center gap-3 overflow-x-auto">
         {gpus.isPending ? (
-          <Skeleton className="h-[68px] w-72 rounded-xl bg-surface-2" />
+          <Skeleton className="h-20 w-72 rounded-xl bg-surface-2" />
         ) : gpus.isError ? (
           <span className="text-sm text-danger">GPU status unavailable</span>
         ) : cards.length === 0 ? (
