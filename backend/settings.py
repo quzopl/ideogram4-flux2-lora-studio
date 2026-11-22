@@ -24,7 +24,8 @@ from typing import Callable
 
 log = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / ".work" / "settings.json"
+CONFIG_PATH = Path(os.environ.get("FLUX_PREP_WORK")
+                   or Path(__file__).resolve().parent.parent / ".work") / "settings.json"
 
 VIEWS = ("dataset", "prompts", "bbox", "comfy", "upscale")
 ROLES = ("vlm", "florence", "upscale")
@@ -154,6 +155,7 @@ def save_preset(view: str, name: str, values: dict, path: Path | None = None) ->
 
 def delete_preset(view: str, name: str, path: Path | None = None) -> dict:
     _check_view(view)
+    name = name.strip()
     return update(lambda d: d["presets"].get(view, {}).pop(name, None), path)
 
 

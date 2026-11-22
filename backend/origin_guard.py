@@ -8,8 +8,11 @@ further: the foreign page makes same-origin requests, with a foreign `Host`.
 For every `/api/*` request this pure ASGI middleware (no response buffering, so
 streamed downloads are unaffected) enforces:
   1. `Host` must be loopback (or listed in `extra_hosts`) -> blocks rebinding.
-  2. For state-changing methods, a present `Origin` must be loopback (any port,
-     so a Vite dev server works); `Origin: null` is rejected.
+  2. For state-changing methods, a present `Origin` must be loopback AND carry
+     the same port as the `Host` header (no port means 80 for http, 443 for
+     https), or match exactly an entry of `FLUX_PREP_DEV_ORIGINS` (comma
+     separated, default `http://localhost:5173,http://127.0.0.1:5173`, the Vite
+     dev server). Another loopback port is rejected; so is `Origin: null`.
   3. For state-changing methods, `Sec-Fetch-Site: cross-site` is rejected.
 Requests without `Origin` (curl, scripts, tests) pass if `Host` is fine.
 Static frontend files are not guarded.
@@ -17,11 +20,22 @@ Static frontend files are not guarded.
 from __future__ import annotations
 
 import json
+import os
 import re
 from urllib.parse import urlsplit
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_DEFAULT_DEV_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+
+
+def _port(netloc: str, scheme: str) -> int | None:
+    """Explicit port of a host[:port] value, else the scheme default; None if malformed."""
+    try:
+        port = urlsplit(f"//{netloc}").port
+    except ValueError:
+        return None
+    return port or (443 if scheme == "https" else 80)
 
 
 # host[:port] with a bracketed IPv6 or a plain name; no userinfo, no junk.
@@ -56,8 +70,11 @@ def _route_path(scope) -> str:
 
 
 class OriginGuard:
-    def __init__(self, app, extra_hosts=()):
+    def __init__(self, app, extra_hosts=(), dev_origins=None):
         self.app = app
+        if dev_origins is None:
+            dev_origins = os.environ.get("FLUX_PREP_DEV_ORIGINS", _DEFAULT_DEV_ORIGINS).split(",")
+        self.dev_origins = {o.strip().rstrip("/").lower() for o in dev_origins if o.strip()}
         self.extra_hosts = {_bare_host(h) for h in extra_hosts if h.strip()}
 
     async def __call__(self, scope, receive, send):
@@ -74,12 +91,21 @@ class OriginGuard:
             origin = headers.get("origin")
             cross = headers.get("sec-fetch-site", "").lower() == "cross-site"
             if origin is not None:
-                cross = cross or origin.strip().lower() == "null" or not is_loopback_host(
-                    urlsplit(origin).netloc)
+                cross = cross or not self._origin_ok(origin, host)
             if cross:
                 await self._deny(send, "Cross-origin request blocked.")
                 return
         await self.app(scope, receive, send)
+
+    def _origin_ok(self, origin: str, host: str) -> bool:
+        origin = origin.strip().lower()
+        if origin in self.dev_origins:
+            return True
+        parts = urlsplit(origin)
+        if parts.scheme not in ("http", "https") or not is_loopback_host(parts.netloc):
+            return False
+        port = _port(parts.netloc, parts.scheme)
+        return port is not None and port == _port(host, parts.scheme)
 
     @staticmethod
     async def _deny(send, detail: str) -> None:

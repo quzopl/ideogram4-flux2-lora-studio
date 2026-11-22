@@ -20,12 +20,14 @@ from torch.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 from . import settings  # settings imports this module lazily, so no cycle
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / ".work" / "gpu.json"
+CONFIG_PATH = Path(os.environ.get("FLUX_PREP_WORK")
+                   or Path(__file__).resolve().parent.parent / ".work") / "gpu.json"
 
 _VENDOR_PREFIXES = ("NVIDIA GeForce ", "NVIDIA ")
 

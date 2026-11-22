@@ -90,3 +90,21 @@ def test_guard_active_under_root_path():
     r = rp.post("/p/api/settings/import", json=BODY,
                 headers={**LOCAL, "origin": "https://evil.com"})
     assert r.status_code == 403
+
+
+def test_origin_other_loopback_port_rejected():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "http://127.0.0.1:9999"})
+    assert r.status_code == 403
+
+
+def test_origin_same_port_allowed():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "http://127.0.0.1:8123"})
+    assert r.status_code == 200
+
+
+def test_dev_origin_allowed():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "http://localhost:5173"})
+    assert r.status_code == 200

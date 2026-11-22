@@ -2025,7 +2025,7 @@ function startEditorJobPolling(jobId) {
 // --------------------------------------------------------------------------- //
 async function pickModelFolder() {
   try {
-    const picked = await api("/api/fs/pick");           // otwiera systemowe okno
+    const picked = await api("/api/fs/pick", null, "POST");         // otwiera systemowe okno
     if (picked.cancelled || !picked.path) return;        // anulowano
     const data = await api("/api/models/custom", { path: picked.path });
     populateModels(data.models, data.default, data.added);

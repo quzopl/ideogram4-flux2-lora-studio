@@ -23,10 +23,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Match
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -39,7 +40,8 @@ from . import (captioner, comfy_client, comfy_workflows, crop_auto, florence, gp
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
-WORK = ROOT / ".work"
+WORK = Path(os.environ.get("FLUX_PREP_WORK") or ROOT / ".work")
+WEB_DIST = ROOT / "web" / "dist"
 WORK.mkdir(exist_ok=True)
 
 COMFY_CONFIG_PATH = WORK / "comfy_config.json"
@@ -712,7 +714,7 @@ def api_models_custom_remove(req: CustomModel):
     return {"models": _all_models(), "default": captioner.DEFAULT_MODEL}
 
 
-@app.get("/api/fs/pick")
+@app.post("/api/fs/pick")
 def api_fs_pick():
     """Open the native system folder picker (zenity/WSLg) and return the path.
 
@@ -981,12 +983,30 @@ def _gpu_status() -> dict:
     return info
 
 
+_SMI_LOCK = threading.Lock()
+_SMI_LAST: dict = {}
+_SMI_AT = 0.0  # time.monotonic() when _SMI_LAST was produced
+
+
+def _smi_snapshot() -> dict:
+    """``gpu.smi_stats()``, shared between concurrent callers: whoever holds the
+    lock runs nvidia-smi, the others wait and reuse a result produced after they
+    arrived."""
+    global _SMI_LAST, _SMI_AT
+    entered = time.monotonic()
+    with _SMI_LOCK:
+        if _SMI_AT < entered:
+            _SMI_LAST = gpu.smi_stats()
+            _SMI_AT = time.monotonic()
+        return _SMI_LAST
+
+
 def _gpu_cards(devices: list[dict], doc: dict) -> list[dict]:
     """``gpu.listing`` rows plus each card's VRAM (nvidia-smi; None when it did
     not report the card), the roles assigned to it and the roles whose model
     is loaded on it. ``selected`` marks the VLM role's card, as the legacy
     select expects."""
-    stats = gpu.smi_stats()
+    stats = _smi_snapshot()
     assigned = {role: gpu.device_for(role, doc, devices) for role in settings.ROLES}
     loaded = {"vlm": captioner.loaded_device(), "florence": florence.loaded_device(),
               "upscale": upscaler.status()["device"]}
@@ -1298,6 +1318,18 @@ def api_upscale_thumb(job_id: str, idx: int):
     if not path.exists():
         raise HTTPException(404, "No thumbnail.")
     return FileResponse(str(path), media_type="image/jpeg")
+
+
+@app.get("/api/upscale/image/{job_id}/{idx}")
+def api_upscale_image(job_id: str, idx: int):
+    job = _job_of_kind(job_id, "upscale")
+    res = next((r for r in job["results"] if r["idx"] == idx), None)
+    if not res or not res["out_name"]:
+        raise HTTPException(404, "No result.")
+    path = WORK / job_id / "upscaled" / res["out_name"]
+    if not path.is_file():
+        raise HTTPException(404, "No result.")
+    return FileResponse(str(path))
 
 
 @app.post("/api/upscale/export")
@@ -2395,4 +2427,24 @@ def health():
 app.include_router(api_settings.router)
 models_api.configure(_model_ctx, lambda: hf_auth.load_token(HF_TOKEN_PATH))
 app.include_router(models_api.router)
-app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
+app.mount("/legacy", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def spa(path: str, request: Request):
+    """The v2 SPA: real files from web/dist, index.html for every other route."""
+    if path.startswith("api/"):
+        # An API route that exists for another method is a 405, not a 404.
+        if any(getattr(r, "path", "") != "/{path:path}"
+               and r.matches(request.scope)[0] == Match.PARTIAL
+               for r in app.routes):
+            raise HTTPException(405, "Method not allowed.")
+        raise HTTPException(404, "Not found.")
+    index = WEB_DIST / "index.html"
+    if not index.is_file():
+        return RedirectResponse("/legacy/", 307)
+    root = WEB_DIST.resolve()
+    target = (WEB_DIST / path).resolve()
+    if path and target.is_file() and target.is_relative_to(root):
+        return FileResponse(str(target))
+    return FileResponse(str(index))

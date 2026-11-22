@@ -208,3 +208,10 @@ def test_import_rejects_relative_models_dir(tmp_path, models_dir):
 def test_import_allows_empty_models_dir(tmp_path):
     p = tmp_path / "s.json"
     assert settings.import_doc({"version": 1, "models_dir": ""}, p)["models_dir"] == ""
+
+
+def test_delete_preset_strips_name(tmp_path):
+    p = tmp_path / "s.json"
+    settings.save_preset("upscale", "a", {"x": 1}, p)
+    doc = settings.delete_preset("upscale", "  a  ", p)
+    assert "a" not in doc["presets"].get("upscale", {})
