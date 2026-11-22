@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes, type Location } from 'react-router'
+import { BboxPage } from '@/pages/bbox/BboxPage'
 import { ClassicPlaceholder } from '@/pages/ClassicPlaceholder'
 import { DatasetPage } from '@/pages/dataset/DatasetPage'
 import { ModelsPage } from '@/pages/ModelsPage'
@@ -14,7 +15,7 @@ export function AppRoutes({ location }: { location: Location }) {
       <Route index element={<Navigate to="/upscale" replace />} />
       <Route path="/dataset" element={<DatasetPage />} />
       <Route path="/prompts" element={<PromptsPage />} />
-      <Route path="/bbox" element={<ClassicPlaceholder view="bbox" title="Bbox editor" />} />
+      <Route path="/bbox" element={<BboxPage />} />
       <Route path="/comfy" element={<ClassicPlaceholder view="comfy" title="ComfyUI" />} />
       <Route path="/upscale" element={<UpscalePage />} />
       <Route path="/models" element={<ModelsPage />} />

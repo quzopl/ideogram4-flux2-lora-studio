@@ -22,7 +22,7 @@ test('deep link works', async ({ page }) => {
 })
 
 test('classic views link to legacy', async ({ page }) => {
-  await page.goto('/bbox')
+  await page.goto('/comfy')
   const link = page.getByRole('link', { name: 'Open in classic UI' })
   await expect(link).toBeVisible()
   await expect(link).toHaveAttribute('href', /^\/legacy\//)
