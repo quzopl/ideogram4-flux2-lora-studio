@@ -67,7 +67,7 @@ function fit(availW: number, availH: number, ar: string) {
  * it is under the pointer, else the smallest one there (and selects it); a click
  * that did not change the selection cycles through the stack, smallest first.
  * With the canvas focused: arrows move 1 unit (Shift 10), Delete/Backspace
- * remove, Escape deselects.
+ * remove, Escape deselects (not during a drag; keys with Alt/Ctrl/Meta are ignored).
  */
 export function BboxCanvas({ doc, selected, onSelect, onChange }: BboxCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -165,6 +165,8 @@ export function BboxCanvas({ doc, selected, onSelect, onChange }: BboxCanvasProp
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // Modified keys belong to the browser; a drag in progress keeps its element.
+    if (drag.current || e.altKey || e.ctrlKey || e.metaKey) return
     if (e.key === 'Escape') {
       if (selected !== null) {
         e.preventDefault()
@@ -172,7 +174,7 @@ export function BboxCanvas({ doc, selected, onSelect, onChange }: BboxCanvasProp
       }
       return
     }
-    if (selected === null || drag.current) return
+    if (selected === null) return
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault()
       onChange(removeEl(doc, selected))
@@ -197,7 +199,7 @@ export function BboxCanvas({ doc, selected, onSelect, onChange }: BboxCanvasProp
       onPointerCancel={(e) => endDrag(e, false)}
       onLostPointerCapture={(e) => endDrag(e, false)}
       style={{ padding: PAD, cursor: dragCursor }}
-      className="relative isolate grid h-[max(22rem,calc(100dvh-19rem))] place-items-center overflow-hidden rounded-2xl border border-line bg-[repeating-linear-gradient(45deg,#10131a_0_10px,#0d1016_10px_20px)] select-none"
+      className="relative isolate grid h-[max(22rem,calc(100dvh-19rem))] place-items-center overflow-hidden rounded-2xl border border-line bg-[repeating-linear-gradient(45deg,var(--color-surface)_0_10px,var(--color-bg)_10px_20px)] select-none"
     >
       {size && (
         <div
@@ -216,7 +218,7 @@ export function BboxCanvas({ doc, selected, onSelect, onChange }: BboxCanvasProp
             backgroundSize: '50% 50%, 50% 50%, 10% 10%, 10% 10%',
             backgroundPosition: '-0.5px -0.5px',
           }}
-          className="relative touch-none rounded-[3px] bg-[#1a1e27] shadow-[0_0_0_1px_rgba(255,255,255,0.09),0_24px_60px_-12px_rgba(0,0,0,0.7)] outline-none transition-[width,height,box-shadow] duration-200 ease-out focus-visible:shadow-[0_0_0_1px_rgba(255,255,255,0.09),0_0_0_4px_rgba(139,92,246,0.35),0_24px_60px_-12px_rgba(0,0,0,0.7)] motion-reduce:transition-none"
+          className="relative touch-none rounded-[3px] bg-surface-2 shadow-[0_0_0_1px_rgba(255,255,255,0.09),0_24px_60px_-12px_rgba(0,0,0,0.7)] outline-none transition-[width,height,box-shadow] duration-200 ease-out focus-visible:shadow-[0_0_0_1px_rgba(255,255,255,0.09),0_0_0_4px_rgba(139,92,246,0.35),0_24px_60px_-12px_rgba(0,0,0,0.7)] motion-reduce:transition-none"
         >
           {doc.elements.map((el, i) =>
             el.bbox ? (
@@ -236,16 +238,16 @@ export function BboxCanvas({ doc, selected, onSelect, onChange }: BboxCanvasProp
 
 const TONE = {
   obj: {
-    box: 'border-[#6c8cff] bg-[#6c8cff]/12 hover:bg-[#6c8cff]/18',
-    sel: 'border-white bg-[#6c8cff]/24 shadow-[0_0_0_1px_#6c8cff,0_0_18px_rgba(108,140,255,0.45)]',
-    tag: 'bg-[#6c8cff]',
-    handle: 'border-[#6c8cff]',
+    box: 'border-bbox-obj bg-bbox-obj/12 hover:bg-bbox-obj/18',
+    sel: 'border-white bg-bbox-obj/24 shadow-[0_0_0_1px_var(--color-bbox-obj),0_0_18px_color-mix(in_srgb,var(--color-bbox-obj)_45%,transparent)]',
+    tag: 'bg-bbox-obj',
+    handle: 'border-bbox-obj',
   },
   text: {
-    box: 'border-[#b07cff] bg-[#b07cff]/12 hover:bg-[#b07cff]/18',
-    sel: 'border-white bg-[#b07cff]/24 shadow-[0_0_0_1px_#b07cff,0_0_18px_rgba(176,124,255,0.45)]',
-    tag: 'bg-[#b07cff]',
-    handle: 'border-[#b07cff]',
+    box: 'border-bbox-text bg-bbox-text/12 hover:bg-bbox-text/18',
+    sel: 'border-white bg-bbox-text/24 shadow-[0_0_0_1px_var(--color-bbox-text),0_0_18px_color-mix(in_srgb,var(--color-bbox-text)_45%,transparent)]',
+    tag: 'bg-bbox-text',
+    handle: 'border-bbox-text',
   },
 }
 

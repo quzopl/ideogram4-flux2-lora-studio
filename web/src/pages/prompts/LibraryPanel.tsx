@@ -7,7 +7,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api, ApiError } from '@/lib/api'
-import { handOffToBbox } from '@/lib/bboxHandoff'
+import { useHandOffToBbox } from '@/lib/bboxHandoff'
 import { copyText } from '@/lib/clipboard'
 import { useMutationWithToast } from '@/lib/queries'
 import { cn } from '@/lib/utils'
@@ -154,6 +154,7 @@ export function LibraryPanel() {
 
 function LibraryRow({ prompt: p, index, onDelete }: { prompt: LibraryPrompt; index: number; onDelete: () => void }) {
   const [expanded, setExpanded] = useState(false)
+  const handOffToBbox = useHandOffToBbox()
   const ideogram = p.category === 'ideogram'
 
   const copy = () =>

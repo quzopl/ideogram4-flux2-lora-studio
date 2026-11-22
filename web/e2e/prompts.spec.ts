@@ -488,18 +488,50 @@ test('export link targets active category', async ({ page }) => {
   await expect(link).toHaveAttribute('href', /category=ideogram/)
 })
 
-test('open on canvas hands off to the classic bbox editor', async ({ page, request }) => {
+const bboxJson = async (page: Page) =>
+  JSON.parse((await page.getByTestId('bbox-json').textContent()) ?? '') as { high_level_description: string; compositional_deconstruction: { elements: unknown[] } }
+
+test('open on canvas hands off to the bbox editor', async ({ page, request }) => {
   const m = `marker-canvas-${Date.now()}`
   await addToLibrary(request, 'ideogram', ideogramWith(`${m} pear on a plate`))
-  await page.goto('/prompts')
+  // Some work on the canvas first: the handoff asks before replacing it.
+  await page.goto('/bbox')
+  await page.getByRole('button', { name: '+ text', exact: true }).click()
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Prompt studio', exact: true }).click()
+  await expect(page.getByTestId('bbox-json')).toHaveCount(0)
+
   await rows(page, m).getByRole('button', { name: 'Open on canvas', exact: true }).click()
-  await expect(page).toHaveURL(/\/legacy\/#bbox$/)
-  await expect(page.locator('#view-bbox')).toBeVisible()
-  await expect(page.locator('#bxStatus')).toHaveText('Prompt loaded for editing.')
+  await expect(page).toHaveURL(/\/bbox$/)
+  const dialog = page.getByRole('dialog', { name: 'Replace the current canvas with the prompt from the studio?' })
+  await dialog.getByRole('button', { name: 'Replace', exact: true }).click()
+  await expect(page.getByText('Prompt loaded for editing.')).toBeVisible()
+  await expect.poll(async () => (await bboxJson(page)).high_level_description).toBe(`${m} pear on a plate`)
   expect(await page.evaluate(() => sessionStorage.getItem('flux.bbox.handoff'))).toBeNull()
-  const json = await page.evaluate(() =>
-    (globalThis as unknown as { BboxEditor: { getJson(): string } }).BboxEditor.getJson())
-  expect(json).toContain(`${m} pear on a plate`)
+})
+
+test('edit on canvas hands off to the bbox editor', async ({ page }) => {
+  await mockJobs(page, () => done(IDEOGRAM, 'ideogram'))
+  await generate(page)
+  await expect(output(page)).toHaveValue(IDEOGRAM)
+  await page.getByRole('button', { name: 'Edit on canvas', exact: true }).click()
+  await expect(page).toHaveURL(/\/bbox$/)
+  // The new tab's canvas is the default one: no question.
+  await expect(page.getByText('Prompt loaded for editing.')).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(await bboxJson(page)).toEqual(JSON.parse(IDEOGRAM))
+  expect(await page.evaluate(() => sessionStorage.getItem('flux.bbox.handoff'))).toBeNull()
+
+  // Consumed once: a reload keeps the edited draft and loads nothing.
+  await page.getByRole('button', { name: '+ obj', exact: true }).click()
+  await expect.poll(async () => (await bboxJson(page)).compositional_deconstruction.elements.length).toBe(1)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Bbox editor', exact: true })).toBeVisible()
+  await page.waitForTimeout(500)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByText('Prompt loaded for editing.')).toHaveCount(0)
+  expect((await bboxJson(page)).compositional_deconstruction.elements).toHaveLength(1)
+  expect((await bboxJson(page)).high_level_description).toBe('A red apple on a table.')
 })
 
 test('copy falls back without clipboard API', async ({ page, request }) => {

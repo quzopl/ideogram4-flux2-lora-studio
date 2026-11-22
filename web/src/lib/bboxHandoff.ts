@@ -1,14 +1,46 @@
+import { useCallback } from 'react'
+import { useNavigate } from 'react-router'
+
+// The classic UI (frontend/app.js) reads the same key; harmless, it never gets one now.
 const KEY = 'flux.bbox.handoff'
 
-/**
- * Opens a v15 JSON prompt in the Bbox editor. Until /bbox is ported that is
- * the classic editor, which picks the prompt up from sessionStorage.
- */
-export function handOffToBbox(json: string): void {
+/** Opens a v15 JSON prompt in the Bbox editor (/bbox), which takes it from sessionStorage. */
+export function useHandOffToBbox(): (json: string) => void {
+  const navigate = useNavigate()
+  return useCallback(
+    (json: string) => {
+      try {
+        sessionStorage.setItem(KEY, json)
+      } catch {
+        // Storage blocked: the editor opens with its draft.
+      }
+      void navigate('/bbox')
+    },
+    [navigate],
+  )
+}
+
+// Moved here out of sessionStorage, so a repeated claim (StrictMode calls
+// initializers twice) finds the same prompt instead of nothing.
+let claimed: string | null = null
+
+/** Moves a handed-over prompt out of sessionStorage (it is used once); returns it. */
+export function claimBboxHandoff(): string | null {
   try {
-    sessionStorage.setItem(KEY, json)
+    const json = sessionStorage.getItem(KEY)
+    if (json !== null) {
+      sessionStorage.removeItem(KEY)
+      claimed = json
+    }
   } catch {
-    // Storage blocked: the editor opens empty.
+    // Storage blocked: nothing was handed over.
   }
-  window.location.assign('/legacy/#bbox')
+  return claimed
+}
+
+/** The claimed prompt, once: later calls get null. */
+export function takeBboxHandoff(): string | null {
+  const json = claimed
+  claimed = null
+  return json
 }

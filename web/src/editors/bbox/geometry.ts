@@ -40,18 +40,21 @@ export function toBbox(rect: Rect, W: number, H: number): Bbox {
 
 /**
  * The rect a drag of `handle` by (dx, dy) px makes from `rect`. The dragged
- * edges stay inside the frame and at least `minPx` from the opposite edge,
- * which does not move.
+ * edges stay inside the frame and at least the minimum from the opposite edge,
+ * which does not move. The minimum is 8 px, or 10 units (toBbox's minimum)
+ * on a frame side above 800 px, so toBbox never has to move the anchored edge.
  */
-export function resize(rect: Rect, handle: Handle, dx: number, dy: number, W: number, H: number, minPx = 8): Rect {
+export function resize(rect: Rect, handle: Handle, dx: number, dy: number, W: number, H: number): Rect {
+  const minX = Math.max(8, Math.ceil(W / 100))
+  const minY = Math.max(8, Math.ceil(H / 100))
   let l = rect.left
   let t = rect.top
   let r = rect.left + rect.width
   let b = rect.top + rect.height
-  if (handle.includes('w')) l = clamp(l + dx, 0, Math.max(0, r - minPx))
-  if (handle.includes('e')) r = clamp(r + dx, Math.min(W, l + minPx), W)
-  if (handle.includes('n')) t = clamp(t + dy, 0, Math.max(0, b - minPx))
-  if (handle.includes('s')) b = clamp(b + dy, Math.min(H, t + minPx), H)
+  if (handle.includes('w')) l = clamp(l + dx, 0, Math.max(0, r - minX))
+  if (handle.includes('e')) r = clamp(r + dx, Math.min(W, l + minX), W)
+  if (handle.includes('n')) t = clamp(t + dy, 0, Math.max(0, b - minY))
+  if (handle.includes('s')) b = clamp(b + dy, Math.min(H, t + minY), H)
   return { left: l, top: t, width: r - l, height: b - t }
 }
 

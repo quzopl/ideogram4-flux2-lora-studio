@@ -1,11 +1,25 @@
-import { motion } from 'motion/react'
+import { useMutation } from '@tanstack/react-query'
+import { ClipboardPaste } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { BboxCanvas } from '@/editors/bbox/BboxCanvas'
-import { addEl, parseRatio, toJson, type ElType } from '@/editors/bbox/model'
+import { addEl, fromCaption, isDefaultDoc, parseRatio, type ElType } from '@/editors/bbox/model'
+import { claimBboxHandoff, takeBboxHandoff } from '@/lib/bboxHandoff'
 import { cn } from '@/lib/utils'
 import { flushDraft, getDraft, useBboxDoc } from './bboxStore'
+import { errorText, LEGACY_WARNING, normalizePrompt, type Normalized } from './normalize'
+import { PasteBar } from './PasteBar'
+import { SidePanel } from './SidePanel'
+
+/** A load waiting for "Replace the current canvas?". */
+interface PendingLoad {
+  title: string
+  apply: () => void
+}
 
 /** The classic toolbar's ratios. */
 const RATIOS = ['1:1', '4:5', '9:16', '16:9', '3:1']
@@ -15,6 +29,45 @@ export function BboxPage() {
   useEffect(() => flushDraft, [])
   // Any preset click (even the active one) resets the custom field and its error.
   const [presetClicks, setPresetClicks] = useState(0)
+  const [pasting, setPasting] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+  // Kept after the dialog closes, so its title does not change while it animates out.
+  const [pending, setPending] = useState<PendingLoad | null>(null)
+  const [confirming, setConfirming] = useState(false)
+
+  /** Puts a normalised prompt on the canvas, asking first when that would replace work. */
+  const load = (n: Normalized, title: string, done?: () => void) => {
+    const apply = () => {
+      const doc = fromCaption(JSON.parse(n.prompt))
+      setDoc(doc)
+      // New keys: the selection would be lost, so the first element is selected (classic).
+      setSelected(doc.elements.length ? 0 : null)
+      if (n.legacy_style) toast.warning(LEGACY_WARNING, { duration: 12000 })
+      done?.()
+    }
+    if (isDefaultDoc(getDraft().doc)) apply()
+    else {
+      setPending({ title, apply })
+      setConfirming(true)
+    }
+  }
+
+  // A prompt handed over by the Prompt studio is claimed in an initializer (StrictMode
+  // mounts twice, so not in an effect cleanup) and loaded once.
+  useState(claimBboxHandoff)
+  const handoff = useMutation({ mutationFn: normalizePrompt })
+  useEffect(() => {
+    const json = takeBboxHandoff()
+    if (json === null) return
+    handoff.mutate(json, {
+      onSuccess: (n) =>
+        load(n, 'Replace the current canvas with the prompt from the studio?', () =>
+          toast.success('Prompt loaded for editing.')),
+      onError: (e) => toast.error(errorText(e)),
+    })
+    // Once per entry; `load` only reads the store at that time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const setRatio = (aspect_ratio: string) => setDoc((d) => ({ ...d, aspect_ratio }))
   const add = (type: ElType) => {
@@ -46,20 +99,37 @@ export function BboxPage() {
             <CustomRatio key={presetClicks} value={doc.aspect_ratio} onChange={setRatio} />
             <Button size="lg" onClick={() => add('obj')}>+ obj</Button>
             <Button size="lg" variant="outline" onClick={() => add('text')}>+ text</Button>
+            <Button size="lg" variant="outline" aria-expanded={pasting} onClick={() => setPasting((p) => !p)}>
+              <ClipboardPaste />
+              Paste JSON
+            </Button>
           </div>
+          <AnimatePresence initial={false}>
+            {pasting && (
+              <PasteBar
+                key="paste"
+                text={pasteText}
+                onText={setPasteText}
+                onLoaded={(n) => load(n, 'Replace the current canvas?', () => setPasting(false))}
+                onCancel={() => setPasting(false)}
+              />
+            )}
+          </AnimatePresence>
           <BboxCanvas doc={doc} selected={selected} onSelect={setSelected} onChange={setDoc} />
         </section>
 
-        <aside className="flex min-w-0 flex-col gap-2 rounded-xl border border-line bg-surface p-4">
-          <h2 className="text-xs font-medium tracking-wide text-text-dim uppercase">JSON</h2>
-          <pre
-            data-testid="bbox-json"
-            className="max-h-[60vh] overflow-auto rounded-lg border border-line bg-bg p-3 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap text-[#cdd2da]"
-          >
-            {toJson(doc, true)}
-          </pre>
-        </aside>
+        <SidePanel doc={doc} selected={selected} onSelect={setSelected} onChange={setDoc} />
       </div>
+
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={pending?.title ?? ''}
+        action="Replace"
+        onConfirm={() => pending?.apply()}
+      >
+        Everything on the canvas now is replaced by the loaded prompt.
+      </ConfirmDialog>
     </div>
   )
 }

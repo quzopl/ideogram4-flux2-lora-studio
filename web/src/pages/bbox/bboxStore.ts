@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { emptyDoc, newKey, parseRatio, type Doc, type El } from '@/editors/bbox/model'
+import { bboxOf, emptyDoc, newKey, parseRatio, type Doc, type El } from '@/editors/bbox/model'
 
 /**
  * This tab's Bbox canvas: the document and the selected element (its index in
@@ -22,15 +22,15 @@ function fresh(): Draft {
 
 /** Element keys are minted anew: they are only unique within one page load. */
 function loadEl(e: Partial<El>): El {
-  const b = e.bbox
+  const bbox = bboxOf(e.bbox)
+  const lastBbox = bbox ? null : bboxOf(e.lastBbox)
   return {
     key: newKey(),
     type: e.type === 'text' ? 'text' : 'obj',
-    bbox: Array.isArray(b) && b.length === 4 && b.every((v) => typeof v === 'number' && Number.isFinite(v))
-      ? [b[0], b[1], b[2], b[3]]
-      : null,
+    bbox,
     desc: str(e.desc),
     text: str(e.text),
+    ...(lastBbox ? { lastBbox } : {}),
   }
 }
 

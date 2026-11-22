@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import fs from 'node:fs'
 import { expect, test } from './fixtures.ts'
 
 type Bbox = [number, number, number, number]
@@ -197,14 +198,33 @@ test('keyboard nudge and delete', async ({ page }) => {
   await page.keyboard.press('Shift+ArrowLeft')
   await page.keyboard.press('ArrowUp')
   await expect.poll(() => bboxOf(page, 0)).toEqual([209, 191, 509, 491])
+  // Shortcuts leave modified keys to the browser.
+  await page.keyboard.press('Control+ArrowRight')
+  await page.keyboard.press('Alt+ArrowDown')
+  await page.keyboard.press('Control+Delete')
+  await page.waitForTimeout(100)
+  expect(await bboxOf(page, 0)).toEqual([209, 191, 509, 491])
+  expect((await caption(page)).compositional_deconstruction.elements).toHaveLength(2)
+
+  // Escape during a drag does not drop the dragged box's selection.
+  const b0 = (await box(page, 0).boundingBox())!
+  await page.mouse.move(b0.x + b0.width / 2, b0.y + b0.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(b0.x + b0.width / 2 + 20, b0.y + b0.height / 2, { steps: 4 })
+  await page.keyboard.press('Escape')
+  await expect(selectedBox(page)).toHaveAttribute('data-index', '0')
+  await page.mouse.move(b0.x + b0.width / 2 + 30, b0.y + b0.height / 2, { steps: 2 })
+  await page.mouse.up()
+  await expect(selectedBox(page)).toHaveAttribute('data-index', '0')
 
   // Escape deselects; the keys then do nothing.
   await page.keyboard.press('Escape')
   await expect(selectedBox(page)).toHaveCount(0)
   await expect(page.locator('[data-h]')).toHaveCount(0)
+  const kept = await bboxOf(page, 0)
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('Delete')
-  expect(await bboxOf(page, 0)).toEqual([209, 191, 509, 491])
+  expect(await bboxOf(page, 0)).toEqual(kept)
   expect((await caption(page)).compositional_deconstruction.elements).toHaveLength(2)
 
   await box(page, 0).click()
@@ -214,7 +234,7 @@ test('keyboard nudge and delete', async ({ page }) => {
   await box(page, 0).click()
   await page.keyboard.press('Backspace')
   await expect.poll(async () => (await caption(page)).compositional_deconstruction.elements).toEqual([])
-  await expect(page.getByText('Add an element with + obj or + text.')).toBeVisible()
+  await expect(frame(page).getByText('Add an element with + obj or + text.', { exact: true })).toBeVisible()
 })
 
 test('draft survives navigation', async ({ page }) => {
@@ -276,4 +296,283 @@ test('custom ratio', async ({ page }) => {
   await page.getByRole('button', { name: '16:9', exact: true }).click()
   await expect(custom).toHaveValue('16:9')
   await expect(custom).not.toHaveAttribute('aria-invalid', 'true')
+})
+
+const card = (page: Page, i: number) => page.locator(`[data-testid="bbox-card"][data-index="${i}"]`)
+const cards = (page: Page) => page.getByTestId('bbox-card')
+const findings = (page: Page) => page.getByTestId('v15-findings')
+const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
+const pasteBar = (page: Page) => page.getByRole('textbox', { name: 'Prompt JSON', exact: true })
+
+/** Opens the Paste JSON bar, loads `text`. */
+async function paste(page: Page, text: string) {
+  if (!(await pasteBar(page).isVisible())) await page.getByRole('button', { name: 'Paste JSON', exact: true }).click()
+  await pasteBar(page).fill(text)
+  await page.getByRole('button', { name: 'Load', exact: true }).click()
+}
+
+const LEGACY_WARNING =
+  'Loaded the OLD format with style_description — those fields do not exist in v15 and were dropped; rewrite the style as prose into the HLD or background.'
+
+test('cards edit desc and counters', async ({ page }) => {
+  await page.goto('/bbox')
+  const c = card(page, 0)
+  await expect(c).toContainText('obj #1')
+  await expect(c).toContainText('bbox [60, 300, 1000, 700]')
+  await expect(c).toHaveAttribute('data-selected', 'true')
+
+  const desc = c.getByRole('textbox', { name: 'desc', exact: true })
+  const counter = c.getByTestId('desc-counter')
+  await expect(counter).toHaveText('0/60 words')
+  await desc.fill(words(61))
+  await expect(counter).toHaveText('61/60 words')
+  await expect(counter).toHaveClass(/text-warning/)
+  // The server's message, numbered by array index.
+  await expect(findings(page)).toContainText('(obj #1) desc exceeds 60 words (61).')
+  expect((await caption(page)).compositional_deconstruction.elements[0].desc).toBe(words(61))
+
+  // Typing does not remount the card: focus stays.
+  await desc.press('End')
+  await desc.pressSequentially(' x y')
+  await expect(desc).toBeFocused()
+  await expect(counter).toHaveText('63/60 words')
+
+  const hld = page.getByRole('textbox', { name: 'high_level_description', exact: true })
+  await hld.fill(words(51))
+  await expect(page.getByTestId('hld-counter')).toHaveText('51/50 words')
+  await expect(page.getByTestId('hld-counter')).toHaveClass(/text-warning/)
+  await expect(findings(page)).toContainText('HLD exceeds 50 words (51).')
+  await page.getByRole('textbox', { name: 'background (scene shell only)', exact: true }).fill('A grey wall.')
+  await expect.poll(async () => (await caption(page)).compositional_deconstruction.background).toBe('A grey wall.')
+
+  // A text element: its verbatim text is on the card and the canvas tag.
+  await page.getByRole('button', { name: '+ text', exact: true }).click()
+  await expect(card(page, 1)).toContainText('text #2')
+  await expect(card(page, 1)).toHaveAttribute('data-selected', 'true')
+  const text = card(page, 1).getByRole('textbox', { name: 'text (verbatim, \\n = new line)', exact: true })
+  await text.pressSequentially('HELLO')
+  await expect(text).toBeFocused()
+  await expect(box(page, 1)).toContainText('text: HELLO')
+  expect((await caption(page)).compositional_deconstruction.elements[1].text).toBe('HELLO')
+
+  // A card click selects; a canvas selection marks the card.
+  await card(page, 0).getByText('obj #1').click()
+  await expect(selectedBox(page)).toHaveAttribute('data-index', '0')
+  await box(page, 1).click({ position: { x: 5, y: 5 } })
+  await expect(card(page, 1)).toHaveAttribute('data-selected', 'true')
+  await expect(card(page, 0)).not.toHaveAttribute('data-selected', 'true')
+
+  // The aspect ratio field applies on Enter.
+  const ar = page.getByRole('textbox', { name: 'aspect_ratio', exact: true })
+  await ar.fill('4:5')
+  await expect(ar).toBeFocused()
+  expect((await caption(page)).aspect_ratio).toBe('1:1')
+  await ar.press('Enter')
+  await expect.poll(async () => (await caption(page)).aspect_ratio).toBe('4:5')
+  await expect(page.getByRole('button', { name: '4:5', exact: true })).toHaveAttribute('aria-pressed', 'true')
+})
+
+test('lint failure shows an error row, not old findings', async ({ page }) => {
+  await page.goto('/bbox')
+  await expect(findings(page)).toContainText('high_level_description is empty.')
+  await page.route('**/api/prompts/lint', (route) => route.fulfill({ status: 500, json: { detail: 'Lint crashed' } }))
+  await page.getByRole('textbox', { name: 'high_level_description', exact: true }).fill('A cat.')
+  await expect(page.getByText('Could not check the prompt: Lint crashed')).toBeVisible()
+  await expect(findings(page)).toHaveCount(0)
+})
+
+test('z-order buttons reorder the array', async ({ page }) => {
+  await seed(page, [
+    { type: 'obj', bbox: [100, 100, 300, 300], desc: 'A' },
+    { type: 'text', bbox: [400, 400, 500, 500], desc: 'B', text: 'T' },
+    { type: 'obj', bbox: [600, 600, 900, 900], desc: 'C' },
+  ], 0)
+  await page.goto('/bbox')
+  const descs = async () => (await caption(page)).compositional_deconstruction.elements.map((e) => e.desc)
+  await expect(cards(page)).toHaveCount(3)
+  await expect(card(page, 0).getByRole('button', { name: 'Send backward', exact: true })).toBeDisabled()
+  await expect(card(page, 2).getByRole('button', { name: 'Bring forward', exact: true })).toBeDisabled()
+
+  await card(page, 0).getByRole('button', { name: 'Bring forward', exact: true }).click()
+  await expect.poll(descs).toEqual(['B', 'A', 'C'])
+  // Cards follow the array; the selection follows its element.
+  await expect(card(page, 0)).toContainText('text #1')
+  await expect(card(page, 1)).toContainText('obj #2')
+  await expect(card(page, 1)).toHaveAttribute('data-selected', 'true')
+  await expect(selectedBox(page)).toHaveAttribute('data-index', '1')
+
+  await card(page, 2).getByRole('button', { name: 'Send backward', exact: true }).click()
+  await expect.poll(descs).toEqual(['B', 'C', 'A'])
+  await expect(card(page, 2)).toHaveAttribute('data-selected', 'true')
+
+  await card(page, 1).getByRole('button', { name: 'Remove element', exact: true }).click()
+  await expect.poll(descs).toEqual(['B', 'A'])
+  await expect(cards(page)).toHaveCount(2)
+})
+
+test('bbox checkbox omits the key', async ({ page }) => {
+  await page.goto('/bbox')
+  await frame(page).focus()
+  await page.keyboard.press('Shift+ArrowRight')
+  await expect.poll(() => bboxOf(page, 0)).toEqual([60, 310, 1000, 710])
+  const check = card(page, 0).getByRole('checkbox', { name: 'bbox', exact: true })
+  await expect(check).toBeChecked()
+
+  await check.uncheck()
+  await expect.poll(async () => Object.keys((await caption(page)).compositional_deconstruction.elements[0])).toEqual(['type', 'desc'])
+  await expect(card(page, 0)).toContainText('no bbox')
+  await expect(page.getByTestId('bbox-box')).toHaveCount(0)
+
+  // The last box is kept (even over a reload) and comes back.
+  await page.reload()
+  await expect(card(page, 0)).toContainText('no bbox')
+  await card(page, 0).getByRole('checkbox', { name: 'bbox', exact: true }).check()
+  await expect.poll(() => bboxOf(page, 0)).toEqual([60, 310, 1000, 710])
+  await expect(card(page, 0)).toContainText('bbox [60, 310, 1000, 710]')
+  await expect(page.getByTestId('bbox-box')).toHaveCount(1)
+})
+
+const FOX = {
+  aspect_ratio: '16:9',
+  high_level_description: 'A red fox in fresh snow.',
+  compositional_deconstruction: {
+    background: 'A snowy field under a pale sky.',
+    elements: [
+      { type: 'obj', bbox: [100, 200, 900, 600], desc: 'A red fox standing alert.' },
+      { type: 'text', bbox: [50, 650, 200, 950], text: 'WINTER', desc: 'Bold white letters.' },
+      { type: 'obj', desc: 'A distant pine tree.' },
+    ],
+  },
+}
+
+test('paste double-encoded loads', async ({ page }) => {
+  await page.goto('/bbox')
+  await paste(page, JSON.stringify(JSON.stringify(FOX)))
+  await expect(pasteBar(page)).toHaveCount(0)
+  expect(await caption(page)).toEqual(FOX)
+  await expect(page.getByRole('button', { name: '16:9', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  // The first element is selected.
+  await expect(selectedBox(page)).toHaveAttribute('data-index', '0')
+  await expect(card(page, 0)).toHaveAttribute('data-selected', 'true')
+  // An element that never had a box gets the default one of the ratio.
+  await expect(card(page, 2)).toContainText('no bbox')
+  await card(page, 2).getByRole('checkbox', { name: 'bbox', exact: true }).check()
+  await expect.poll(() => bboxOf(page, 2)).toEqual([80, 400, 1000, 620])
+
+  // Over a non-default canvas, it asks first; the text stays in the bar.
+  const legacy = {
+    aspect_ratio: '1:1',
+    high_level_description: 'An old style prompt.',
+    style_description: { lighting: 'soft window light' },
+    compositional_deconstruction: { background: 'A grey wall.', elements: [] },
+  }
+  await paste(page, JSON.stringify(legacy))
+  const dialog = page.getByRole('dialog', { name: 'Replace the current canvas?' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect((await caption(page)).high_level_description).toBe(FOX.high_level_description)
+  await expect(pasteBar(page)).toHaveValue(JSON.stringify(legacy))
+
+  await page.getByRole('button', { name: 'Load', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Replace', exact: true }).click()
+  await expect.poll(async () => (await caption(page)).high_level_description).toBe('An old style prompt.')
+  expect(await page.getByTestId('bbox-json').textContent()).not.toContain('style_description')
+  await expect(page.getByText(LEGACY_WARNING)).toBeVisible()
+  await expect(pasteBar(page)).toHaveCount(0)
+})
+
+test('paste garbage keeps the canvas', async ({ page }) => {
+  await page.goto('/bbox')
+  await page.getByRole('textbox', { name: 'high_level_description', exact: true }).fill('Keep me.')
+  await expect.poll(async () => (await caption(page)).high_level_description).toBe('Keep me.')
+  const before = await page.getByTestId('bbox-json').textContent()
+
+  await paste(page, 'hello')
+  await expect(page.getByText('No JSON object found in the pasted text.')).toBeVisible()
+  await expect(pasteBar(page)).toBeVisible()
+  await paste(page, '{"a": 1}')
+  await expect(page.getByText('No Ideogram prompt found in the JSON.')).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByTestId('bbox-json')).toHaveText(before!)
+
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(pasteBar(page)).toHaveCount(0)
+  await expect(page.getByTestId('bbox-json')).toHaveText(before!)
+})
+
+test('save to library and it appears in the prompt studio library', async ({ page }) => {
+  const m = `marker-bboxsave-${Date.now()}`
+  await page.goto('/bbox')
+  await card(page, 0).getByRole('textbox', { name: 'desc', exact: true }).fill(`A ${m} lamp.`)
+  await page.getByRole('button', { name: 'Save to library', exact: true }).click()
+  await expect(page.getByText(/^Saved to the library \(#\d+\)\.$/)).toBeVisible()
+
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Prompt studio', exact: true }).click()
+  await expect(page.getByTestId('bbox-json')).toHaveCount(0)
+  const row = page.getByRole('region', { name: 'Prompt library', exact: true }).getByTestId('library-row').filter({ hasText: m })
+  await expect(row).toHaveCount(1)
+  await expect(row).toContainText('bbox editor')
+})
+
+test('download is minified caption_v15.json', async ({ page }) => {
+  await seed(page, [{ type: 'text', bbox: [100, 100, 200, 900], text: 'SALE', desc: 'Red letters.' }], 0, '4:5')
+  await page.goto('/bbox')
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download', exact: true }).click()
+  const d = await download
+  expect(d.suggestedFilename()).toBe('caption_v15.json')
+  const body = fs.readFileSync(await d.path(), 'utf8')
+  expect(body).toBe(JSON.stringify(await caption(page)))
+  expect(body).not.toContain('\n')
+})
+
+test('copy minified and pretty', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.goto('/bbox')
+  await page.getByRole('button', { name: 'Copy (minified)', exact: true }).click()
+  await expect(page.getByText('Copied to clipboard.').first()).toBeVisible()
+  const pretty = (await page.getByTestId('bbox-json').textContent())!
+  expect(await page.evaluate(() => (navigator as unknown as { clipboard: { readText(): Promise<string> } }).clipboard.readText())).toBe(JSON.stringify(JSON.parse(pretty)))
+  await page.getByRole('button', { name: 'Pretty', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (navigator as unknown as { clipboard: { readText(): Promise<string> } }).clipboard.readText())).toBe(pretty)
+})
+
+test('handoff with bad JSON keeps the canvas', async ({ page }) => {
+  await page.goto('/models')
+  await page.evaluate(() => sessionStorage.setItem('flux.bbox.handoff', 'hello'))
+  await page.goto('/bbox')
+  await expect(page.getByText('No JSON object found in the pasted text.')).toBeVisible()
+  expect(await page.evaluate(() => sessionStorage.getItem('flux.bbox.handoff'))).toBeNull()
+  expect((await caption(page)).compositional_deconstruction.elements).toHaveLength(1)
+  expect((await caption(page)).high_level_description).toBe('')
+})
+
+test('nudge then immediate reload keeps the box', async ({ page }) => {
+  await page.goto('/bbox')
+  await frame(page).focus()
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(() => bboxOf(page, 0)).toEqual([60, 301, 1000, 701])
+  await page.reload()
+  expect(await bboxOf(page, 0)).toEqual([60, 301, 1000, 701])
+})
+
+test('resize keeps an interior anchor on a large frame', async ({ page }) => {
+  await page.setViewportSize({ width: 2400, height: 1400 })
+  await seed(page, [{ type: 'obj', bbox: [300, 300, 600, 600] }], 0, '3:1')
+  await page.goto('/bbox')
+  const f = await frameRect(page, 3)
+  // Above 800 px a 8 px minimum is under 10 units: the anchored edge used to drift.
+  expect(f.width).toBeGreaterThan(1000)
+  await dragHandle(page, 'w', 3000, 0)
+  await expect.poll(async () => (await bboxOf(page, 0))[1]).toBeGreaterThan(550)
+  const [y1, x1, y2, x2] = await bboxOf(page, 0)
+  expect([y1, y2, x2]).toEqual([300, 600, 600])
+  expect(x2 - x1).toBeGreaterThanOrEqual(10)
+  await dragHandle(page, 'e', -3000, 0)
+  await expect.poll(async () => (await bboxOf(page, 0))[3]).toBeLessThan(620)
+  const b = await bboxOf(page, 0)
+  expect(b[1]).toBe(x1)
+  expect(b[3] - b[1]).toBeGreaterThanOrEqual(10)
 })

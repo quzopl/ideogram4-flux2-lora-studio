@@ -15,6 +15,8 @@ export interface El {
   desc: string
   /** Only output for type "text". */
   text: string
+  /** The box the bbox checkbox turned off, restored when it is turned on again; never in the JSON. */
+  lastBbox?: Bbox
 }
 
 export interface Doc {
@@ -79,10 +81,16 @@ export function toJson(doc: Doc, pretty = false): string {
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
 
-function bboxOf(v: unknown): Bbox | null {
-  if (!Array.isArray(v) || v.length !== 4) return null
-  const b = v.map(Number)
-  return b.every(Number.isFinite) ? (b as Bbox) : null
+/** `v` as a bbox: four finite numbers, else null. Shared by every loader. */
+export function bboxOf(v: unknown): Bbox | null {
+  if (!Array.isArray(v) || v.length !== 4 || !v.every((n) => typeof n === 'number' && Number.isFinite(n))) return null
+  return [v[0], v[1], v[2], v[3]]
+}
+
+/** Nothing to lose: the canvas a new tab opens with, or one emptied of everything. */
+export function isDefaultDoc(doc: Doc): boolean {
+  if (!doc.elements.length && !doc.hld.trim() && !doc.bg.trim()) return true
+  return toJson(doc) === toJson(emptyDoc())
 }
 
 /**
@@ -131,4 +139,25 @@ export function moveEl(doc: Doc, i: number, dir: 'forward' | 'backward'): Doc {
 
 export function setBbox(doc: Doc, i: number, bbox: Bbox | null): Doc {
   return { ...doc, elements: doc.elements.map((e, j) => (j === i ? { ...e, bbox } : e)) }
+}
+
+/**
+ * The bbox checkbox: off keeps the box aside (classic), on brings it back, or
+ * the default box of the doc's ratio when there is none.
+ */
+export function toggleBbox(doc: Doc, i: number, on: boolean): Doc {
+  return {
+    ...doc,
+    elements: doc.elements.map((e, j) => {
+      if (j !== i || on === !!e.bbox) return e
+      if (!on) return { ...e, bbox: null, lastBbox: e.bbox! }
+      const { lastBbox, ...rest } = e
+      return { ...rest, bbox: lastBbox ?? defBbox(e.type, doc.aspect_ratio) }
+    }),
+  }
+}
+
+/** Patches one element's fields. */
+export function setEl(doc: Doc, i: number, patch: Partial<Pick<El, 'desc' | 'text'>>): Doc {
+  return { ...doc, elements: doc.elements.map((e, j) => (j === i ? { ...e, ...patch } : e)) }
 }

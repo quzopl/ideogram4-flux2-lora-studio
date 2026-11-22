@@ -19,6 +19,9 @@
   --color-success: #34d399;
   --color-warning: #fbbf24;
   --color-danger: #f87171;
+  /* Bbox editor boxes and cards. */
+  --color-bbox-obj: #6c8cff;
+  --color-bbox-text: #b07cff;
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
   --shadow-glow: 0 0 0 3px rgba(139, 92, 246, 0.25), 0 0 18px rgba(34, 211, 238, 0.18);

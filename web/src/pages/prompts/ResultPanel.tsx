@@ -1,24 +1,14 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { ArrowUpToLine, Copy, LayoutTemplate, RotateCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { V15Findings, type V15Finding } from '@/components/V15Findings'
+import { useDebounced } from '@/hooks/useDebounced'
 import { api, ApiError } from '@/lib/api'
-import { handOffToBbox } from '@/lib/bboxHandoff'
+import { useHandOffToBbox } from '@/lib/bboxHandoff'
 import { copyText } from '@/lib/clipboard'
 import { isJsonFormat } from './promptForm'
 import type { PromptResult } from './promptRunStore'
-
-/** `value`, once it has not changed for `ms`. */
-function useDebounced<T>(value: T, ms: number) {
-  const [settled, setSettled] = useState(value)
-  useEffect(() => {
-    const t = setTimeout(() => setSettled(value), ms)
-    return () => clearTimeout(t)
-  }, [value, ms])
-  return settled
-}
 
 interface ResultPanelProps {
   result: PromptResult
@@ -38,6 +28,7 @@ interface ResultPanelProps {
  * after an edit.
  */
 export function ResultPanel({ result, edited, onEdit, onRegenerate, regenerateDisabled, onUseAsInput, stale }: ResultPanelProps) {
+  const handOffToBbox = useHandOffToBbox()
   const text = edited ?? result.prompt
   const json = isJsonFormat(result.format)
   // A blank prompt has nothing to check, so it must not read as "compliant".
