@@ -144,8 +144,27 @@ preview; export to a folder or `.zip`; autosaved form and named presets),
 **Models** (Download… / Use existing… / Forget / Cancel) and **Settings**
 (Models folder, GPU per role — CPU is not offered for the VLM — Hugging Face
 token, LM Studio and ComfyUI URLs, settings export/import), plus a first-run
-onboarding. Dataset, Prompt studio, Bbox editor and ComfyUI still open the
-classic UI.
+onboarding. Prompt studio, Bbox editor and ComfyUI still open the classic UI.
+
+**Dataset** is in v2 too. The source is a folder scan (folder picker, or
+drag-and-drop upload; HEIC is accepted), shown as a thumbnail grid. The crop
+editor drags and resizes the box with a ratio of Free / 1:1 / 3:4 / 4:3 / 16:9;
+**Auto (Florence)** only moves the box (nothing is kept until Save), **Apply to
+same ratio** copies it to the other photos with that ratio and **Reset**
+undoes it. The **Crop source** (Centre / Auto / Manual) is stored per folder
+together with the crop plan. **Auto-crop all** asks for confirmation only when
+crops already exist, and photos with no detection keep their crop; **Clear
+crops** drops them all. Crop plans live on the server in
+`.work/crop_plans.json` (`GET`/`PUT /api/crops`, keyed by the resolved folder);
+a plan made in the classic UI (`localStorage` key `cropPlan:<folder>`) is
+imported once, when the server has no record for that folder. The settings form
+autosaves; presets leave out the folder, trigger word, output folder and crop
+source. `ProcessRequest` validates numbers and enums and answers 422 with a
+readable message. Processing shows progress that survives leaving the view.
+Caption edits are kept in the browser tab (`sessionStorage`) until export;
+export sends only the edited captions plus the removed indices. Remove has an
+Undo, and export goes to a folder or a `.zip`. `GET /api/src/size` reports the
+size of the source folder.
 
 Dev server with hot reload (the backend must run on 8123):
 
