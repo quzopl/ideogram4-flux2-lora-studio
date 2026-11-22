@@ -1,4 +1,3 @@
-import { useMutation } from '@tanstack/react-query'
 import { ClipboardPaste } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
@@ -55,16 +54,16 @@ export function BboxPage() {
   // A prompt handed over by the Prompt studio is claimed in an initializer (StrictMode
   // mounts twice, so not in an effect cleanup) and loaded once.
   useState(claimBboxHandoff)
-  const handoff = useMutation({ mutationFn: normalizePrompt })
   useEffect(() => {
     const json = takeBboxHandoff()
     if (json === null) return
-    handoff.mutate(json, {
-      onSuccess: (n) =>
+    // A plain promise: StrictMode's remount would detach a mutation's per-call callbacks.
+    normalizePrompt(json).then(
+      (n) =>
         load(n, 'Replace the current canvas with the prompt from the studio?', () =>
           toast.success('Prompt loaded for editing.')),
-      onError: (e) => toast.error(errorText(e)),
-    })
+      (e: Error) => toast.error(errorText(e)),
+    )
     // Once per entry; `load` only reads the store at that time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

@@ -35,8 +35,11 @@ export function SidePanel({ doc, selected, onSelect, onChange }: SidePanelProps)
   const json = toJson(doc)
   const pretty = toJson(doc, true)
 
-  // A selection made on the canvas scrolls the list (only the list, never the page) to its card.
+  // A selection change (not the one the page opens with) scrolls the list, never the page, to its card.
+  const shownSelected = useRef(selected)
   useEffect(() => {
+    if (selected === shownSelected.current) return
+    shownSelected.current = selected
     const list = listRef.current
     const card = selected === null ? null : list?.querySelector(`[data-testid="bbox-card"][data-index="${selected}"]`)
     if (!list || !card) return
