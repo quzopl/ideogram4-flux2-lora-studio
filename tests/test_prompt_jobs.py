@@ -152,7 +152,7 @@ def test_download_failure_same_text_job_and_legacy(monkeypatch):
     monkeypatch.setattr(server, "_ensure_model", dl)
     monkeypatch.setattr(server, "_ensure_model_http",
                         lambda m: server._ensure_model_mapped(m, None))
-    assert _get(_start())["error"] == "Download incomplete: x"
+    assert _get(_start())["error"].split("\n")[0] == "Download incomplete: x"
     r = client.post("/api/prompt", json={"text": "a"})
     assert r.status_code == 502 and r.json()["detail"] == "Download incomplete: x"
 
@@ -161,6 +161,46 @@ def test_value_error_outside_ensure_is_generation_error(monkeypatch):
     def bad(*a, **k):
         raise ValueError("bad")
     monkeypatch.setattr(captioner, "generate_text", bad)
-    assert _get(_start())["error"] == "Generation error: bad"
+    assert _get(_start())["error"].split("\n")[0] == "Generation error: bad"
     r = client.post("/api/prompt", json={"text": "a"})
     assert r.status_code == 500 and r.json()["detail"] == "Generation error: bad"
+
+
+@pytest.mark.parametrize("where, exc, first", [
+    ("ensure", model_store.ModelsFolderNotSet(), None),
+    ("lmstudio", lmstudio.LMStudioError("x"), "LM Studio: x"),
+    ("generate", RuntimeError("boom"), "Generation error: boom"),
+])
+def test_prompt_job_error_has_traceback_after_first_line(monkeypatch, where, exc, first):
+    def boom(*a, **k):
+        raise exc
+    kw = {}
+    if where == "ensure":
+        monkeypatch.setattr(server, "_ensure_model", boom)
+    elif where == "lmstudio":
+        monkeypatch.setattr(lmstudio, "generate_text", boom)
+        kw["model"] = "lmstudio:a"
+    else:
+        monkeypatch.setattr(captioner, "generate_text", boom)
+    err = _get(_start(**kw))["error"]
+    head, _, rest = err.partition("\n")
+    if first is None:
+        assert head.startswith("No models folder chosen")
+    else:
+        assert head == first
+    assert rest.startswith("Traceback (most recent call last):")
+
+
+def test_prompt_job_download_progress_cleared_before_loading(monkeypatch):
+    def ensure(m, job=None):
+        job["current"] = "Downloading Model: 100%"
+        return "/p"
+    seen = []
+
+    def loaded(*a, **k):
+        job = next(iter(server.JOBS.values()))
+        seen.append((job["state"], job["current"]))
+    monkeypatch.setattr(server, "_ensure_model", ensure)
+    monkeypatch.setattr(captioner, "ensure_loaded", loaded)
+    assert _get(_start())["state"] == "done"
+    assert seen == [("loading_model", "")]

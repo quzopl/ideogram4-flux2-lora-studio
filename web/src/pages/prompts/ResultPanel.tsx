@@ -28,6 +28,8 @@ interface ResultPanelProps {
   onRegenerate: () => void
   regenerateDisabled: boolean
   onUseAsInput: (text: string) => void
+  /** A new job is running: this is the previous result, shown dimmed until it is replaced. */
+  stale: boolean
 }
 
 /**
@@ -35,11 +37,13 @@ interface ResultPanelProps {
  * form's current one) shows its v15 findings, re-linted on the server 500 ms
  * after an edit.
  */
-export function ResultPanel({ result, edited, onEdit, onRegenerate, regenerateDisabled, onUseAsInput }: ResultPanelProps) {
+export function ResultPanel({ result, edited, onEdit, onRegenerate, regenerateDisabled, onUseAsInput, stale }: ResultPanelProps) {
   const text = edited ?? result.prompt
   const json = isJsonFormat(result.format)
+  // A blank prompt has nothing to check, so it must not read as "compliant".
+  const blank = !text.trim()
   const settled = useDebounced(text, 500)
-  const relint = json && edited !== null && settled !== result.prompt
+  const relint = json && edited !== null && settled.trim() !== '' && settled !== result.prompt
   // Keyed by the text, so an older answer never overwrites a newer one.
   const lint = useQuery({
     queryKey: ['lint', settled],
@@ -63,7 +67,11 @@ export function ResultPanel({ result, edited, onEdit, onRegenerate, regenerateDi
   }
 
   return (
-    <section aria-label="Result" className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-5">
+    <section
+      aria-label="Result"
+      data-stale={stale}
+      className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 transition-opacity data-[stale=true]:opacity-60"
+    >
       <h2 className="text-sm font-semibold">Result</h2>
       <textarea
         aria-label="Result"
@@ -74,7 +82,7 @@ export function ResultPanel({ result, edited, onEdit, onRegenerate, regenerateDi
         className="min-h-40 w-full resize-y rounded-lg border border-line bg-bg/60 px-3 py-2.5 text-sm leading-relaxed outline-none focus-visible:border-accent-from/60 focus-visible:shadow-glow data-[json=true]:font-mono data-[json=true]:text-xs"
         data-json={json}
       />
-      {json && (lintError ? (
+      {json && !blank && (lintError ? (
         <p role="alert" className="rounded-lg border border-danger/25 bg-danger/[0.06] px-3 py-2 text-sm text-danger">
           Could not check the edited prompt: {lintError}
         </p>

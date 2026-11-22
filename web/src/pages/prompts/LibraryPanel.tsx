@@ -56,7 +56,9 @@ export function LibraryPanel() {
     <section aria-label="Prompt library" className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">Prompt library</h2>
-        {list.data && <span className="text-xs text-text-dim">Items: {all.length}</span>}
+        {list.data && (
+          <span className="text-xs text-text-dim">Items: {needle ? `${shown.length} of ${all.length}` : all.length}</span>
+        )}
       </div>
       <p className="-mt-2 text-xs text-text-dim">Every generated prompt is saved here automatically (SQLite).</p>
 
@@ -192,7 +194,7 @@ function LibraryRow({ prompt: p, index, onDelete }: { prompt: LibraryPrompt; ind
         </button>
         <p className="text-xs text-text-dim">
           #{p.id} · {new Date(p.created * 1000).toLocaleString()}
-          {p.input_text && ` · „${p.input_text.slice(0, 60)}”`}
+          {p.input_text && ` · "${p.input_text.slice(0, 60)}"`}
         </p>
       </div>
       <div className="flex shrink-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-start">

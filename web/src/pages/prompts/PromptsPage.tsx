@@ -92,7 +92,7 @@ export function PromptsPage() {
     toast.success('Moved the result to the input.')
   }
 
-  // The job error has a traceback after its first line: that line shows, the rest is in the title.
+  // The job error has a traceback after its first line: that line shows, the whole text is in the title.
   const error = data?.state === 'error' ? data.error : ''
   const step = data?.state === 'loading_model' ? data.current || 'Loading the model…' : STEP[data?.state ?? 'pending']
 
@@ -163,6 +163,7 @@ export function PromptsPage() {
                 onEdit={setPromptEdited}
                 onRegenerate={generate}
                 regenerateDisabled={!canGenerate}
+                stale={busy}
                 onUseAsInput={toInput}
               />
             </motion.div>

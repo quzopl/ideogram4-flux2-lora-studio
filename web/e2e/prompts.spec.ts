@@ -22,18 +22,20 @@ interface Job {
 }
 
 /**
- * Mocks the prompt job API: POST answers job "p1" (bodies are collected), GET
- * answers `job()` as it is at the time of the poll.
+ * Mocks the prompt job API: each POST answers a new job ("p1", "p2", …; bodies
+ * are collected), GET answers `job(id)` as it is at the time of the poll.
  */
-async function mockJobs(page: Page, job: () => Job) {
+async function mockJobs(page: Page, job: (id: string) => Job) {
   const bodies: Record<string, unknown>[] = []
   await page.route('**/api/models', (route) => route.fulfill({ json: MODELS }))
   await page.route('**/api/prompt/jobs', (route) => {
     bodies.push(route.request().postDataJSON())
-    return route.fulfill({ json: { job_id: 'p1' } })
+    return route.fulfill({ json: { job_id: `p${bodies.length}` } })
   })
-  await page.route('**/api/prompt/jobs/*', (route) =>
-    route.fulfill({ json: { current: '', error: '', result: null, ...job() } }))
+  await page.route('**/api/prompt/jobs/*', (route) => {
+    const id = new URL(route.request().url()).pathname.split('/').pop() ?? ''
+    return route.fulfill({ json: { current: '', error: '', result: null, ...job(id) } })
+  })
   return bodies
 }
 
@@ -214,6 +216,42 @@ test('job error shows first line', async ({ page }) => {
   await expect(generateBtn(page)).toBeEnabled()
 })
 
+test('a failed regenerate keeps the result and its edit', async ({ page }) => {
+  let failed = false
+  await mockJobs(page, (id) =>
+    id === 'p1' ? done('A cat.')
+      : id === 'p2' ? failed
+        ? { state: 'error', error: 'CUDA out of memory.\nTraceback (most recent call last):\n  File "x"' }
+        : { state: 'generating' }
+        : done('A dog.'))
+  await generate(page)
+  await expect(output(page)).toHaveValue('A cat.')
+  await output(page).fill('A cat, edited.')
+  const result = page.getByRole('region', { name: 'Result', exact: true })
+  const regenerate = result.getByRole('button', { name: 'Regenerate', exact: true })
+  await regenerate.click()
+
+  // While the new job runs the previous result stays, dimmed.
+  const progress = page.getByTestId('job-progress')
+  await expect(progress).toContainText('Generating…')
+  await expect(output(page)).toHaveValue('A cat, edited.')
+  await expect(result).toHaveAttribute('data-stale', 'true')
+
+  failed = true
+  await expect(progress).toHaveAttribute('data-state', 'error')
+  await expect(progress).toContainText('CUDA out of memory.')
+  await expect(output(page)).toHaveValue('A cat, edited.')
+  await expect(result).toHaveAttribute('data-stale', 'false')
+
+  // A successful run replaces the result and drops the edit.
+  await regenerate.click()
+  await expect(output(page)).toHaveValue('A dog.')
+  await expect(page.getByTestId('job-progress')).toHaveCount(0)
+  await expect.poll(async () =>
+    JSON.parse((await page.evaluate(() => sessionStorage.getItem('flux.prompts.run'))) ?? 'null'))
+    .toMatchObject({ jobId: null, edited: null, result: { prompt: 'A dog.' } })
+})
+
 test('an unknown job (404) is forgotten', async ({ page }) => {
   await mockJobs(page, () => ({ state: 'generating' }))
   await page.route('**/api/prompt/jobs/*', (route) => route.fulfill({ status: 404, json: { detail: 'Unknown job.' } }))
@@ -253,6 +291,17 @@ test('a failed re-lint is not shown as compliant', async ({ page }) => {
   await page.route('**/api/prompts/lint', (route) => route.fulfill({ status: 500, json: { detail: 'Lint crashed' } }))
   await output(page).fill('not json')
   await expect(page.getByText('Could not check the edited prompt: Lint crashed')).toBeVisible()
+  await expect(page.getByText('No warnings — compliant with the v15 guidelines')).toHaveCount(0)
+})
+
+test('a blank JSON result shows no findings', async ({ page }) => {
+  await mockJobs(page, () => done(IDEOGRAM, 'ideogram'))
+  await generate(page)
+  const findings = page.getByTestId('v15-findings')
+  await expect(findings).toContainText('No warnings — compliant with the v15 guidelines')
+  await output(page).fill('  \n ')
+  await page.waitForTimeout(600)
+  await expect(findings).toHaveCount(0)
   await expect(page.getByText('No warnings — compliant with the v15 guidelines')).toHaveCount(0)
 })
 
@@ -300,11 +349,15 @@ test('form autosaves', async ({ page }) => {
   await page.goto('/prompts')
   const field = page.getByRole('spinbutton', { name: 'Max length (tokens)' })
   await expect(field).toHaveValue('768')
+  // The prompt itself stays in the tab, never in the saved form.
+  await input(page).fill('a cat in a hat')
   const saved = page.waitForResponse((r) =>
     r.url().endsWith('/api/settings/forms/prompts') && r.request().method() === 'PUT' &&
     r.request().postDataJSON()?.values?.max_tokens === 2048)
   await field.fill('2048')
-  await saved
+  const body = (await saved).request().postDataJSON() as { values: Record<string, unknown> }
+  expect(body).not.toHaveProperty('text')
+  expect(body.values).not.toHaveProperty('text')
   await page.reload()
   await expect(field).toHaveValue('2048')
 })
@@ -343,10 +396,10 @@ test('library lists real rows', async ({ page, request }) => {
   await expect(rows(page, m).first()).toContainText(`${m}-ideo`)
   await expect(flux).toContainText('FLUX.2')
   await expect(flux).toContainText(`#${fluxId} · `)
-  await expect(flux).toContainText(`„idea ${m}-input”`)
+  await expect(flux).toContainText(`· "idea ${m}-input"`)
   await expect(ideo).toContainText('Ideogram JSON')
   await expect(ideo).toContainText(`#${ideoId} · `)
-  await expect(ideo).not.toContainText('„')
+  await expect(ideo).not.toContainText(' · "')
   await expect(flux.getByRole('button', { name: 'Open on canvas', exact: true })).toHaveCount(0)
   await expect(ideo.getByRole('button', { name: 'Open on canvas', exact: true })).toBeVisible()
 
@@ -373,14 +426,18 @@ test('library lists real rows', async ({ page, request }) => {
 
   // The filter looks at the prompt and at the input, on the client.
   const filter = library(page).getByRole('textbox', { name: 'Filter…', exact: true })
+  const count = library(page).getByText(/^Items: /)
+  await expect(count).toHaveText(/^Items: \d+$/)
   await filter.fill(`${m}-INPUT`)
   await expect(rows(page, m)).toHaveCount(1)
   await expect(flux).toHaveCount(1)
+  await expect(count).toHaveText(/^Items: 1 of \d+$/)
   await filter.fill(`${m}-ideo`)
   await expect(rows(page, m)).toHaveCount(1)
   await expect(ideo).toHaveCount(1)
   await filter.fill('')
   await expect(rows(page, m)).toHaveCount(2)
+  await expect(count).toHaveText(/^Items: \d+$/)
 })
 
 test('delete asks and refreshes', async ({ page, request }) => {

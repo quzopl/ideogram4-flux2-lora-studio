@@ -294,8 +294,8 @@ def _job_of_kind(job_id: str, kind: str) -> dict:
     """Job with this id, or 404 when it is missing or of a different kind.
 
     Every job in ``JOBS`` is stamped with ``kind``
-    (``dataset`` | ``crop_auto`` | ``upscale`` | ``prompt``) at creation, because the three
-    shapes are not interchangeable: only dataset results carry ``caption``,
+    (``dataset`` | ``crop_auto`` | ``upscale`` | ``prompt``) at creation, because the
+    kinds are not interchangeable: only dataset results carry ``caption``,
     only crop-auto jobs carry ``crops``, and each kind has its own routes.
     """
     job = JOBS.get(job_id)
@@ -2404,7 +2404,7 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
             "model": used_model, "warnings": v15_lint.lint_v15(draft)}
 
 
-def _generate_prompt(req: PromptRequest, ensure: Callable[[str], str],
+def _generate_prompt(req: PromptRequest | PromptJobRequest, ensure: Callable[[str], str],
                      job: dict | None = None) -> dict:
     """Expand or refine ``req.text`` and save the result to the library.
 
@@ -2428,10 +2428,12 @@ def _generate_prompt(req: PromptRequest, ensure: Callable[[str], str],
     else:
         if job is not None:
             job["state"] = "loading_model"
-        captioner.ensure_loaded(req.model, quant, source=ensure(req.model))
+        source = ensure(req.model)
+        if job is not None:
+            job["current"] = ""  # the download is over; its "100%" must not stay up
+        captioner.ensure_loaded(req.model, quant, source=source)
         if job is not None:
             job["state"] = "generating"
-            job["current"] = ""
         raw = captioner.generate_text(system, text, max_new_tokens=req.max_tokens)
     if req.caption_format in ("ideogram", "aitoolkit"):
         final = prompts.normalize_ideogram_v15(raw)
@@ -2467,11 +2469,12 @@ def _run_prompt_job(job: dict, req: PromptJobRequest) -> None:
         job["state"] = "done"
     except BaseException as e:  # noqa: BLE001 - a dead thread must never leave the job busy
         if isinstance(e, HTTPException):
-            job["error"] = str(e.detail)
+            msg = str(e.detail)
         elif isinstance(e, lmstudio.LMStudioError):
-            job["error"] = f"LM Studio: {e}"
+            msg = f"LM Studio: {e}"
         else:
-            job["error"] = f"Generation error: {e}"
+            msg = f"Generation error: {e}"
+        job["error"] = f"{msg}\n{traceback.format_exc()}"
         job["state"] = "error"
 
 

@@ -174,16 +174,20 @@ LM Studio), quantization and max length are set per run.
 
 Generation runs as a background job: `POST /api/prompt/jobs` returns a
 `job_id`, `GET /api/prompt/jobs/{id}` reports `pending`, `loading_model`,
-`generating`, `done` or `error`. It survives leaving the view. A second GPU
-job gets 409 while one is running, unless the model is an `lmstudio:` one.
+`generating`, `done` or `error`. It survives leaving the view. A prompt job
+on a local model gets 409 while any other job is running (an `lmstudio:` model
+never does). The other GPU starters (`/api/process`, `/api/crop/auto`,
+`/api/upscale/run`, `/api/ideogram/analyze` and the legacy `/api/prompt`) do
+not check yet.
 The prompt text lives only in the browser tab (`sessionStorage` key
 `flux.prompts.run`), not in `settings.json` or presets. The legacy
 `POST /api/prompt` is unchanged.
 
-The result is editable and re-linted on edit (`POST /api/prompts/lint`).
-**Copy** falls back to a temporary textarea on plain http, **Regenerate**
-reruns the job, **Use as input** moves the result into the prompt field and
-**Edit on canvas** (JSON results) opens it in the Bbox editor. Until the v2
+The result is editable; a JSON result is re-linted on edit
+(`POST /api/prompts/lint`). **Copy** falls back to a temporary textarea on
+plain http, **Regenerate** reruns the job (the previous result and its edit
+stay until the new one succeeds), **Use as input** moves the result into the
+prompt field and **Edit on canvas** (JSON results) opens it in the Bbox editor. Until the v2
 Bbox editor exists that is the classic one: the prompt is handed over through
 `sessionStorage` (`flux.bbox.handoff`). The library below has All / FLUX.2 /
 Ideogram (JSON) tabs, a client-side filter, copy, open on canvas, delete with

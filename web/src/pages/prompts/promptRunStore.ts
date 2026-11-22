@@ -83,15 +83,18 @@ export function setPromptText(text: string) {
   update({ ...run, text }, true)
 }
 
-/** A new job: the previous result and its edit are dropped. */
+/** A new job. The previous result and its edit stay until it succeeds, so a failed run loses nothing. */
 export function startPromptJob(jobId: string, format: string) {
-  update({ ...run, jobId, format, result: null, edited: null })
+  update({ ...run, jobId, format })
 }
 
-/** The job is done: its result is kept here, so the job is no longer needed. */
+/**
+ * The job is done: its result replaces the previous one (and the edit of it)
+ * and is kept here, so the job is no longer needed.
+ */
 export function finishPromptJob(jobId: string, result: PromptResult) {
   if (run.jobId !== jobId) return
-  update({ ...run, jobId: null, result: { ...result, format: result.format ?? run.format } })
+  update({ ...run, jobId: null, result: { ...result, format: result.format ?? run.format }, edited: null })
 }
 
 /** Forgets the job (it is gone). */
