@@ -824,10 +824,13 @@ def api_src_image(folder: str, name: str):
 def api_src_size(folder: str, name: str):
     """True size of a source image after EXIF rotation, from the header only."""
     src = _safe_source_path(folder, name)
-    with Image.open(src) as img:
-        w, h = img.size
-        if img.getexif().get(0x0112) in (5, 6, 7, 8):
-            w, h = h, w
+    try:
+        with Image.open(src) as img:
+            w, h = img.size
+            if img.getexif().get(0x0112) in (5, 6, 7, 8):
+                w, h = h, w
+    except OSError as e:  # UnidentifiedImageError is an OSError
+        raise HTTPException(400, "Not a readable image.") from e
     return {"width": w, "height": h}
 
 
@@ -838,6 +841,8 @@ def api_crops_get(folder: str):
 
 @app.put("/api/crops")
 def api_crops_put(req: CropPlanRequest):
+    if not req.folder:
+        raise HTTPException(400, "No folder given.")
     for name, box in req.plan.items():
         if not name or name != Path(name).name or name == "..":
             raise HTTPException(400, f"Invalid file name: {name!r}")

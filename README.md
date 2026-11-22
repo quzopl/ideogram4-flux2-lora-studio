@@ -151,7 +151,7 @@ drag-and-drop upload; HEIC is accepted), shown as a thumbnail grid. The crop
 editor drags and resizes the box with a ratio of Free / 1:1 / 3:4 / 4:3 / 16:9;
 **Auto (Florence)** only moves the box (nothing is kept until Save), **Apply to
 same ratio** copies it to the other photos with that ratio and **Reset**
-undoes it. The **Crop source** (Centre / Auto / Manual) is stored per folder
+restores the default box. The **Crop source** (Centre / Auto / Manual) is stored per folder
 together with the crop plan. **Auto-crop all** asks for confirmation only when
 crops already exist, and photos with no detection keep their crop; **Clear
 crops** drops them all. Crop plans live on the server in
@@ -164,7 +164,7 @@ readable message. Processing shows progress that survives leaving the view.
 Caption edits are kept in the browser tab (`sessionStorage`) until export;
 export sends only the edited captions plus the removed indices. Remove has an
 Undo, and export goes to a folder or a `.zip`. `GET /api/src/size` reports the
-size of the source folder.
+pixel size of one source image after EXIF rotation, read from its header.
 
 Dev server with hot reload (the backend must run on 8123):
 

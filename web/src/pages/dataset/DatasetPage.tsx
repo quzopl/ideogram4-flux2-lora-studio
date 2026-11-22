@@ -77,8 +77,12 @@ export function DatasetPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on entry
   }, [loaded])
 
-  const start = useMutationWithToast((body: ReturnType<typeof toProcessRequest>) =>
-    api<{ job_id: string; total: number }>('/api/process', { method: 'POST', json: body }))
+  // startRun at mutation level: it must run even if the view was left before the answer.
+  const start = useMutationWithToast(
+    (body: ReturnType<typeof toProcessRequest>) =>
+      api<{ job_id: string; total: number }>('/api/process', { method: 'POST', json: body }),
+    { onSuccess: (r, body) => startRun(r.job_id, body.folder) },
+  )
 
   const canProcess = loaded && !scanner.isPending && !uploading && source !== null && source.count > 0 &&
     crops.loaded && !start.isPending && !job.running
@@ -91,7 +95,7 @@ export function DatasetPage() {
       return
     }
     const body = toProcessRequest({ ...form, folder: source.folder }, { plan: crops.plan, mode: crops.mode })
-    start.mutate(body, { onSuccess: (r) => startRun(r.job_id, body.folder) })
+    start.mutate(body)
   }
 
   return (

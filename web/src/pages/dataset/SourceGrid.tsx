@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { Eraser, ImageOff, Scissors, TriangleAlert } from 'lucide-react'
 import { motion } from 'motion/react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { JobProgress } from '@/components/JobProgress'
 import { Button } from '@/components/ui/button'
@@ -10,6 +11,7 @@ import { api, ApiError } from '@/lib/api'
 import { useMutationWithToast } from '@/lib/queries'
 import type { CropAutoJob, CropPlan } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { clearCropAuto, markCropAutoMerged, startCropAuto, useCropAuto } from './cropAutoStore'
 
 const TERMINAL = ['done', 'error']
 
@@ -94,20 +96,25 @@ interface CropBarProps {
 /**
  * "Auto-crop all" and "Clear crops" for the source folder. An auto-crop job
  * merges its boxes into the folder it ran on (even if the source changed
- * meanwhile) and switches that folder to manual crops.
+ * meanwhile) and switches that folder to manual crops. The job is kept in
+ * cropAutoStore, so leaving the view does not lose it.
  */
 export function CropBar({ folder, files, settings }: CropBarProps) {
   const crops = useCropPlan(folder)
-  const [job, setJob] = useState<{ id: string; folder: string } | null>(null)
+  const job = useCropAuto()
   const jobCrops = useCropPlan(job?.folder ?? null)
   const [confirmAuto, setConfirmAuto] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
 
   const existing = files.filter((f) => crops.plan[f]).length
 
-  const start = useMutationWithToast((f: string) =>
-    api<{ job_id: string; total: number }>('/api/crop/auto', { method: 'POST', json: { folder: f, ...settings } }))
-  const run = () => start.mutate(folder, { onSuccess: (r) => setJob({ id: r.job_id, folder }) })
+  // Stored at mutation level: it must happen even if the view was left before the answer.
+  const start = useMutationWithToast(
+    (f: string) =>
+      api<{ job_id: string; total: number }>('/api/crop/auto', { method: 'POST', json: { folder: f, ...settings } }),
+    { onSuccess: (r, f) => startCropAuto(r.job_id, f) },
+  )
+  const run = () => start.mutate(folder)
 
   // Polling survives transient errors and stops on a final state or a 404.
   const isGone = (e: unknown) => e instanceof ApiError && e.status === 404
@@ -121,18 +128,22 @@ export function CropBar({ folder, files, settings }: CropBarProps) {
   const gone = poll.isError && isGone(poll.error)
   const running = start.isPending || (job !== null && !gone && !TERMINAL.includes(state))
 
-  const merged = useRef<string | null>(null)
+  useEffect(() => {
+    if (!gone) return
+    toast.error('The auto-crop job is gone (was the server restarted?)')
+    clearCropAuto()
+  }, [gone])
+
+  // Once per job, also across remounts and reloads (the store keeps `merged`).
   const { merge, setMode, loaded: jobLoaded } = jobCrops
   useEffect(() => {
-    if (state !== 'done' || !job || !jobLoaded || merged.current === job.id) return
-    merged.current = job.id
+    if (state !== 'done' || !job || job.merged || !jobLoaded) return
+    if (!markCropAutoMerged(job.id)) return
     merge(poll.data?.crops ?? {})
     setMode('manual')
   }, [state, job, jobLoaded, poll.data, merge, setMode])
 
-  const error = state === 'error'
-    ? (poll.data?.error ?? '')
-    : gone ? 'The auto-crop job is gone (was the server restarted?)' : ''
+  const error = state === 'error' ? (poll.data?.error ?? '') : ''
   const skipped = poll.data?.skipped ?? []
   const found = Object.keys(poll.data?.crops ?? {}).length
 
@@ -172,7 +183,7 @@ export function CropBar({ folder, files, settings }: CropBarProps) {
             // The backend appends a traceback: the first line shows, the rest is in the title.
             <div title={error || undefined}>
               <JobProgress
-                state={gone ? 'error' : state || 'pending'}
+                state={state || 'pending'}
                 processed={poll.data?.processed ?? 0}
                 total={poll.data?.total ?? 0}
                 current={poll.data?.current}

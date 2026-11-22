@@ -3,14 +3,18 @@
 ``load`` reports ``exists: False`` only for a folder nothing was ever saved
 for; a saved empty plan is ``exists: True``, so a plan adopted from the classic
 UI does not come back after "Clear crops". Writes are atomic (temp file, fsync,
-``os.replace``) under one lock.
+``os.replace``) under one lock. A file that is not a JSON object is moved aside
+to ``crop_plans.json.bad-<time>`` (never overwritten); any other read error
+propagates.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 PATH = Path(os.environ.get("FLUX_PREP_WORK")
@@ -19,6 +23,7 @@ PATH = Path(os.environ.get("FLUX_PREP_WORK")
 MODES = ("center", "auto", "manual")
 
 _lock = threading.Lock()
+log = logging.getLogger(__name__)
 
 
 def _key(folder: str) -> str:
@@ -26,16 +31,28 @@ def _key(folder: str) -> str:
 
 
 def _read(p: Path) -> dict:
+    """The whole file; missing is empty, corrupt is moved aside (call under _lock)."""
     try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
-    return raw if isinstance(raw, dict) else {}
+    try:
+        raw = json.loads(text)
+        if not isinstance(raw, dict):
+            raise ValueError("not an object")
+    except ValueError as e:  # JSONDecodeError is a ValueError
+        bad = p.with_name(f"{p.name}.bad-{int(time.time())}")
+        log.warning("crop plans file %s is unreadable (%s); moved to %s", p, e, bad)
+        p.replace(bad)  # an OSError here propagates: the original is never overwritten
+        return {}
+    return raw
 
 
 def load(folder: str, path: Path | None = None) -> dict:
     p = Path(path) if path is not None else PATH
-    entry = _read(p).get(_key(folder))
+    with _lock:
+        doc = _read(p)
+    entry = doc.get(_key(folder))
     if not isinstance(entry, dict):
         return {"plan": {}, "mode": "center", "exists": False}
     mode = entry.get("mode")

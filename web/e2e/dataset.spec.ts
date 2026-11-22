@@ -74,7 +74,7 @@ async function drop(page: Page, files: Record<string, string>) {
     }
     return t
   }, payload)
-  await page.getByRole('button', { name: /Drop images here/ }).dispatchEvent('drop', { dataTransfer: dt })
+  await page.getByRole('button', { name: /Drop images here|Uploading…/ }).dispatchEvent('drop', { dataTransfer: dt })
 }
 
 test('scan shows the grid', async ({ page }) => {
@@ -118,6 +118,25 @@ test('upload via drop', async ({ page }) => {
   await expect(status(page)).toContainText('Uploaded 2 images.')
   await expect(tiles(page).first().locator('img')).toHaveAttribute('src', `/api/src/thumb?${new URLSearchParams({ folder: r.folder, name: 'one.png' })}`)
   await expect(processBtn(page)).toBeEnabled()
+})
+
+test('a drop while an upload runs is ignored', async ({ page }) => {
+  let uploads = 0
+  let release!: () => void
+  const held = new Promise<void>((r) => (release = r))
+  await page.route('**/api/upload', async (route) => {
+    uploads++
+    await held
+    return route.fulfill({ json: { folder: A, count: 2, files: ['a.png', 'b.png'] } })
+  })
+  await page.goto('/dataset')
+  await drop(page, { 'one.png': 'a.png' })
+  await expect(page.getByRole('button', { name: /Uploading…/ })).toBeVisible()
+  await drop(page, { 'two.png': 'b.png' })
+  release()
+  await expect(status(page)).toContainText('Uploaded 2 images.')
+  await expect(tiles(page)).toHaveCount(2)
+  expect(uploads).toBe(1)
 })
 
 test('upload with no supported files explains why', async ({ page }) => {
@@ -206,6 +225,64 @@ test('auto-crop all confirms and merges', async ({ page, request }) => {
   expect(doc.plan).toEqual({ 'a.png': [10, 20, 200, 150], 'b.png': old })
   expect(bodies[0]).toMatchObject({ folder: A, mode: 'person', resolution: 1024, step: 64, square: false })
   await expect(combo(page, 'Crop source')).toHaveText('Manual (per-image crops)')
+})
+
+/** Goes to Models and waits until the Dataset view has unmounted, then comes back. */
+async function leaveAndReturn(page: Page) {
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  await expect(page.getByRole('heading', { name: 'Dataset', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Auto-crop all' })).toHaveCount(0)
+  await nav.getByRole('link', { name: 'Dataset', exact: true }).click()
+  await expect(page).toHaveURL(/\/dataset$/)
+}
+
+test('auto-crop all is merged after leaving the view', async ({ page, request }) => {
+  await page.route('**/api/crop/auto', (route) => route.fulfill({ json: { job_id: 'nav1', total: 2 } }))
+  const phase = { done: false, polls: 0 }
+  const box: Box = [10, 20, 200, 150]
+  await page.route('**/api/crop/auto/nav1', (route) => {
+    phase.polls++
+    return route.fulfill({
+      json: phase.done
+        ? { state: 'done', total: 2, processed: 2, current: '', error: '', crops: { 'a.png': box }, skipped: [] }
+        : { state: 'processing', total: 2, processed: 1, current: 'b.png', error: '', crops: {}, skipped: [] },
+    })
+  })
+  await page.goto('/dataset')
+  await scan(page, A, 2)
+  await page.getByRole('button', { name: 'Auto-crop all' }).click()
+  await expect.poll(() => phase.polls).toBeGreaterThan(0)
+
+  await leaveAndReturn(page)
+  await expect(tiles(page)).toHaveCount(2)
+  phase.done = true
+  await expect.poll(async () => (await getCrops(request, A)).mode).toBe('manual')
+  expect((await getCrops(request, A)).plan).toEqual({ 'a.png': box })
+  await expect(page.getByText('Auto-crop done: 1 crop computed.')).toBeVisible()
+
+  // Merged once: a later visit does not bring cleared crops back.
+  await page.getByRole('button', { name: 'Clear crops', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Clear', exact: true }).click()
+  await expect.poll(async () => (await getCrops(request, A)).plan).toEqual({})
+  await leaveAndReturn(page)
+  await expect(page.getByText('Auto-crop done: 1 crop computed.')).toBeVisible()
+  await expect(page.getByText('0 of 2 images have a crop.')).toBeVisible()
+  await page.waitForTimeout(800)
+  await expect(page.getByText('0 of 2 images have a crop.')).toBeVisible()
+  expect((await getCrops(request, A)).plan).toEqual({})
+})
+
+test('an unknown auto-crop job (404) is forgotten', async ({ page }) => {
+  await page.route('**/api/crop/auto', (route) => route.fulfill({ json: { job_id: 'gone1', total: 2 } }))
+  await page.route('**/api/crop/auto/gone1', (route) => route.fulfill({ status: 404, json: { detail: 'Unknown job.' } }))
+  await page.goto('/dataset')
+  await scan(page, A, 2)
+  await page.getByRole('button', { name: 'Auto-crop all' }).click()
+  await expect(toasts(page).filter({ hasText: 'The auto-crop job is gone (was the server restarted?)' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Auto-crop all' })).toBeEnabled()
+  expect(await page.evaluate(() => sessionStorage.getItem('flux.dataset.cropAuto'))).toBeNull()
 })
 
 test('clear crops asks first', async ({ page, request }) => {
@@ -543,6 +620,26 @@ test('empty number field is caught before submit', async ({ page }) => {
   await processBtn(page).click()
   await expect.poll(() => bodies.length).toBe(1)
   expect(bodies[0]).toMatchObject({ max_tokens: 1024 })
+})
+
+test('processing starts even if the view is left before the job id arrives', async ({ page }) => {
+  await mockJob(page, [{ state: 'done', results: [result(0), result(1)] }])
+  let release!: () => void
+  const held = new Promise<void>((r) => (release = r))
+  await page.route('**/api/process', async (route) => {
+    await held
+    return route.fulfill({ json: { job_id: 'job1', total: 3 } })
+  })
+  await processA(page)
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Dataset', exact: true })).toHaveCount(0)
+  await expect(tiles(page)).toHaveCount(0)
+  const answered = page.waitForResponse((r) => r.url().endsWith('/api/process'))
+  release()
+  await answered
+  await nav.getByRole('link', { name: 'Dataset', exact: true }).click()
+  await expect(cards(page)).toHaveCount(2)
 })
 
 test('job errors show their first line', async ({ page }) => {

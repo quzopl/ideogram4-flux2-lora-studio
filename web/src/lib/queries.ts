@@ -48,17 +48,19 @@ export function useGpuStatus() {
 /**
  * A mutation that toasts: `success` (if given) when it resolves, the error's
  * `detail` when it fails. Either way the `invalidate` keys (e.g. ["settings"],
- * ["store-models"], ["gpus"]) are refetched afterwards.
+ * ["store-models"], ["gpus"]) are refetched afterwards. `onSuccess` runs even
+ * if the component unmounted meanwhile (unlike a callback passed to `mutate`).
  */
 export function useMutationWithToast<TVars = void, TData = unknown>(
   fn: (vars: TVars) => Promise<TData>,
-  opts: { success?: string; invalidate?: QueryKey[] } = {},
+  opts: { success?: string; invalidate?: QueryKey[]; onSuccess?: (data: TData, vars: TVars) => void } = {},
 ) {
   const qc = useQueryClient()
   return useMutation<TData, Error, TVars>({
     mutationFn: fn,
-    onSuccess: () => {
+    onSuccess: (data, vars) => {
       if (opts.success) toast.success(opts.success)
+      opts.onSuccess?.(data, vars)
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.detail : err.message)

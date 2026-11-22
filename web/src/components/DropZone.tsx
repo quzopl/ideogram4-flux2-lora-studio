@@ -37,7 +37,8 @@ export function DropZone({ onUploaded, onEmpty, accept = 'image/*', disabled = f
 
   const send = (list: FileList | null) => {
     const files = Array.from(list ?? [])
-    if (!files.length || disabled) return
+    // One upload at a time: a drop while one runs is ignored, like a click.
+    if (!files.length || disabled || upload.isPending) return
     upload.mutate(files, {
       onSuccess: (r) => {
         if (r.count > 0) onUploaded(r.folder, r.count, r.files)

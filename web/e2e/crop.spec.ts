@@ -153,6 +153,20 @@ test('apply to same ratio', async ({ page, request }) => {
   expect(a[0]).toBe(10)
 })
 
+test('apply to same ratio keeps this image when sizes cannot be read', async ({ page, request }) => {
+  await page.route((url) => url.pathname === '/api/src/size', (route) =>
+    route.fulfill({ status: 400, json: { detail: 'Not a readable image.' } }))
+  await page.goto(playground())
+  const dialog = await openEditor(page, 'a.png')
+  await dragHandle(page, 'se', -50, -50)
+  await page.keyboard.press('Shift+ArrowRight')
+  await dialog.getByRole('button', { name: 'Apply to same ratio', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Applied to 1 of 2 images' })).toBeVisible()
+  await expect.poll(async () => Object.keys((await getCrops(request)).plan)).toEqual(['a.png'])
+  expect((await getCrops(request)).plan['a.png'][0]).toBe(10)
+})
+
 test('square locks ratio', async ({ page, request }) => {
   await page.goto(playground(SRC, { cropSquare: '1' }))
   const dialog = await openEditor(page, 'a.png')

@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -62,3 +63,44 @@ def test_src_size_reads_header_with_exif(tmp_path):
     assert r.json() == {"width": 20, "height": 40}
     bad = client().get("/api/src/size", params={"folder": str(tmp_path), "name": "../r.jpg"})
     assert bad.status_code == 400
+
+
+def test_corrupt_file_is_moved_aside_not_destroyed(tmp_path):
+    p = tmp_path / "plans.json"
+    original = b'{"/some/folder": {"plan": {"a.png": [0, 0, 5, 5]}, "mode": "manual"'
+    p.write_bytes(original)
+    crop_store.save(str(tmp_path), {"x.png": [1, 2, 3, 4]}, "manual", p)
+    bad = list(tmp_path.glob("plans.json.bad-*"))
+    assert len(bad) == 1
+    assert bad[0].read_bytes() == original
+    assert crop_store.load(str(tmp_path), p)["plan"] == {"x.png": [1, 2, 3, 4]}
+
+
+def test_non_object_file_is_moved_aside_on_load(tmp_path):
+    p = tmp_path / "plans.json"
+    p.write_text("[1, 2]", encoding="utf-8")
+    assert crop_store.load(str(tmp_path), p)["exists"] is False
+    assert [b.read_text() for b in tmp_path.glob("plans.json.bad-*")] == ["[1, 2]"]
+
+
+def test_unreadable_file_propagates_and_is_kept(tmp_path):
+    p = tmp_path / "plans.json"
+    p.mkdir()  # reading a directory raises an OSError that is not "missing"
+    with pytest.raises(OSError):
+        crop_store.save(str(tmp_path), {}, "center", p)
+    with pytest.raises(OSError):
+        crop_store.load(str(tmp_path), p)
+    assert p.is_dir()
+    assert not list(tmp_path.glob("plans.json.bad-*"))
+
+
+def test_src_size_of_unreadable_image_is_400(tmp_path):
+    (tmp_path / "x.jpg").write_bytes(b"not an image")
+    r = client().get("/api/src/size", params={"folder": str(tmp_path), "name": "x.jpg"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Not a readable image."
+
+
+def test_put_crops_rejects_empty_folder():
+    r = client().put("/api/crops", json={"folder": "", "plan": {}, "mode": "center"})
+    assert r.status_code == 400

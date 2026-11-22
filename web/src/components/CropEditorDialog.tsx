@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, RotateCcw, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { SpringDialogContent } from '@/components/SpringDialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -183,7 +184,7 @@ function Editor({ folder, name, files, square, autoCrop, onClose }: CropEditorDi
   }
 
   // The same fractional box on every file of (nearly) the same aspect ratio;
-  // one light size request per file.
+  // one light size request per file. This image always gets its own box.
   const applyToSameRatio = async () => {
     if (!box || !src) return
     setApplying(true)
@@ -194,11 +195,21 @@ function Editor({ folder, name, files, square, autoCrop, onClose }: CropEditorDi
     )
     if (!alive.current) return
     const boxes: CropPlan = {}
+    let failed = 0
     sizes.forEach((res, i) => {
-      if (res.status !== 'fulfilled') return
+      if (res.status !== 'fulfilled') {
+        if (files[i] !== name) failed++
+        return
+      }
       const { width: w, height: h } = res.value
       if (w > 0 && h > 0 && Math.abs(w / h - ar) <= SAME_RATIO) boxes[files[i]] = fromFractional(f, w, h)
     })
+    boxes[name] = roundBox(box)
+    if (failed > 0) {
+      toast.warning(
+        `Applied to ${Object.keys(boxes).length} of ${files.length} images: the size of ${failed === 1 ? '1 image' : `${failed} images`} could not be read.`,
+      )
+    }
     crops.merge(boxes)
     crops.setMode('manual')
     onClose()
