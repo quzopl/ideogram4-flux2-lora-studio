@@ -415,6 +415,9 @@ function Status({ pending, jobId, job, outcome }: {
 
 /** The rendered images, newest first; each opens its full PNG from the ComfyUI gallery. */
 function Results({ images }: { images: RenderImage[] }) {
+  // The images shown on entering the view are there already; only later ones animate in.
+  // (Not AnimatePresence's initial={false}: the grid itself mounts with the first batch.)
+  const [atEntry] = useState(() => new Set(images.map((i) => i.id)))
   if (!images.length) return null
   return (
     <div className="flex flex-col gap-3 border-t border-line pt-4">
@@ -427,8 +430,7 @@ function Results({ images }: { images: RenderImage[] }) {
         </Button>
       </div>
       <ul className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-        {/* Only images that arrive animate in (not the list shown on entering the view), one after another. */}
-        <AnimatePresence initial={false}>
+        <AnimatePresence>
           {images.map((img, i) => {
             const url = `/api/comfy/gallery/${encodeURIComponent(img.id)}`
             return (
@@ -436,8 +438,8 @@ function Results({ images }: { images: RenderImage[] }) {
                 key={img.id}
                 data-testid="render-result"
                 layout
-                initial={{ opacity: 0, y: 10, scale: 0.97 }}
-                // The stagger is for the entrance only; moving aside for newer images is not delayed.
+                initial={atEntry.has(img.id) ? false : { opacity: 0, y: 10, scale: 0.97 }}
+                // New images come in one after another; moving aside for newer ones is not delayed.
                 animate={{ opacity: 1, y: 0, scale: 1, transition: { ...SPRING, delay: Math.min(i, 8) * 0.06 } }}
                 exit={{ opacity: 0, scale: 0.97 }}
                 transition={SPRING}
