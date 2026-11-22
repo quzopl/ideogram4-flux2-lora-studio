@@ -1,6 +1,6 @@
 import { ClipboardPaste } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
@@ -35,6 +35,31 @@ export function BboxPage() {
   // Kept after the dialog closes, so its title does not change while it animates out.
   const [pending, setPending] = useState<PendingLoad | null>(null)
   const [confirming, setConfirming] = useState(false)
+  // Whether the dialog is asking now (a ref: loads come from promises and effects of
+  // older renders), and the loads that came meanwhile: an open question is never swapped.
+  const asking = useRef(false)
+  const queued = useRef<PendingLoad[]>([])
+
+  const offer = (p: PendingLoad) => {
+    if (asking.current) queued.current.push(p)
+    else if (isDefaultDoc(getDraft().doc)) p.apply()
+    else {
+      asking.current = true
+      setPending(p)
+      setConfirming(true)
+    }
+  }
+  const onConfirmOpen = (open: boolean) => {
+    asking.current = open
+    setConfirming(open)
+  }
+  // Once the question is answered (and a Replace applied), the waiting loads are offered
+  // in turn (one that needs no question is applied and the next one follows).
+  useEffect(() => {
+    while (!confirming && !asking.current && queued.current.length) offer(queued.current.shift()!)
+    // `offer` only reads refs and the store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirming])
 
   /** Puts a normalised prompt on the canvas, asking first when that would replace work. */
   const load = (n: Normalized, title: string, done?: () => void) => {
@@ -46,11 +71,7 @@ export function BboxPage() {
       if (n.legacy_style) toast.warning(LEGACY_WARNING, { duration: 12000 })
       done?.()
     }
-    if (isDefaultDoc(getDraft().doc)) apply()
-    else {
-      setPending({ title, apply })
-      setConfirming(true)
-    }
+    offer({ title, apply })
   }
 
   // A prompt handed over by the Prompt studio is claimed in an initializer (StrictMode
@@ -71,7 +92,8 @@ export function BboxPage() {
   }, [])
 
   // From image: a finished analysis is offered for the canvas once (also across
-  // remounts and reloads); refused, it waits behind Load draft.
+  // remounts and reloads), not while another question is open; refused, it waits
+  // behind Load draft.
   const fromImage = useFromImage()
   const drop = useImageDrop(fromImage.analyze)
   const loadDraft = (r: AnalyzeResult) =>
@@ -80,10 +102,10 @@ export function BboxPage() {
       toast.success(`Draft ready: ${r.elements} elements (${r.model}).`))
   const { result, applied } = fromImage.run
   useEffect(() => {
-    if (result && !applied && markAnalyzeApplied()) loadDraft(result)
+    if (result && !applied && !confirming && markAnalyzeApplied()) loadDraft(result)
     // `loadDraft` only reads the store at that time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result, applied])
+  }, [result, applied, confirming])
 
   const setRatio = (aspect_ratio: string) => setDoc((d) => ({ ...d, aspect_ratio }))
   const add = (type: ElType) => {
@@ -149,7 +171,7 @@ export function BboxPage() {
 
       <ConfirmDialog
         open={confirming}
-        onOpenChange={setConfirming}
+        onOpenChange={onConfirmOpen}
         title={pending?.title ?? ''}
         action="Replace"
         onConfirm={() => pending?.apply()}

@@ -83,6 +83,11 @@ export function failAnalyze(jobId: string, error: string) {
   if (run.jobId === jobId) update({ ...run, jobId: null, error })
 }
 
+/** Hides the last error (and its photo). */
+export function dismissAnalyzeError() {
+  if (run.error) update({ ...run, error: '', photo: run.jobId ? run.photo : null })
+}
+
 /** Forgets the job (it is gone). */
 export function dropAnalyze(jobId: string) {
   if (run.jobId === jobId) update({ ...run, jobId: null, photo: null })

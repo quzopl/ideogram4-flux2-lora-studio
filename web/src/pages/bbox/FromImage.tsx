@@ -1,4 +1,4 @@
-import { Camera, ImageDown } from 'lucide-react'
+import { Camera, ImageDown, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import { api } from '@/lib/api'
 import { useMutationWithToast } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import {
+  dismissAnalyzeError,
   dropAnalyze,
   failAnalyze,
   finishAnalyze,
@@ -252,6 +253,18 @@ export function FromImagePanel({ fi }: { fi: FromImageState }) {
               error={error ? error.split('\n')[0] : undefined}
             />
           </div>
+          {error && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Dismiss the error"
+              title="Dismiss"
+              className="shrink-0 self-start text-text-dim"
+              onClick={dismissAnalyzeError}
+            >
+              <X />
+            </Button>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

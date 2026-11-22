@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { APIRequestContext, Page } from '@playwright/test'
 import fs from 'node:fs'
 import { expect, test } from './fixtures.ts'
 
@@ -854,7 +854,93 @@ test('analysis error shows first line', async ({ page }) => {
   await expect(page.getByTestId('bbox-json')).toHaveText(before!)
   expect(await analyzeRun(page)).toMatchObject({ jobId: null })
 
-  // The error is kept for the tab.
+  // The error is kept for the tab until dismissed.
   await page.reload()
   await expect(progress).toContainText('Image analysis failed: CUDA out of memory.')
+  await page.getByRole('button', { name: 'Dismiss the error', exact: true }).click()
+  await expect(progress).toHaveCount(0)
+  expect(await analyzeRun(page)).toMatchObject({ jobId: null, error: '' })
+  await page.reload()
+  await expect(page.getByTestId('bbox-json')).toBeVisible()
+  await expect(progress).toHaveCount(0)
+})
+
+/** A v15 prompt in the real library (a unique marker in its HLD); returns its row's marker. */
+async function libraryPrompt(request: APIRequestContext, marker: string) {
+  const prompt = JSON.stringify({
+    aspect_ratio: '1:1',
+    high_level_description: `${marker} studio prompt`,
+    compositional_deconstruction: { background: 'A plain grey wall.', elements: [] },
+  })
+  const res = await request.post('/api/prompts/library', { data: { category: 'ideogram', prompt, input_text: '', action: 'manual' } })
+  expect(res.ok()).toBe(true)
+}
+
+/** From the Prompt studio library: Open on canvas (the studio hands the prompt to /bbox). */
+async function handOffFromStudio(page: Page, marker: string) {
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Prompt studio', exact: true }).click()
+  await expect(page.getByTestId('bbox-json')).toHaveCount(0)
+  await page.getByRole('region', { name: 'Prompt library', exact: true }).getByTestId('library-row')
+    .filter({ hasText: marker }).getByRole('button', { name: 'Open on canvas', exact: true }).click()
+  await expect(page).toHaveURL(/\/bbox$/)
+}
+
+const STUDIO_TITLE = 'Replace the current canvas with the prompt from the studio?'
+const DRAFT_TITLE = 'Replace the current canvas with the image draft?'
+
+test('a draft that finishes during the studio confirm waits for it', async ({ page, request }) => {
+  const m = `marker-drafthandoff-${Date.now()}`
+  await libraryPrompt(request, m)
+  let finished = false
+  await mockAnalyze(page, () => (finished ? analyzed() : { state: 'analyzing' }))
+  await page.goto('/bbox')
+  await hld(page).fill('Keep me.')
+  await expect.poll(async () => (await caption(page)).high_level_description).toBe('Keep me.')
+  await pickPhoto(page)
+  await expect(page.getByTestId('job-progress')).toContainText('Analyzing…')
+
+  await handOffFromStudio(page, m)
+  const studio = page.getByRole('dialog', { name: STUDIO_TITLE })
+  await expect(studio).toBeVisible()
+  finished = true
+  // The result arrives (and is kept) while the studio question stays as it was.
+  await expect.poll(async () => (await analyzeRun(page))?.jobId).toBeNull()
+  await expect(studio).toBeVisible()
+  await expect(page.getByRole('dialog', { name: DRAFT_TITLE })).toHaveCount(0)
+
+  await studio.getByRole('button', { name: 'Replace', exact: true }).click()
+  await expect(page.getByText('Prompt loaded for editing.')).toBeVisible()
+  await expect.poll(async () => (await caption(page)).high_level_description).toBe(`${m} studio prompt`)
+  // Then the draft is offered.
+  const draft = page.getByRole('dialog', { name: DRAFT_TITLE })
+  await draft.getByRole('button', { name: 'Replace', exact: true }).click()
+  await expect.poll(() => caption(page)).toEqual(DRAFT)
+})
+
+test('a studio handoff during the draft confirm waits for it', async ({ page, request }) => {
+  const m = `marker-handoffdraft-${Date.now()}`
+  await libraryPrompt(request, m)
+  let finished = false
+  await mockAnalyze(page, () => (finished ? analyzed() : { state: 'analyzing' }))
+  await page.goto('/bbox')
+  await hld(page).fill('Keep me.')
+  await expect.poll(async () => (await caption(page)).high_level_description).toBe('Keep me.')
+  await pickPhoto(page)
+  await expect(page.getByTestId('job-progress')).toContainText('Analyzing…')
+
+  // Done while away; back through a studio handoff, both want the canvas.
+  finished = true
+  await handOffFromStudio(page, m)
+  const draft = page.getByRole('dialog', { name: DRAFT_TITLE })
+  await expect(draft).toBeVisible()
+  await page.waitForTimeout(500)
+  await expect(draft).toBeVisible()
+  await draft.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect((await caption(page)).high_level_description).toBe('Keep me.')
+
+  const studio = page.getByRole('dialog', { name: STUDIO_TITLE })
+  await studio.getByRole('button', { name: 'Replace', exact: true }).click()
+  await expect.poll(async () => (await caption(page)).high_level_description).toBe(`${m} studio prompt`)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
 })
