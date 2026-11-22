@@ -319,6 +319,21 @@ function openViewFromHash() {
 window.addEventListener("load", openViewFromHash);
 window.addEventListener("hashchange", openViewFromHash);
 
+// A prompt the v2 UI sent to the bbox editor (web/src/lib/bboxHandoff.ts).
+// Read once on "load": BboxEditor binds its UI on DOMContentLoaded, and the
+// view must be shown before open() so the canvas can measure itself.
+function openBboxHandoff() {
+  let json = null;
+  try {
+    json = sessionStorage.getItem("flux.bbox.handoff");
+    sessionStorage.removeItem("flux.bbox.handoff");
+  } catch (e) { /* storage blocked: nothing was handed over */ }
+  if (json === null || !window.BboxEditor) return;
+  switchView("bbox");
+  window.BboxEditor.open(json);
+}
+window.addEventListener("load", openBboxHandoff);
+
 // --------------------------------------------------------------------------- //
 // Tabs
 // --------------------------------------------------------------------------- //

@@ -9,6 +9,7 @@ import { useSavedForm } from '@/hooks/useAutosave'
 import { useJobPoll } from '@/hooks/useJobPoll'
 import { api } from '@/lib/api'
 import { useMutationWithToast } from '@/lib/queries'
+import { LibraryPanel } from './LibraryPanel'
 import { PROMPT_DEFAULTS, toJobBody, type PromptForm as Form } from './promptForm'
 import { PromptForm } from './PromptForm'
 import {
@@ -53,6 +54,7 @@ export function PromptsPage() {
     if (data?.state === 'done' && data.result) {
       finishPromptJob(jobId, data.result)
       qc.invalidateQueries({ queryKey: ['gpu'] })
+      qc.invalidateQueries({ queryKey: ['prompt-library'] })
     } else if (job.isGone) {
       toast.error('The prompt job is gone (was the server restarted?)')
       dropPromptJob(jobId)
@@ -181,6 +183,8 @@ export function PromptsPage() {
           )}
         </AnimatePresence>
       </div>
+
+      <LibraryPanel />
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from './fixtures.ts'
 
 // The form lives on the server and outlives a test.
@@ -280,8 +280,9 @@ test('flux result has no findings or canvas button', async ({ page }) => {
   await expect(output(page)).toHaveValue('A cat.')
   await expect(page.getByTestId('v15-findings')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Edit on canvas', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Copy', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toBeVisible()
+  const result = page.getByRole('region', { name: 'Result', exact: true })
+  await expect(result.getByRole('button', { name: 'Copy', exact: true })).toBeVisible()
+  await expect(result.getByRole('button', { name: 'Regenerate', exact: true })).toBeVisible()
 })
 
 test('use as input switches to refine', async ({ page }) => {
@@ -306,4 +307,151 @@ test('form autosaves', async ({ page }) => {
   await saved
   await page.reload()
   await expect(field).toHaveValue('2048')
+})
+
+// The library is a real table shared by the whole e2e run: each test adds rows
+// with its own marker and looks only at those.
+
+/** Adds a row through the real API; returns its id. */
+async function addToLibrary(request: APIRequestContext, category: 'flux' | 'ideogram', prompt: string, input_text = '') {
+  const res = await request.post('/api/prompts/library', { data: { category, prompt, input_text, action: 'manual' } })
+  expect(res.ok()).toBe(true)
+  return ((await res.json()) as { id: number }).id
+}
+
+const ideogramWith = (hld: string) => JSON.stringify({
+  aspect_ratio: '1:1',
+  high_level_description: hld,
+  compositional_deconstruction: { background: 'A plain grey wall.', elements: [] },
+})
+
+const library = (page: Page) => page.getByRole('region', { name: 'Prompt library', exact: true })
+const rows = (page: Page, text: string) => library(page).getByTestId('library-row').filter({ hasText: text })
+const libTab = (page: Page, name: string) => library(page).getByRole('button', { name, exact: true })
+
+test('library lists real rows', async ({ page, request }) => {
+  const m = `marker-list-${Date.now()}`
+  const fluxId = await addToLibrary(request, 'flux', `A ${m}-flux photo of a cat.`, `idea ${m}-input`)
+  const ideoId = await addToLibrary(request, 'ideogram', ideogramWith(`${m}-ideo apple`))
+  await page.goto('/prompts')
+
+  await expect(libTab(page, 'All')).toHaveAttribute('aria-pressed', 'true')
+  await expect(rows(page, m)).toHaveCount(2)
+  const flux = rows(page, `${m}-flux`)
+  const ideo = rows(page, `${m}-ideo`)
+  // Newest first.
+  await expect(rows(page, m).first()).toContainText(`${m}-ideo`)
+  await expect(flux).toContainText('FLUX.2')
+  await expect(flux).toContainText(`#${fluxId} · `)
+  await expect(flux).toContainText(`„idea ${m}-input”`)
+  await expect(ideo).toContainText('Ideogram JSON')
+  await expect(ideo).toContainText(`#${ideoId} · `)
+  await expect(ideo).not.toContainText('„')
+  await expect(flux.getByRole('button', { name: 'Open on canvas', exact: true })).toHaveCount(0)
+  await expect(ideo.getByRole('button', { name: 'Open on canvas', exact: true })).toBeVisible()
+
+  // A click on the prompt expands it, another collapses it.
+  const text = flux.getByRole('button', { name: /^A marker-list-/ })
+  await expect(text).toHaveAttribute('aria-expanded', 'false')
+  await text.click()
+  await expect(text).toHaveAttribute('aria-expanded', 'true')
+  await text.click()
+  await expect(text).toHaveAttribute('aria-expanded', 'false')
+
+  // Category tabs ask the server.
+  const listed = page.waitForResponse((r) => r.url().includes('/api/prompts/library?category=ideogram'))
+  await libTab(page, 'Ideogram (JSON)').click()
+  await listed
+  await expect(libTab(page, 'Ideogram (JSON)')).toHaveAttribute('aria-pressed', 'true')
+  await expect(rows(page, m)).toHaveCount(1)
+  await expect(ideo).toHaveCount(1)
+  await libTab(page, 'FLUX.2').click()
+  await expect(rows(page, m)).toHaveCount(1)
+  await expect(flux).toHaveCount(1)
+  await libTab(page, 'All').click()
+  await expect(rows(page, m)).toHaveCount(2)
+
+  // The filter looks at the prompt and at the input, on the client.
+  const filter = library(page).getByRole('textbox', { name: 'Filter…', exact: true })
+  await filter.fill(`${m}-INPUT`)
+  await expect(rows(page, m)).toHaveCount(1)
+  await expect(flux).toHaveCount(1)
+  await filter.fill(`${m}-ideo`)
+  await expect(rows(page, m)).toHaveCount(1)
+  await expect(ideo).toHaveCount(1)
+  await filter.fill('')
+  await expect(rows(page, m)).toHaveCount(2)
+})
+
+test('delete asks and refreshes', async ({ page, request }) => {
+  const m = `marker-delete-${Date.now()}`
+  const id = await addToLibrary(request, 'flux', `A ${m} prompt.`)
+  await page.goto('/prompts')
+  const row = rows(page, m)
+  await expect(row).toHaveCount(1)
+
+  await row.getByRole('button', { name: 'Delete', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText(`Delete prompt #${id}?`)
+  await expect(dialog).toContainText('This cannot be undone.')
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(row).toHaveCount(1)
+
+  await row.getByRole('button', { name: 'Delete', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(row).toHaveCount(0)
+  const all = (await (await request.get('/api/prompts/library?category=all')).json()) as { prompts: { id: number }[] }
+  expect(all.prompts.some((p) => p.id === id)).toBe(false)
+})
+
+test('new prompt appears after generation', async ({ page, request }) => {
+  const m = `marker-generated-${Date.now()}`
+  let finished = false
+  await mockJobs(page, () => (finished ? done(`A ${m} prompt.`) : { state: 'generating' }))
+  const listed = page.waitForResponse((r) => r.url().includes('/api/prompts/library?') && r.ok())
+  await generate(page)
+  await listed
+  await expect(page.getByTestId('job-progress')).toContainText('Generating…')
+  // The server saves the row before the job reports done.
+  await addToLibrary(request, 'flux', `A ${m} prompt.`)
+  await page.waitForTimeout(300)
+  await expect(rows(page, m)).toHaveCount(0)
+  finished = true
+  await expect(output(page)).toHaveValue(`A ${m} prompt.`)
+  await expect(rows(page, m)).toHaveCount(1)
+})
+
+test('export link targets active category', async ({ page }) => {
+  await page.goto('/prompts')
+  const link = library(page).getByRole('link', { name: 'Export .sql', exact: true })
+  await expect(link).toHaveAttribute('href', '/api/prompts/library/export?category=all')
+  await expect(link).toHaveAttribute('download', /.*/)
+  await libTab(page, 'Ideogram (JSON)').click()
+  await expect(link).toHaveAttribute('href', /category=ideogram/)
+})
+
+test('open on canvas hands off to the classic bbox editor', async ({ page, request }) => {
+  const m = `marker-canvas-${Date.now()}`
+  await addToLibrary(request, 'ideogram', ideogramWith(`${m} pear on a plate`))
+  await page.goto('/prompts')
+  await rows(page, m).getByRole('button', { name: 'Open on canvas', exact: true }).click()
+  await expect(page).toHaveURL(/\/legacy\/#bbox$/)
+  await expect(page.locator('#view-bbox')).toBeVisible()
+  await expect(page.locator('#bxStatus')).toHaveText('Prompt loaded for editing.')
+  expect(await page.evaluate(() => sessionStorage.getItem('flux.bbox.handoff'))).toBeNull()
+  const json = await page.evaluate(() =>
+    (globalThis as unknown as { BboxEditor: { getJson(): string } }).BboxEditor.getJson())
+  expect(json).toContain(`${m} pear on a plate`)
+})
+
+test('copy falls back without clipboard API', async ({ page, request }) => {
+  // A getter on the prototype: a plain `delete navigator.clipboard` would not hide it.
+  await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { get: () => undefined }))
+  const m = `marker-copy-${Date.now()}`
+  await addToLibrary(request, 'flux', `A ${m} prompt.`)
+  await page.goto('/prompts')
+  expect(await page.evaluate(() => (navigator as unknown as { clipboard?: unknown }).clipboard)).toBeUndefined()
+  await rows(page, m).getByRole('button', { name: 'Copy', exact: true }).click()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Copied' })).toBeVisible()
 })
