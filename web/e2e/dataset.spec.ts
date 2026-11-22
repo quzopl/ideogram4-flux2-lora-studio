@@ -139,7 +139,9 @@ test('settings autosave and defaults', async ({ page }) => {
   await expect(combo(page, 'Bucket step (px)')).toHaveText('64')
   await expect(combo(page, 'Upscale model')).toHaveText('Off (plain LANCZOS)')
 
-  const saved = page.waitForResponse((r) => r.url().endsWith('/api/settings/forms/dataset') && r.request().method() === 'PUT')
+  // Filling the default VLM model can save too; wait for the save with the new resolution.
+  const saved = page.waitForResponse((r) =>
+    r.url().endsWith('/api/settings/forms/dataset') && r.request().method() === 'PUT' && r.request().postData()!.includes('"resolution":1280'))
   await combo(page, 'Target resolution').click()
   await page.getByRole('option', { name: '1280', exact: true }).click()
   expect((await saved).ok()).toBe(true)

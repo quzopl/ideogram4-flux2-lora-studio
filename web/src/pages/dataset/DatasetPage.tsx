@@ -92,7 +92,8 @@ export function DatasetPage() {
             cropMode={crops.mode}
             onCropMode={crops.setMode}
             cropReady={crops.loaded}
-            planEmpty={Object.keys(crops.plan).length === 0}
+            // Crops of files no longer in the folder do not count (plans are never pruned).
+            planEmpty={!source?.files.some((f) => crops.plan[f])}
           />
           {/* The run itself comes with the processing step. */}
           <Button
