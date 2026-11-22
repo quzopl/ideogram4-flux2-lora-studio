@@ -3,6 +3,7 @@ import { ClassicPlaceholder } from '@/pages/ClassicPlaceholder'
 import { DatasetPage } from '@/pages/dataset/DatasetPage'
 import { ModelsPage } from '@/pages/ModelsPage'
 import { Playground } from '@/pages/Playground'
+import { PromptsPage } from '@/pages/prompts/PromptsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { UpscalePage } from '@/pages/UpscalePage'
 
@@ -12,7 +13,7 @@ export function AppRoutes({ location }: { location: Location }) {
     <Routes location={location}>
       <Route index element={<Navigate to="/upscale" replace />} />
       <Route path="/dataset" element={<DatasetPage />} />
-      <Route path="/prompts" element={<ClassicPlaceholder view="prompts" title="Prompt studio" />} />
+      <Route path="/prompts" element={<PromptsPage />} />
       <Route path="/bbox" element={<ClassicPlaceholder view="bbox" title="Bbox editor" />} />
       <Route path="/comfy" element={<ClassicPlaceholder view="comfy" title="ComfyUI" />} />
       <Route path="/upscale" element={<UpscalePage />} />

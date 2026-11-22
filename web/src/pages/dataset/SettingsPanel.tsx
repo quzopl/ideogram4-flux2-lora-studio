@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
+import { useCallback, useId, type ReactNode } from 'react'
 import { ModelSelect } from '@/components/ModelSelect'
+import { NumberInput } from '@/components/NumberInput'
 import { PresetBar } from '@/components/PresetBar'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { VlmSelect } from '@/components/VlmSelect'
 import type { CropMode } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { OPTIONS, presetValues, type DatasetForm } from './datasetForm'
-import { VlmSelect } from './VlmSelect'
 
 function Field({ label, htmlFor, hint, wide, children }: {
   label: string
@@ -47,59 +48,6 @@ function Choice({ id, label, options, value, onChange, disabled }: {
 }
 
 export type NumberField = 'jpg_quality' | 'max_tokens'
-
-/**
- * A whole-number input that only reports valid numbers (no NaN is ever saved).
- * Text that is not one (empty, a fraction, out of range) stays as typed, is
- * marked invalid with its error, and is reported through `onValidity`.
- */
-function NumberInput({ id, field, value, onChange, onValidity, min, max, step, title }: {
-  id: string
-  field: NumberField
-  value: number
-  onChange: (v: number) => void
-  onValidity: (field: NumberField, error: string) => void
-  min: number
-  max: number
-  step?: number
-  title?: string
-}) {
-  const [text, setText] = useState(String(value))
-  // A value set elsewhere (a preset, the saved form) replaces the typed text.
-  const [shown, setShown] = useState(value)
-  if (value !== shown) {
-    setShown(value)
-    setText(String(value))
-  }
-  const n = text.trim() === '' ? NaN : Number(text)
-  const error = Number.isInteger(n) && n >= min && n <= max ? '' : `Enter a whole number from ${min} to ${max}`
-  useEffect(() => onValidity(field, error), [field, error, onValidity])
-  return (
-    <>
-      <Input
-        id={id}
-        type="number"
-        inputMode="numeric"
-        min={min}
-        max={max}
-        step={step}
-        title={title}
-        value={text}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={error ? `${id}-error` : undefined}
-        onChange={(e) => {
-          setText(e.target.value)
-          const v = e.target.valueAsNumber
-          if (Number.isInteger(v) && v >= min && v <= max) onChange(v)
-        }}
-        // A valid number is shown as saved ("0100" -> "100"); an invalid one stays to be fixed.
-        onBlur={() => !error && setText(String(value))}
-        className="font-mono"
-      />
-      {error && <p id={`${id}-error`} className="text-xs text-danger">{error}</p>}
-    </>
-  )
-}
 
 function Toggle({ id, label, checked, onChange }: { id: string; label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
