@@ -9,7 +9,9 @@ import { BboxCanvas } from '@/editors/bbox/BboxCanvas'
 import { addEl, fromCaption, isDefaultDoc, parseRatio, type ElType } from '@/editors/bbox/model'
 import { claimBboxHandoff, takeBboxHandoff } from '@/lib/bboxHandoff'
 import { cn } from '@/lib/utils'
+import { markAnalyzeApplied, type AnalyzeResult } from './analyzeStore'
 import { flushDraft, getDraft, useBboxDoc } from './bboxStore'
+import { FromImagePanel, FromImageTools, useFromImage, useImageDrop } from './FromImage'
 import { errorText, LEGACY_WARNING, normalizePrompt, type Normalized } from './normalize'
 import { PasteBar } from './PasteBar'
 import { SidePanel } from './SidePanel'
@@ -68,6 +70,21 @@ export function BboxPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // From image: a finished analysis is offered for the canvas once (also across
+  // remounts and reloads); refused, it waits behind Load draft.
+  const fromImage = useFromImage()
+  const drop = useImageDrop(fromImage.analyze)
+  const loadDraft = (r: AnalyzeResult) =>
+    // The job's JSON is already a normalised v15 prompt.
+    load({ prompt: r.json, legacy_style: false }, 'Replace the current canvas with the image draft?', () =>
+      toast.success(`Draft ready: ${r.elements} elements (${r.model}).`))
+  const { result, applied } = fromImage.run
+  useEffect(() => {
+    if (result && !applied && markAnalyzeApplied()) loadDraft(result)
+    // `loadDraft` only reads the store at that time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result, applied])
+
   const setRatio = (aspect_ratio: string) => setDoc((d) => ({ ...d, aspect_ratio }))
   const add = (type: ElType) => {
     setDoc((d) => addEl(d, type))
@@ -102,7 +119,9 @@ export function BboxPage() {
               <ClipboardPaste />
               Paste JSON
             </Button>
+            <FromImageTools fi={fromImage} onLoadDraft={loadDraft} />
           </div>
+          <FromImagePanel fi={fromImage} />
           <AnimatePresence initial={false}>
             {pasting && (
               <PasteBar
@@ -114,7 +133,15 @@ export function BboxPage() {
               />
             )}
           </AnimatePresence>
-          <BboxCanvas doc={doc} selected={selected} onSelect={setSelected} onChange={setDoc} />
+          <div
+            data-testid="bbox-drop"
+            onDragOver={drop.onDragOver}
+            onDragLeave={drop.onDragLeave}
+            onDrop={drop.onDrop}
+            className={cn('rounded-2xl transition-shadow', drop.over && 'shadow-glow')}
+          >
+            <BboxCanvas doc={doc} selected={selected} onSelect={setSelected} onChange={setDoc} />
+          </div>
         </section>
 
         <SidePanel doc={doc} selected={selected} onSelect={setSelected} onChange={setDoc} />

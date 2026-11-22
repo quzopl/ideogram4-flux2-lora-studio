@@ -67,6 +67,11 @@ async function dragBox(page: Page, i: number, dx: number, dy: number) {
   await drag(page, b.x + b.width / 2, b.y + b.height / 2, dx, dy)
 }
 
+// The From image form lives on the server and outlives a test.
+test.beforeEach(async ({ request }) => {
+  expect((await request.put('/api/settings/forms/bbox', { data: { values: {} } })).ok()).toBe(true)
+})
+
 const valid = ([y1, x1, y2, x2]: Bbox) =>
   [y1, x1, y2, x2].every((v) => Number.isInteger(v) && v >= 0 && v <= 1000) && y1 < y2 && x1 < x2
 
@@ -575,4 +580,281 @@ test('resize keeps an interior anchor on a large frame', async ({ page }) => {
   const b = await bboxOf(page, 0)
   expect(b[1]).toBe(x1)
   expect(b[3] - b[1]).toBeGreaterThanOrEqual(10)
+})
+
+// ---- From image (the analyze job is mocked: e2e never runs Florence or a VLM) ----
+
+const MODELS = { models: { 'org/one': 'Model One', 'org/two': 'Model Two' }, default: 'org/two' }
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
+const FLORENCE = 'florence-community/Florence-2-base-ft'
+
+const DRAFT: Caption = {
+  aspect_ratio: '4:5',
+  high_level_description: 'A cat asleep on a sofa.',
+  compositional_deconstruction: {
+    background: 'A warm living room.',
+    elements: [
+      { type: 'obj', bbox: [100, 100, 800, 700], desc: 'cat' },
+      { type: 'text', bbox: [850, 100, 950, 600], text: 'HOME', desc: 'text "HOME"' },
+    ],
+  },
+}
+
+interface AnalyzeJob {
+  state: string
+  current?: string
+  error?: string
+  result?: { json: string; elements: number; model: string; warnings: { level: string; msg: string }[] } | null
+}
+
+const analyzed = (model = FLORENCE): AnalyzeJob => ({
+  state: 'done',
+  result: { json: JSON.stringify(DRAFT), elements: 2, model, warnings: [] },
+})
+
+/** A multipart body's fields: name -> value (a file part -> its file name). */
+function formFields(body: string) {
+  const out: Record<string, string> = {}
+  for (const m of body.matchAll(/name="([^"]+)"(?:; filename="([^"]*)")?[^]*?\r\n\r\n([^]*?)\r\n--/g)) {
+    out[m[1]] = m[2] ?? m[3]
+  }
+  return out
+}
+
+/**
+ * Mocks the analyze job API: each POST answers a new job ("a1", "a2", …; its
+ * multipart fields are collected), GET answers `job(id)` as it is at the time of the poll.
+ */
+async function mockAnalyze(page: Page, job: (id: string) => AnalyzeJob) {
+  const bodies: Record<string, string>[] = []
+  await page.route('**/api/models', (route) => route.fulfill({ json: MODELS }))
+  await page.route('**/api/ideogram/analyze/jobs', (route) => {
+    bodies.push(formFields(route.request().postData() ?? ''))
+    return route.fulfill({ json: { job_id: `a${bodies.length}` } })
+  })
+  await page.route('**/api/ideogram/analyze/jobs/*', (route) => {
+    const id = new URL(route.request().url()).pathname.split('/').pop() ?? ''
+    return route.fulfill({ json: { current: '', error: '', result: null, ...job(id) } })
+  })
+  return bodies
+}
+
+const fromImage = (page: Page) => page.getByRole('button', { name: 'From image', exact: true })
+const combo = (page: Page, name: string) => page.getByRole('combobox', { name, exact: true })
+const maxLength = (page: Page) => page.getByRole('spinbutton', { name: 'Max length (tokens)', exact: true })
+const photo = (page: Page) => page.getByRole('img', { name: 'Reference photo', exact: true })
+const hld = (page: Page) => page.getByRole('textbox', { name: 'high_level_description', exact: true })
+const analyzeRun = async (page: Page) =>
+  JSON.parse((await page.evaluate(() => sessionStorage.getItem('flux.bbox.analyze'))) ?? 'null') as
+    { jobId: string | null; applied: boolean; error: string } | null
+
+async function pick(page: Page, combobox: string, option: string) {
+  await combo(page, combobox).click()
+  await page.getByRole('option', { name: option, exact: true }).click()
+}
+
+/** Picks a photo through the From image button. */
+async function pickPhoto(page: Page, name = 'ref.png') {
+  const chooser = page.waitForEvent('filechooser')
+  await fromImage(page).click()
+  await (await chooser).setFiles({ name, mimeType: 'image/png', buffer: PNG })
+}
+
+/** Drops a file of this MIME type on the canvas. */
+async function dropPhoto(page: Page, name: string, type: string) {
+  const dt = await page.evaluateHandle(([n, t]) => {
+    // A browser object (the e2e tsconfig has no DOM lib).
+    const DT = (globalThis as unknown as { DataTransfer: new () => { items: { add(f: File): void } } }).DataTransfer
+    const d = new DT()
+    d.items.add(new File([new Uint8Array([1, 2, 3])], n, { type: t }))
+    return d
+  }, [name, type])
+  const host = page.getByTestId('bbox-drop')
+  await host.dispatchEvent('dragover', { dataTransfer: dt })
+  await host.dispatchEvent('drop', { dataTransfer: dt })
+}
+
+/** Leaves for Models and waits until the view has unmounted. */
+async function leaveAndReturn(page: Page) {
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  await expect(page.getByTestId('bbox-json')).toHaveCount(0)
+  await nav.getByRole('link', { name: 'Bbox editor', exact: true }).click()
+  await expect(page.getByTestId('bbox-json')).toBeVisible()
+}
+
+test('florence draft loads into an untouched canvas', async ({ page }) => {
+  let state = 'analyzing'
+  const bodies = await mockAnalyze(page, () => (state === 'done' ? analyzed() : { state }))
+  await page.goto('/bbox')
+  await expect(page.locator('input[type="file"]')).toHaveAttribute('accept', 'image/*,.heic,.heif')
+  await pickPhoto(page)
+
+  const progress = page.getByTestId('job-progress')
+  await expect(progress).toContainText('Analyzing…')
+  await expect(photo(page)).toHaveAttribute('src', /^blob:/)
+  await expect(fromImage(page)).toBeDisabled()
+  expect(bodies).toEqual([{ file: 'ref.png', engine: 'florence' }])
+
+  state = 'done'
+  await expect.poll(() => caption(page)).toEqual(DRAFT)
+  await expect(page.getByText(`Draft ready: 2 elements (${FLORENCE}).`)).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(selectedBox(page)).toHaveAttribute('data-index', '0')
+  await expect(progress).toHaveCount(0)
+  await expect(photo(page)).toHaveCount(0)
+  await expect(fromImage(page)).toBeEnabled()
+  expect(await analyzeRun(page)).toMatchObject({ jobId: null, applied: true })
+})
+
+test('replacing an edited canvas asks first', async ({ page }) => {
+  const bodies = await mockAnalyze(page, () => analyzed())
+  await page.goto('/bbox')
+  await hld(page).fill('Keep me.')
+  await expect.poll(async () => (await caption(page)).high_level_description).toBe('Keep me.')
+
+  // A non-image drop sends nothing; a file with no MIME type but an image extension is taken.
+  await dropPhoto(page, 'notes.txt', 'text/plain')
+  await dropPhoto(page, 'photo.heic', '')
+  const dialog = page.getByRole('dialog', { name: 'Replace the current canvas with the image draft?' })
+  await expect(dialog).toBeVisible()
+  expect(bodies).toEqual([{ file: 'photo.heic', engine: 'florence' }])
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect((await caption(page)).high_level_description).toBe('Keep me.')
+
+  // Refused once: coming back does not ask again, the draft waits behind Load draft.
+  const loadDraft = page.getByRole('button', { name: 'Load draft', exact: true })
+  await expect(loadDraft).toBeVisible()
+  await leaveAndReturn(page)
+  await expect(loadDraft).toBeVisible()
+  await page.waitForTimeout(500)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect((await caption(page)).high_level_description).toBe('Keep me.')
+
+  await loadDraft.click()
+  await dialog.getByRole('button', { name: 'Replace', exact: true }).click()
+  await expect.poll(() => caption(page)).toEqual(DRAFT)
+  await expect(page.getByText(`Draft ready: 2 elements (${FLORENCE}).`)).toBeVisible()
+})
+
+test('vlm fields only for hybrid and vlm', async ({ page, request }) => {
+  const bodies = await mockAnalyze(page, () => ({ state: 'error', error: 'Stopped.' }))
+  await page.goto('/bbox')
+  await expect(combo(page, 'Engine')).toHaveText('Florence-2 — fast, measured bboxes')
+  await combo(page, 'Engine').click()
+  await expect(page.getByRole('option')).toHaveText([
+    'Florence-2 — fast, measured bboxes',
+    'Hybrid — Florence bboxes + VLM prose',
+    'VLM only — full draft, estimated bboxes',
+  ])
+  await page.keyboard.press('Escape')
+  await expect(combo(page, 'Model')).toHaveCount(0)
+  await expect(combo(page, 'Quantization')).toHaveCount(0)
+  await expect(maxLength(page)).toHaveCount(0)
+
+  await pick(page, 'Engine', 'Hybrid — Florence bboxes + VLM prose')
+  await expect(combo(page, 'Model')).toHaveText('Model Two')
+  await expect(combo(page, 'Quantization')).toHaveText('4-bit (saves VRAM)')
+  await expect(maxLength(page)).toHaveValue('1536')
+  // An invalid length blocks the analysis.
+  await maxLength(page).fill('10')
+  await expect(page.getByText('Enter a whole number from 64 to 8192')).toBeVisible()
+  await expect(fromImage(page)).toBeDisabled()
+  await maxLength(page).fill('2048')
+  await pick(page, 'Quantization', 'None (fp16)')
+  await pickPhoto(page)
+  await expect.poll(() => bodies).toEqual([
+    { file: 'ref.png', engine: 'hybrid', model: 'org/two', quant: 'none', max_tokens: '2048' },
+  ])
+  await expect(page.getByTestId('job-progress')).toHaveAttribute('data-state', 'error')
+  await expect(fromImage(page)).toBeEnabled()
+
+  await pick(page, 'Engine', 'VLM only — full draft, estimated bboxes')
+  await pick(page, 'Model', 'Model One')
+  await pickPhoto(page)
+  await expect.poll(() => bodies.length).toBe(2)
+  expect(bodies[1]).toEqual({ file: 'ref.png', engine: 'vlm', model: 'org/one', quant: 'none', max_tokens: '2048' })
+
+  // Engine and model are saved in the bbox form.
+  await expect.poll(async () => {
+    const forms = ((await (await request.get('/api/settings')).json()) as { forms: Record<string, Record<string, unknown>> }).forms
+    return forms.bbox && { engine: forms.bbox.engine, model: forms.bbox.model }
+  }).toEqual({ engine: 'vlm', model: 'org/one' })
+  await page.reload()
+  await expect(combo(page, 'Engine')).toHaveText('VLM only — full draft, estimated bboxes')
+  await expect(combo(page, 'Model')).toHaveText('Model One')
+
+  await pick(page, 'Engine', 'Florence-2 — fast, measured bboxes')
+  await expect(combo(page, 'Model')).toHaveCount(0)
+  await expect(maxLength(page)).toHaveCount(0)
+  await pickPhoto(page)
+  await expect.poll(() => bodies.length).toBe(3)
+  expect(bodies[2]).toEqual({ file: 'ref.png', engine: 'florence' })
+})
+
+test('analysis survives navigation', async ({ page }) => {
+  let finished = false
+  let state = 'pending'
+  await mockAnalyze(page, () =>
+    finished ? analyzed() : state === 'loading_model'
+      ? { state, current: 'Downloading Florence-2: 40%' }
+      : { state })
+  await page.goto('/bbox')
+  await pickPhoto(page)
+  const progress = page.getByTestId('job-progress')
+  await expect(progress).toContainText('Starting…')
+  state = 'loading_model'
+  await expect(progress).toContainText('Downloading Florence-2: 40%')
+  state = 'analyzing'
+  await expect(progress).toContainText('Analyzing…')
+
+  await leaveAndReturn(page)
+  await expect(progress).toContainText('Analyzing…')
+  await expect(photo(page)).toBeVisible()
+  await expect(fromImage(page)).toBeDisabled()
+
+  // It finishes while the view is closed and is applied on return, once.
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page.getByTestId('bbox-json')).toHaveCount(0)
+  finished = true
+  await nav.getByRole('link', { name: 'Bbox editor', exact: true }).click()
+  await expect.poll(() => caption(page)).toEqual(DRAFT)
+  await expect(progress).toHaveCount(0)
+  expect(await analyzeRun(page)).toMatchObject({ jobId: null, applied: true })
+
+  // Later edits are not overwritten by a return or a reload.
+  await hld(page).fill('Edited after the draft.')
+  await expect.poll(async () => (await caption(page)).high_level_description).toBe('Edited after the draft.')
+  await leaveAndReturn(page)
+  await page.reload()
+  await expect(page.getByTestId('bbox-json')).toBeVisible()
+  await page.waitForTimeout(500)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect((await caption(page)).high_level_description).toBe('Edited after the draft.')
+})
+
+test('analysis error shows first line', async ({ page }) => {
+  await mockAnalyze(page, () => ({
+    state: 'error',
+    error: 'Image analysis failed: CUDA out of memory.\nTraceback (most recent call last):\n  File "x"',
+  }))
+  await page.goto('/bbox')
+  const before = await page.getByTestId('bbox-json').textContent()
+  await pickPhoto(page)
+  const progress = page.getByTestId('job-progress')
+  await expect(progress).toHaveAttribute('data-state', 'error')
+  await expect(progress).toContainText('Image analysis failed: CUDA out of memory.')
+  await expect(progress).not.toContainText('Traceback')
+  await expect(page.locator('[title*="Traceback"]')).toHaveCount(1)
+  await expect(fromImage(page)).toBeEnabled()
+  await expect(page.getByTestId('bbox-json')).toHaveText(before!)
+  expect(await analyzeRun(page)).toMatchObject({ jobId: null })
+
+  // The error is kept for the tab.
+  await page.reload()
+  await expect(progress).toContainText('Image analysis failed: CUDA out of memory.')
 })
