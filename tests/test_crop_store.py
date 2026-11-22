@@ -76,6 +76,15 @@ def test_corrupt_file_is_moved_aside_not_destroyed(tmp_path):
     assert crop_store.load(str(tmp_path), p)["plan"] == {"x.png": [1, 2, 3, 4]}
 
 
+def test_non_utf8_file_is_moved_aside(tmp_path):
+    p = tmp_path / "plans.json"
+    original = b"\xff\xfe garbage"
+    p.write_bytes(original)
+    crop_store.save(str(tmp_path), {"x.png": [1, 2, 3, 4]}, "manual", p)
+    assert [b.read_bytes() for b in tmp_path.glob("plans.json.bad-*")] == [original]
+    assert crop_store.load(str(tmp_path), p)["plan"] == {"x.png": [1, 2, 3, 4]}
+
+
 def test_non_object_file_is_moved_aside_on_load(tmp_path):
     p = tmp_path / "plans.json"
     p.write_text("[1, 2]", encoding="utf-8")

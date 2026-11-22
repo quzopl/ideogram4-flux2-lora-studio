@@ -33,14 +33,12 @@ def _key(folder: str) -> str:
 def _read(p: Path) -> dict:
     """The whole file; missing is empty, corrupt is moved aside (call under _lock)."""
     try:
-        text = p.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    try:
-        raw = json.loads(text)
+        raw = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("not an object")
-    except ValueError as e:  # JSONDecodeError is a ValueError
+    except FileNotFoundError:
+        return {}
+    except ValueError as e:  # JSONDecodeError and UnicodeDecodeError are ValueErrors
         bad = p.with_name(f"{p.name}.bad-{int(time.time())}")
         log.warning("crop plans file %s is unreadable (%s); moved to %s", p, e, bad)
         p.replace(bad)  # an OSError here propagates: the original is never overwritten
