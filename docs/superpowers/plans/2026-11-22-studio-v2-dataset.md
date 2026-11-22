@@ -64,35 +64,48 @@ wartości, kształty API i 22 kruche miejsca, a przy każdym numer linii.
    `crop plan survives reload` oraz `legacy crop plan is imported`.
 3. **Upload kończący się błędem lub bez obsługiwanych plików** daje czytelny
    komunikat zamiast „Uploaded undefined images”, a `Process` zostaje
-   nieaktywny. Test: Task 20 `upload with no supported files explains why`.
+   nieaktywny. Test: Task 19 `upload with no supported files explains why`.
 4. **Nieprawidłowe ustawienia** (`step` 0, `jpg_quality` 10, puste pole
    liczbowe) dają 422 z czytelnym `detail` w toaście, zanim job wystartuje.
    Testy: Task 17 `test_process_rejects_bad_numbers` i Task 20
    `empty number field is caught before submit`.
 5. **Auto-crop all przy istniejących kropach** pyta o potwierdzenie. Tekst
    pytania mówi prawdę: pliki bez wykrytego boksu zachowują stary krop. Test:
-   Task 20 `auto-crop all confirms and merges`.
+   Task 19 `auto-crop all confirms and merges`.
 
 ---
 
 ### Task 17: Backend — walidacja żądań i magazyn planów kropu
 
 **Files:**
-- Modify: `backend/server.py` (`ProcessRequest`, `CropAutoRequest`, `ExportRequest`, nowe trasy `/api/crops`)
+- Modify: `backend/server.py` (`ProcessRequest`, `CropAutoRequest`, nowe trasy `/api/crops` i `/api/src/size`), `tests/conftest.py` (izolacja `crop_store.PATH`)
 - Create: `backend/crop_store.py`
 - Test: `tests/test_crop_store.py` (nowy), `tests/test_process_validation.py` (nowy)
 
 **Interfaces:**
 - Produces:
   - **`crop_store.py`:**
+    - `PATH: Path` na poziomie modułu, liczony z `FLUX_PREP_WORK` tak jak
+      `settings.CONFIG_PATH` (`<work>/crop_plans.json`). Autouse fixture w
+      `tests/conftest.py` podmienia go na `tmp_path`, tak jak
+      `settings.CONFIG_PATH`;
     - `load(folder: str, path: Path | None = None) -> dict` zwraca
-      `{"plan": {name: [x,y,w,h]}, "mode": "center"|"auto"|"manual"}`;
+      `{"plan": {name: [x,y,w,h]}, "mode": "center"|"auto"|"manual", "exists": bool}`;
+    - `exists` jest `False` tylko wtedy, gdy dla folderu nigdy nic nie
+      zapisano. Zapisany pusty plan daje `exists: True`, dzięki czemu
+      przejęcie planu z klasycznego UI nie wraca po „Clear crops”;
     - `save(folder: str, plan: dict, mode: str, path: Path | None = None) -> dict`;
     - klucz to `str(Path(folder).expanduser().resolve())`;
-    - plik `WORK/crop_plans.json` z zapisem atomowym (tak jak w
-      `settings.py`: plik tymczasowy, fsync, `os.replace`, lock).
-  - **`GET /api/crops?folder=`** zwraca `{"plan": {...}, "mode": "..."}`.
-    Nieznany folder daje `{"plan": {}, "mode": "center"}`.
+    - zapis atomowy, tak jak w `settings.py`: plik tymczasowy, fsync,
+      `os.replace`, lock.
+  - **`GET /api/crops?folder=`** zwraca dokument z `load`. Nieznany folder
+    daje `{"plan": {}, "mode": "center", "exists": false}`.
+  - **`GET /api/src/size?folder=&name=`** zwraca `{"width": int, "height": int}`,
+    czyli prawdziwy rozmiar po obrocie EXIF:
+    - odczyt samego nagłówka przez `Image.open` bez dekodowania pikseli;
+      orientacja EXIF 5–8 zamienia `w` i `h`;
+    - ta sama walidacja ścieżki co `/api/src/thumb` (`_safe_source_path`);
+    - z tego endpointu korzysta „Apply to same ratio”.
   - **`PUT /api/crops`:**
     - body: `{folder: str, plan: dict[str, list[int]], mode: Literal["center","auto","manual"]}`;
     - odpowiedź to zapisany dokument;
@@ -120,7 +133,12 @@ wartości, kształty API i 22 kruche miejsca, a przy każdym numer linii.
 - `test_put_crops_rejects_bad_box`: `[1,2,3]` daje 400 i `[0,0,0,10]` daje
   400;
 - `test_put_crops_rejects_path_names`: nazwa `a/b.jpg` daje 400;
-- `test_crops_file_lives_in_work`: plik powstaje w `server.WORK`.
+- `test_crops_isolated_in_tests`: zapis przez API trafia do podmienionego
+  `crop_store.PATH` w `tmp_path`, a nie do prawdziwego `.work/`;
+- `test_cleared_plan_still_exists`: `save(folder, {}, "center")`, potem
+  `load`, daje `exists: True`;
+- `test_src_size_reads_header_with_exif`: JPEG 40×20 z orientacją EXIF 6
+  zwraca `{width: 20, height: 40}`, a zła nazwa daje 400.
 
 `tests/test_process_validation.py`:
 - `test_process_rejects_bad_numbers`: `step=0`, `jpg_quality=10` i
@@ -146,7 +164,9 @@ wartości, kształty API i 22 kruche miejsca, a przy każdym numer linii.
   - `web/src/components/CropEditorDialog.tsx`;
   - `web/src/hooks/useCropPlan.ts`;
   - `web/e2e/crop.spec.ts`.
-- Modify: `web/src/pages/Playground.tsx` (demo edytora na stałym folderze z `E2E_WORK`)
+- Modify: `web/src/pages/Playground.tsx` (demo edytora). Folder i plik
+  podajesz w query: `/_playground?cropFolder=<abs>&cropFiles=a.png,b.png`,
+  bo bundle nie zna `E2E_WORK`. Spec kopiuje fixtury do `E2E_WORK/crops`.
 
 **Interfaces:**
 - Consumes: `GET/PUT /api/crops` (Task 17), `GET /api/src/image` (nagłówki
@@ -168,17 +188,18 @@ wartości, kształty API i 22 kruche miejsca, a przy każdym numer linii.
   - **`useCropPlan(folder: string | null)`:**
     - zwraca `{plan, mode, loaded, set(name, box), merge(boxes), clear(), setMode(m)}`;
     - zapisuje przez `PUT /api/crops` z debounce 300 ms;
-    - przy pierwszym wczytaniu folderu z pustym planem przejmuje
-      `localStorage["cropPlan:" + folder]` (format `{plan, mode}` albo goły
-      obiekt planu), zapisuje go do `/api/crops` i nie usuwa wpisu z
-      `localStorage`.
+    - przejmuje `localStorage["cropPlan:" + folder]` tylko wtedy, gdy
+      `/api/crops` zwraca `exists: false` (format `{plan, mode}` albo goły
+      obiekt planu). Zapisuje go do `/api/crops` i nie usuwa wpisu z
+      `localStorage`;
+    - `mode` jest jedynym źródłem „Crop source”, zapisywanym per folder,
+      tak jak w klasycznym UI. Nie należy do formularza ani do presetów.
   - **`<CropEditorDialog folder name files square onClose />`:**
     - przycisk `Auto (Florence)` uruchamia `/api/crop/auto` z
       `names: [name]` i odpytuje go;
     - `Reset`;
-    - `Apply to same ratio`: proporcje w granicy 0.02. Nagłówki rozmiaru
-      pobierasz przez `HEAD`, a gdy serwer go nie obsługuje, przez `GET` z
-      `Range`. W obu przypadkach wystarczy jedno zapytanie na plik;
+    - `Apply to same ratio`: proporcje w granicy 0.02. Rozmiary bierzesz
+      z `GET /api/src/size` (Task 17), jedno lekkie zapytanie na plik;
     - `Save` zapisuje boks i ustawia tryb `manual`;
     - `Cancel` i Esc zamykają bez zapisu;
     - wybór proporcji ma opcje `free`, `1:1`, `3:4`, `4:3` i `16:9`. Przy
@@ -225,16 +246,21 @@ wartości, kształty API i 22 kruche miejsca, a przy każdym numer linii.
 - Consumes:
   - `POST /api/scan` i `POST /api/upload` (sprawdzaj `res.ok`!);
   - `GET /api/src/thumb`;
-  - `GET /api/models`, `POST/DELETE /api/models/custom`, `POST /api/lmstudio`
-    (refresh) i `GET /api/lmstudio`;
+  - `GET /api/models` i `POST/DELETE /api/models/custom`;
+  - `POST /api/crop/auto` i `GET /api/crop/auto/{id}`;
   - `useCropPlan`, `CropEditorDialog` (Task 18), `FolderPicker`,
     `DropZone`, `ModelSelect kind="upscale"`, `PresetBar`, `useSavedForm`.
 - Produces:
   - **`DatasetForm`** z polami:
-    - `{folder, mode, style, caption_format, resolution, step, square, crop_mode, fit, pad_color, centering_x, centering_y, fmt, jpg_quality, model, quant, max_tokens, do_caption, upscale_model, trigger, prepend_trigger, output_folder}`;
+    - `{folder, mode, style, caption_format, resolution, step, square, fit, pad_color, centering_x, centering_y, fmt, jpg_quality, model, quant, max_tokens, do_caption, upscale_model, trigger, prepend_trigger, output_folder}`;
+    - bez `crop_mode`, bo ten należy do `useCropPlan`;
     - wartości domyślne według inwentaryzacji §1.2, z tym że `model`
       domyślnie to `default` z `/api/models`;
-    - `toProcessRequest(form, crops)` buduje body dla `/api/process`.
+    - `toProcessRequest(form, cropDoc)` buduje body dla `/api/process`:
+      `crop_mode = cropDoc.mode`, `crops = cropDoc.plan`;
+    - zapisany niepusty `folder` przy wejściu na stronę jest od razu
+      skanowany (`/api/scan`). Błąd skanu pokazuje się tylko w linii
+      statusu, bez toastu.
   - Autozapis: `useSavedForm("dataset", defaults)`, bez planów kropu.
     Presety: `PresetBar view="dataset"`. Preset obejmuje ustawienia, ale nie
     `folder`, `trigger` ani `output_folder`.
@@ -245,8 +271,10 @@ wartości, kształty API i 22 kruche miejsca, a przy każdym numer linii.
     - `Add model from folder…` otwiera `FolderPicker` (`requireWritable={false}`)
       i robi `POST /api/models/custom`;
     - `Remove custom` jest tylko dla własnych modeli i wymaga potwierdzenia;
-    - `Refresh` ponownie pobiera `/api/models`, co obejmuje też LM Studio.
-      URL LM Studio edytuje się w Settings.
+    - `Refresh` tylko ponownie pobiera `/api/models`, co obejmuje też LM
+      Studio. URL LM Studio edytuje się w Settings.
+  - `upscale_model` używa `ModelSelect kind="upscale"` z nowym propem
+    `noneLabel="Off (plain LANCZOS)"`, czyli opcją o wartości `""`.
   - Siatka:
     - kafelki wchodzą kaskadowo;
     - kafelek ma odznakę `✂`, gdy jest krop;
@@ -276,7 +304,16 @@ wartości, kształty API i 22 kruche miejsca, a przy każdym numer linii.
 - `crop badge after editor save`: zapis w edytorze daje odznakę `✂` na
   kafelku;
 - `vlm select lists api models`: po podmianie `/api/models` przez
-  `page.route` na 2 modele lista ma 2 pozycje z ich etykietami.
+  `page.route` na 2 modele lista ma 2 pozycje z ich etykietami;
+- `upload with no supported files explains why`: `/api/upload` zwraca
+  `count: 0`, co daje komunikat `No supported images in the upload` i
+  nieaktywny `Process`;
+- `auto-crop all confirms and merges`: podmieniony job auto-crop zwraca
+  boks dla 1 z 2 plików, gdy oba mają już krop. Dialog zawiera `keep their
+  current crop`, a po zakończeniu oba pliki mają krop i jeden z nich jest
+  nowy;
+- `crop source is per folder`: `Manual` w folderze A, potem skan folderu B
+  pokazuje `Centre`, a powrót do A znów pokazuje `Manual`.
 
 - [ ] **Step 2:** Implementacja.
 - [ ] **Step 3:** Weryfikacja: pełny zestaw testów musi być zielony.
@@ -350,15 +387,8 @@ wartości, kształty API i 22 kruche miejsca, a przy każdym numer linii.
   `captions` tylko z edytowanym idx i `exclude_idx` z usuniętym;
 - `zip downloads with server filename`: `page.waitForEvent("download")`,
   a `suggestedFilename()` równa się nazwie z `Content-Disposition`;
-- `upload with no supported files explains why`: `/api/upload` zwraca
-  `count: 0`, co daje komunikat `No supported images in the upload` i
-  nieaktywny `Process`;
 - `empty number field is caught before submit`: puste `Max tokens` nie
-  wysyła `/api/process` i pokazuje błąd przy polu;
-- `auto-crop all confirms and merges`: podmieniony job auto-crop zwraca
-  boks dla 1 z 2 plików, gdy oba mają już krop. Dialog zawiera `keep their
-  current crop`, a po zakończeniu oba pliki mają krop i jeden z nich jest
-  nowy.
+  wysyła `/api/process` i pokazuje błąd przy polu.
 
 - [ ] **Step 2:** Implementacja.
 - [ ] **Step 3:** Weryfikacja: pełny zestaw testów musi być zielony.
