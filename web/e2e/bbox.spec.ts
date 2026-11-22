@@ -211,7 +211,9 @@ test('keyboard nudge and delete', async ({ page }) => {
   expect(await bboxOf(page, 0)).toEqual([209, 191, 509, 491])
   expect((await caption(page)).compositional_deconstruction.elements).toHaveLength(2)
 
-  // Escape during a drag does not drop the dragged box's selection.
+  // Escape during a drag does not drop the dragged box's selection. (The modified keys may
+  // have scrolled the page, which is taller than the viewport: the box is brought back first.)
+  await box(page, 0).hover()
   const b0 = (await box(page, 0).boundingBox())!
   await page.mouse.move(b0.x + b0.width / 2, b0.y + b0.height / 2)
   await page.mouse.down()
@@ -929,11 +931,19 @@ test('a studio handoff during the draft confirm waits for it', async ({ page, re
   await pickPhoto(page)
   await expect(page.getByTestId('job-progress')).toContainText('Analyzing…')
 
-  // Done while away; back through a studio handoff, both want the canvas.
+  // Done while away; back through a studio handoff, both want the canvas. The handoff's
+  // normalize is held until the draft has asked, so the draft is first (not a network race).
+  let draftAsked!: () => void
+  const asked = new Promise<void>((resolve) => (draftAsked = resolve))
+  await page.route('**/api/ideogram/normalize', async (route) => {
+    await asked
+    await route.continue()
+  })
   finished = true
   await handOffFromStudio(page, m)
   const draft = page.getByRole('dialog', { name: DRAFT_TITLE })
   await expect(draft).toBeVisible()
+  draftAsked()
   await page.waitForTimeout(500)
   await expect(draft).toBeVisible()
   await draft.getByRole('button', { name: 'Cancel', exact: true }).click()
@@ -943,4 +953,315 @@ test('a studio handoff during the draft confirm waits for it', async ({ page, re
   await studio.getByRole('button', { name: 'Replace', exact: true }).click()
   await expect.poll(async () => (await caption(page)).high_level_description).toBe(`${m} studio prompt`)
   await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+// ---- Render (the render job and /api/comfy/* are mocked: e2e never contacts ComfyUI) ----
+
+/** What GET /api/ideogram/render/config answers: the saved params, with non-default hidden keys. */
+const RENDER_PARAMS = {
+  preset: 'Turbo', megapixels: 2, seed: 42, variant: 'simple', cfg: 4.5, cfg_override: 3, start_percent: 0.9,
+  end_percent: 1, sampler: '', batch_size: 1, shift: 6, lora_enabled: false, lora_name: '', lora_strength: 1,
+  diff_model: 'ideogram4_fp8_scaled.safetensors', uncond_model: 'ideogram4_unconditional_fp8_scaled.safetensors',
+  vae_name: 'flux2-vae.safetensors', clip_name: 'qwen3vl_8b_fp8_scaled.safetensors', clip_type: 'ideogram4',
+}
+
+interface RenderJob {
+  state: string
+  current?: string
+  progress?: { value: number; max: number }
+  has_preview?: boolean
+  preview_ts?: number
+  /** Gallery image ids with their seeds. */
+  images?: [string, number][]
+  error?: string
+}
+
+// Nothing reaches the real render or ComfyUI unless a test mocks it.
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/ideogram/render', (route) => route.fulfill({ status: 500, json: { detail: 'Render not mocked' } }))
+  await page.route('**/api/comfy/**', (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/loras')) return route.fulfill({ json: { loras: [] } })
+    if (path.endsWith('/preview') || path.includes('/gallery/')) return route.fulfill({ body: PNG, contentType: 'image/png' })
+    return route.fulfill({ status: 404, json: { detail: 'Unknown job.' } })
+  })
+})
+
+/**
+ * Mocks the render API: each POST answers a new job ("r1", "r2", …; its body
+ * is collected), GET answers `job(id)` as it is at the time of the poll.
+ */
+async function mockRender(page: Page, job: (id: string) => RenderJob) {
+  const bodies: { prompt: string; params: Record<string, unknown> }[] = []
+  const polls: string[] = []
+  const previews: string[] = []
+  const cancels: string[] = []
+  await page.route('**/api/ideogram/render/config', (route) =>
+    route.fulfill({ json: { params: RENDER_PARAMS, presets: ['Quality', 'Default', 'Turbo'] } }))
+  await page.route('**/api/ideogram/render', (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { job_id: `r${bodies.length}`, warnings: [] } })
+  })
+  await page.route('**/api/comfy/job/*', (route) => {
+    const id = new URL(route.request().url()).pathname.split('/').pop() ?? ''
+    polls.push(id)
+    const { images = [], ...j } = job(id)
+    return route.fulfill({
+      json: {
+        id, total: 1, done_count: 0, current: '', current_node: '', progress: { value: 0, max: 0 },
+        has_preview: false, preview_ts: 0, error: '', ...j,
+        images: images.map(([gid, seed]) => ({
+          id: gid, filename: `${gid}.png`, seed, url: `/api/comfy/gallery/${gid}`, prompt: 'x', loras: [], ts: 1, source: 'editor',
+        })),
+      },
+    })
+  })
+  await page.route('**/api/comfy/job/*/preview**', (route) => {
+    previews.push(route.request().url())
+    return route.fulfill({ body: PNG, contentType: 'image/png' })
+  })
+  await page.route('**/api/comfy/job/*/cancel', (route) => {
+    cancels.push(new URL(route.request().url()).pathname.split('/')[4])
+    return route.fulfill({ json: { ok: true } })
+  })
+  return { bodies, polls, previews, cancels }
+}
+
+const renderCard = (page: Page) => page.getByRole('region', { name: 'Render (Ideogram 4 via ComfyUI)', exact: true })
+const renderBtn = (page: Page) => page.getByRole('button', { name: 'Render canvas', exact: true })
+const renderAnyway = (page: Page) => page.getByRole('button', { name: 'Render anyway', exact: true })
+const spin = (page: Page, name: string) => renderCard(page).getByRole('spinbutton', { name, exact: true })
+const results = (page: Page) => page.getByTestId('render-result')
+const renderRun = async (page: Page) =>
+  JSON.parse((await page.evaluate(() => sessionStorage.getItem('flux.bbox.render'))) ?? 'null') as
+    { jobId: string | null; results: { id: string }[] } | null
+
+test('render sends prompt and params', async ({ page }) => {
+  const { bodies } = await mockRender(page, () => ({ state: 'done' }))
+  await page.goto('/bbox')
+  const card = renderCard(page)
+  await expect(card).toContainText('Requires a ComfyUI server with the Ideogram 4 nodes.')
+  // The form starts from the saved config.
+  await expect(spin(page, 'Seed')).toHaveValue('42')
+  await expect(spin(page, 'Megapixels')).toHaveValue('2')
+  await expect(card.getByRole('checkbox', { name: 'random', exact: true })).toBeChecked()
+  await expect(card.getByRole('combobox', { name: 'Quality preset', exact: true })).toHaveText('Turbo (12)')
+  await card.getByRole('combobox', { name: 'Quality preset', exact: true }).click()
+  await expect(page.getByRole('option')).toHaveText(['Quality (48 steps)', 'Default (20)', 'Turbo (12)'])
+  await page.getByRole('option', { name: 'Quality (48 steps)', exact: true }).click()
+  await card.getByRole('combobox', { name: 'Scheduler', exact: true }).click()
+  await expect(page.getByRole('option')).toHaveText(['Simple (AuraFlow + euler)', 'Ideogram 4 (original)'])
+  await page.getByRole('option', { name: 'Ideogram 4 (original)', exact: true }).click()
+
+  // An out-of-range megapixel value is an error at the field, and nothing can be sent.
+  await spin(page, 'Megapixels').fill('5')
+  await expect(card.getByText('Enter a number from 0.1 to 4')).toBeVisible()
+  await expect(renderBtn(page)).toBeDisabled()
+  await spin(page, 'Megapixels').fill('1.5')
+  await expect(renderBtn(page)).toBeEnabled()
+  await spin(page, 'Batch').fill('2')
+  await card.getByRole('checkbox', { name: 'LoRA (model-only)', exact: true }).check()
+  await card.getByRole('combobox', { name: 'LoRA file name', exact: true }).fill('  style.safetensors ')
+  await spin(page, 'LoRA strength').fill('0.75')
+  await card.getByText('Models (advanced)').click()
+  await card.getByRole('textbox', { name: 'VAE', exact: true }).fill('other-vae.safetensors')
+
+  await renderBtn(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  expect(bodies[0].prompt).toBe(JSON.stringify(await caption(page)))
+  // The saved hidden keys (cfg, shift…) go back as they were.
+  const seed = bodies[0].params.seed
+  expect(bodies[0].params).toEqual({
+    ...RENDER_PARAMS, seed, preset: 'Quality', megapixels: 1.5, variant: 'ideogram4', batch_size: 2,
+    lora_enabled: true, lora_name: 'style.safetensors', lora_strength: 0.75, vae_name: 'other-vae.safetensors',
+  })
+  // random: a new seed, shown in the field.
+  expect(Number.isSafeInteger(seed)).toBe(true)
+  expect(seed).not.toBe(42)
+  await expect(spin(page, 'Seed')).toHaveValue(String(seed))
+
+  // Without random the typed seed is sent.
+  await expect(renderBtn(page)).toBeEnabled()
+  await card.getByRole('checkbox', { name: 'random', exact: true }).uncheck()
+  await spin(page, 'Seed').fill('7')
+  await renderBtn(page).click()
+  await expect.poll(() => bodies.length).toBe(2)
+  expect(bodies[1].params.seed).toBe(7)
+})
+
+test('render blocked on lint error until render anyway', async ({ page }) => {
+  const { bodies } = await mockRender(page, () => ({ state: 'done' }))
+  await seed(page, [{ type: 'obj', bbox: [100, 100, 900, 900], desc: 'a cat with soft bokeh' }], 0)
+  await page.goto('/bbox')
+  await expect(findings(page)).toContainText('desc contains camera/shadow language')
+  await expect(renderBtn(page)).toBeDisabled()
+  await expect(renderCard(page)).toContainText('The v15 check found 1 error')
+  await renderAnyway(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  expect(JSON.parse(bodies[0].prompt).compositional_deconstruction.elements[0].desc).toBe('a cat with soft bokeh')
+
+  // Fixed, it renders normally again.
+  await card(page, 0).getByRole('textbox', { name: 'desc', exact: true }).fill('a cat')
+  await expect(renderBtn(page)).toBeEnabled()
+  await expect(renderAnyway(page)).toHaveCount(0)
+  await expect(renderCard(page)).not.toContainText('The v15 check found')
+
+  // A warning (an empty HLD) does not block.
+  await expect(findings(page)).toContainText('high_level_description is empty.')
+  await renderBtn(page).click()
+  await expect.poll(() => bodies.length).toBe(2)
+})
+
+test('progress, live preview and results', async ({ page }) => {
+  let job: RenderJob = { state: 'pending', current: 'Starting…' }
+  const { polls, previews } = await mockRender(page, () => job)
+  await page.goto('/bbox')
+  await expect(spin(page, 'Seed')).toHaveValue('42')
+  await renderBtn(page).click()
+
+  const card = renderCard(page)
+  const progress = card.getByTestId('job-progress')
+  await expect(progress).toContainText('Starting…')
+  await expect(renderBtn(page)).toBeDisabled()
+  const preview = card.getByRole('img', { name: 'Live preview', exact: true })
+  await expect(preview).toHaveCount(0)
+
+  job = { state: 'running', current: 'Step 3/12', progress: { value: 3, max: 12 }, has_preview: true, preview_ts: 100.5 }
+  const bar = progress.getByRole('progressbar')
+  await expect(bar).toHaveAttribute('aria-valuenow', '3')
+  await expect(bar).toHaveAttribute('aria-valuemax', '12')
+  // The step text would only repeat the count.
+  await expect(progress).toContainText('3 / 12')
+  await expect(progress).not.toContainText('Step 3/12')
+  await expect(preview).toHaveAttribute('src', '/api/comfy/job/r1/preview?t=100.5')
+  // More polls with the same frame do not reload it.
+  const seen = polls.length
+  await expect.poll(() => polls.length).toBeGreaterThan(seen + 2)
+  expect(previews).toHaveLength(1)
+  job = { ...job, current: 'Step 6/12', progress: { value: 6, max: 12 }, preview_ts: 101.25 }
+  await expect(preview).toHaveAttribute('src', '/api/comfy/job/r1/preview?t=101.25')
+  await expect(bar).toHaveAttribute('aria-valuenow', '6')
+  await expect.poll(() => previews.length).toBe(2)
+
+  job = { state: 'done', current: 'Finished', images: [['g1', 11], ['g2', 12]] }
+  await expect(card.getByText('Done — image saved to the ComfyUI gallery.')).toBeVisible()
+  await expect(preview).toHaveCount(0)
+  await expect(results(page)).toHaveCount(2)
+  await expect(results(page).nth(0).getByRole('link')).toHaveAttribute('href', '/api/comfy/gallery/g1')
+  await expect(results(page).nth(0).getByRole('link')).toHaveAttribute('target', '_blank')
+  await expect(results(page).nth(0)).toContainText('seed 11')
+  await expect(results(page).nth(1)).toContainText('seed 12')
+  await expect(renderBtn(page)).toBeEnabled()
+  expect(await renderRun(page)).toMatchObject({ jobId: null })
+
+  // Newest first.
+  job = { state: 'done', images: [['g3', 13]] }
+  await renderBtn(page).click()
+  await expect(results(page)).toHaveCount(3)
+  await expect(results(page).nth(0)).toContainText('seed 13')
+
+  // A failed render: its first line, the traceback in the title.
+  job = { state: 'error', error: 'Queueing error: ComfyUI refused the prompt.\nTraceback (most recent call last):\n  File "x"' }
+  await renderBtn(page).click()
+  await expect(card.getByText('Render error: Queueing error: ComfyUI refused the prompt.')).toBeVisible()
+  await expect(card).not.toContainText('Traceback')
+  await expect(card.locator('[title*="Traceback"]')).toHaveCount(1)
+  await expect(results(page)).toHaveCount(3)
+
+  // Clear results empties the grid only.
+  await card.getByRole('button', { name: 'Clear results', exact: true }).click()
+  await expect(results(page)).toHaveCount(0)
+  expect(await renderRun(page)).toMatchObject({ results: [] })
+})
+
+test('render survives navigation without duplicate results', async ({ page }) => {
+  let job: RenderJob = { state: 'running', current: 'Step 1/12', progress: { value: 1, max: 12 } }
+  await mockRender(page, () => job)
+  await page.goto('/bbox')
+  await expect(spin(page, 'Seed')).toHaveValue('42')
+  await renderBtn(page).click()
+  const progress = renderCard(page).getByTestId('job-progress')
+  await expect(progress).toContainText('1 / 12')
+
+  await leaveAndReturn(page)
+  await expect(progress).toContainText('1 / 12')
+  await expect(renderBtn(page)).toBeDisabled()
+
+  // It finishes while the view is closed; the images are there on return.
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page.getByTestId('bbox-json')).toHaveCount(0)
+  job = { state: 'done', images: [['n1', 1], ['n2', 2]] }
+  await nav.getByRole('link', { name: 'Bbox editor', exact: true }).click()
+  await expect(results(page)).toHaveCount(2)
+  await expect(progress).toHaveCount(0)
+
+  // A second done with the same images (one per id), across a return and a reload.
+  await renderBtn(page).click()
+  await expect(renderBtn(page)).toBeEnabled()
+  await leaveAndReturn(page)
+  await page.reload()
+  await expect(page.getByTestId('bbox-json')).toBeVisible()
+  await expect(results(page)).toHaveCount(2)
+  expect((await renderRun(page))?.results.map((r) => r.id)).toEqual(['n1', 'n2'])
+})
+
+test('cancel posts and shows cancelled', async ({ page }) => {
+  let state = 'running'
+  const { cancels } = await mockRender(page, () => ({ state, current: 'Step 2/12', progress: { value: 2, max: 12 } }))
+  await page.goto('/bbox')
+  await expect(spin(page, 'Seed')).toHaveValue('42')
+  const card = renderCard(page)
+  await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+  await renderBtn(page).click()
+  await expect(card.getByTestId('job-progress')).toContainText('2 / 12')
+  await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect.poll(() => cancels).toEqual(['r1'])
+  state = 'cancelled'
+  await expect(card.getByText('Cancelled.')).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+  await expect(renderBtn(page)).toBeEnabled()
+  await expect(results(page)).toHaveCount(0)
+  expect(await renderRun(page)).toMatchObject({ jobId: null })
+})
+
+test('lora field disabled when unchecked', async ({ page }) => {
+  let reachable = false
+  let lorasCalls = 0
+  await mockRender(page, () => ({ state: 'done' }))
+  await page.route('**/api/comfy/loras', (route) => {
+    lorasCalls++
+    return reachable
+      ? route.fulfill({ json: { loras: ['anime.safetensors', 'film.safetensors'] } })
+      : route.fulfill({ status: 502, json: { detail: 'ComfyUI connection refused' } })
+  })
+  await page.goto('/bbox')
+  const card = renderCard(page)
+  const name = card.getByRole('combobox', { name: 'LoRA file name', exact: true })
+  const on = card.getByRole('checkbox', { name: 'LoRA (model-only)', exact: true })
+  await expect(on).not.toBeChecked()
+  await expect(name).toBeDisabled()
+  await on.check()
+  await expect(name).toBeEnabled()
+
+  // Unreachable: a quiet hint at the field, not a toast.
+  await expect(card.getByText('ComfyUI not reachable — type the LoRA name.')).toBeVisible()
+  await expect(page.getByText('ComfyUI connection refused')).toHaveCount(0)
+
+  // ↻ asks again.
+  reachable = true
+  const before = lorasCalls
+  await card.getByRole('button', { name: 'Refresh the LoRA list', exact: true }).click()
+  await expect(card.getByText('ComfyUI not reachable — type the LoRA name.')).toHaveCount(0)
+  expect(lorasCalls).toBeGreaterThan(before)
+  const list = await name.getAttribute('list')
+  await expect(page.locator(`datalist[id="${list}"] option`)).toHaveCount(2)
+  await expect(page.locator(`datalist[id="${list}"] option`).first()).toHaveAttribute('value', 'anime.safetensors')
+
+  // Asked again on every entry.
+  reachable = false
+  await leaveAndReturn(page)
+  await expect(card.getByText('ComfyUI not reachable — type the LoRA name.')).toBeVisible()
+  await on.uncheck()
+  await expect(name).toBeDisabled()
 })

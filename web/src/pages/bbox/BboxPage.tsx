@@ -6,7 +6,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { BboxCanvas } from '@/editors/bbox/BboxCanvas'
-import { addEl, fromCaption, isDefaultDoc, parseRatio, type ElType } from '@/editors/bbox/model'
+import { addEl, fromCaption, isDefaultDoc, parseRatio, toJson, type ElType } from '@/editors/bbox/model'
 import { claimBboxHandoff, takeBboxHandoff } from '@/lib/bboxHandoff'
 import { cn } from '@/lib/utils'
 import { markAnalyzeApplied, type AnalyzeResult } from './analyzeStore'
@@ -14,6 +14,7 @@ import { flushDraft, getDraft, useBboxDoc } from './bboxStore'
 import { FromImagePanel, FromImageTools, useFromImage, useImageDrop } from './FromImage'
 import { errorText, LEGACY_WARNING, normalizePrompt, type Normalized } from './normalize'
 import { PasteBar } from './PasteBar'
+import { RenderPanel } from './RenderPanel'
 import { SidePanel } from './SidePanel'
 
 /** A load waiting for "Replace the current canvas?". */
@@ -168,6 +169,8 @@ export function BboxPage() {
 
         <SidePanel doc={doc} selected={selected} onSelect={setSelected} onChange={setDoc} />
       </div>
+
+      <RenderPanel json={toJson(doc)} />
 
       <ConfirmDialog
         open={confirming}

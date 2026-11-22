@@ -1,16 +1,15 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { BookmarkPlus, Copy, Download } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { V15Findings, type V15Finding } from '@/components/V15Findings'
+import { V15Findings } from '@/components/V15Findings'
 import { moveEl, parseRatio, removeEl, setEl, toggleBbox, toJson, type Doc, type El } from '@/editors/bbox/model'
-import { useDebounced } from '@/hooks/useDebounced'
 import { api } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { useMutationWithToast } from '@/lib/queries'
 import { cn } from '@/lib/utils'
+import { useBboxLint } from './lint'
 import { errorText } from './normalize'
 
 interface SidePanelProps {
@@ -278,14 +277,7 @@ function ElementCard({ el, index, count, selected, onSelect, onChange }: Element
 
 /** The server's v15 lint of the JSON, 400 ms after the last change. */
 function Lint({ json }: { json: string }) {
-  const settled = useDebounced(json, 400)
-  // Keyed by the JSON, so an older answer never overwrites a newer one.
-  const lint = useQuery({
-    queryKey: ['lint', settled],
-    queryFn: () => api<{ warnings: V15Finding[] }>('/api/prompts/lint', { method: 'POST', json: { prompt: settled } }),
-    placeholderData: keepPreviousData,
-    staleTime: Infinity,
-  })
+  const lint = useBboxLint(json)
   // A failed check must not leave the findings of an older JSON on screen.
   if (lint.isError) {
     return (
