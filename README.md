@@ -144,7 +144,7 @@ preview; export to a folder or `.zip`; autosaved form and named presets),
 **Models** (Download… / Use existing… / Forget / Cancel) and **Settings**
 (Models folder, GPU per role — CPU is not offered for the VLM — Hugging Face
 token, LM Studio and ComfyUI URLs, settings export/import), plus a first-run
-onboarding. Bbox editor and ComfyUI still open the classic UI.
+onboarding. Only ComfyUI still opens the classic UI.
 
 **Dataset** is in v2 too. The source is a folder scan (folder picker, or
 drag-and-drop upload; HEIC is accepted), shown as a thumbnail grid. The crop
@@ -187,11 +187,43 @@ The result is editable; a JSON result is re-linted on edit
 (`POST /api/prompts/lint`). **Copy** falls back to a temporary textarea on
 plain http, **Regenerate** reruns the job (the previous result and its edit
 stay until the new one succeeds), **Use as input** moves the result into the
-prompt field and **Edit on canvas** (JSON results) opens it in the Bbox editor. Until the v2
-Bbox editor exists that is the classic one: the prompt is handed over through
-`sessionStorage` (`flux.bbox.handoff`). The library below has All / FLUX.2 /
+prompt field and **Edit on canvas** (JSON results) opens it in the v2 Bbox editor (`/bbox`): the
+prompt is handed over through `sessionStorage` (`flux.bbox.handoff`, consumed
+once). The library below has All / FLUX.2 /
 Ideogram (JSON) tabs, a client-side filter, copy, open on canvas, delete with
 confirmation and **Export .sql**.
+
+**Bbox editor** is in v2 too (`/bbox`). The canvas drags boxes and resizes them
+with 8 handles; clicking a spot again cycles overlapping boxes (a drag never
+changes the selection). With the canvas focused, arrows move the selected box 1
+unit (Shift: 10), Delete/Backspace removes it, Escape deselects; keys with
+Alt/Ctrl/Meta pass through. Aspect presets are 1:1, 4:5, 9:16, 16:9, 3:1 or a
+custom W:H. The side panel has obj/text cards numbered like the server lint
+(by array index), word counters, ▲▼ z-order and a bbox toggle that remembers
+the box. The prompt is linted live (`POST /api/prompts/lint`).
+
+**Paste JSON** goes through `POST /api/ideogram/normalize`: old schemas,
+`caption`/`data`/`result`/`output` wrappers and double-encoded JSON are
+converted, a legacy `style_description` gives a warning, and text with no
+prompt is a 400. **Copy** (minified or Pretty), **Download**
+(`caption_v15.json`) and **Save to library** are in the panel. The draft lives
+in the browser tab (`sessionStorage` key `flux.bbox.draft`). Opening the editor
+from Prompt studio asks before replacing an edited canvas, and competing
+confirmations queue instead of replacing each other.
+
+**From image** (Florence-2 / Hybrid / VLM) runs as a background job:
+`POST /api/ideogram/analyze/jobs` returns a job id, `GET
+/api/ideogram/analyze/jobs/{id}` reports its state. HEIC and empty-MIME uploads
+are accepted (decoded by content). The draft is applied once and the editor asks
+before replacing an edited canvas.
+
+The **Ideogram 4 render** panel has the preset, megapixels, seed (with random),
+scheduler, batch, LoRA and advanced models; render settings it does not show
+(e.g. cfg) are preserved. Lint errors block the render unless you press
+**Render anyway**. It shows a live preview and a deduplicated results grid, and
+survives navigation. **Cancel** deletes your prompt from the ComfyUI queue, or
+sends a targeted `/interrupt` only if it is running; a ComfyUI execution error
+now ends the job as an error instead of polling forever.
 
 Dev server with hot reload (the backend must run on 8123):
 
