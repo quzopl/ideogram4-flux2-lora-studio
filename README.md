@@ -51,8 +51,8 @@ prompting:
   the dataset tab. Through the API, `POST /api/upscale/run` also takes
   `"mode": "factor"` with any `"factor"` above 1 up to 8 (x2, x3, x4, 1.5…:
   model passes, then Lanczos down to the exact size) and a per-job `"device"`
-  (`"cpu"`, a card's UUID, or empty for the Upscale role's card); the tab does
-  not offer these two yet.
+  (`"cpu"`, a card's UUID, or empty for the Upscale role's card); the new
+  v2 Upscale view offers both, the classic tab does not.
 
 The top bar shows the GPU status (loaded model and VRAM usage) and a
 **⏏ Release GPU** button that unloads the models from the card. The local
