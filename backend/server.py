@@ -595,14 +595,19 @@ def _ensure_model(model_id: str, job: dict | None) -> str:
         raise _UnknownModel(f"Unknown model: {model_id}") from None
 
 
-def _ensure_model_http(model_id: str) -> str:
-    """_ensure_model for synchronous endpoints: a setup problem is a 400, a failed download a 502."""
+def _ensure_model_mapped(model_id: str, job: dict | None) -> str:
+    """_ensure_model with failures as HTTPException: a setup problem is a 400, a failed download a 502."""
     try:
-        return _ensure_model(model_id, None)
+        return _ensure_model(model_id, job)
     except (model_store.ModelsFolderNotSet, _UnknownModel, ValueError) as e:
         raise HTTPException(400, str(e)) from e
     except RuntimeError as e:
         raise HTTPException(502, str(e)) from e
+
+
+def _ensure_model_http(model_id: str) -> str:
+    """_ensure_model for synchronous endpoints."""
+    return _ensure_model_mapped(model_id, None)
 
 
 florence.SOURCE_RESOLVER = lambda: _ensure_model(florence.DEFAULT_MODEL, None)
@@ -2456,15 +2461,15 @@ def api_prompt(req: PromptRequest):
 
 def _run_prompt_job(job: dict, req: PromptJobRequest) -> None:
     try:
-        res = _generate_prompt(req, lambda m: _ensure_model(m, job), job)
+        res = _generate_prompt(req, lambda m: _ensure_model_mapped(m, job), job)
         job["result"] = {**res, "format": req.caption_format}
         job["current"] = ""
         job["state"] = "done"
     except BaseException as e:  # noqa: BLE001 - a dead thread must never leave the job busy
-        if isinstance(e, lmstudio.LMStudioError):
+        if isinstance(e, HTTPException):
+            job["error"] = str(e.detail)
+        elif isinstance(e, lmstudio.LMStudioError):
             job["error"] = f"LM Studio: {e}"
-        elif isinstance(e, (model_store.ModelsFolderNotSet, _UnknownModel, ValueError)):
-            job["error"] = str(e)
         else:
             job["error"] = f"Generation error: {e}"
         job["state"] = "error"

@@ -144,3 +144,23 @@ def test_prompt_job_409_while_busy(monkeypatch):
     monkeypatch.setattr(lmstudio, "generate_text", lambda *a, **k: "ok")
     assert client.post("/api/prompt/jobs",
                        json={"text": "a", "model": "lmstudio:x"}).status_code == 200
+
+
+def test_download_failure_same_text_job_and_legacy(monkeypatch):
+    def dl(m, job=None):
+        raise RuntimeError("Download incomplete: x")
+    monkeypatch.setattr(server, "_ensure_model", dl)
+    monkeypatch.setattr(server, "_ensure_model_http",
+                        lambda m: server._ensure_model_mapped(m, None))
+    assert _get(_start())["error"] == "Download incomplete: x"
+    r = client.post("/api/prompt", json={"text": "a"})
+    assert r.status_code == 502 and r.json()["detail"] == "Download incomplete: x"
+
+
+def test_value_error_outside_ensure_is_generation_error(monkeypatch):
+    def bad(*a, **k):
+        raise ValueError("bad")
+    monkeypatch.setattr(captioner, "generate_text", bad)
+    assert _get(_start())["error"] == "Generation error: bad"
+    r = client.post("/api/prompt", json={"text": "a"})
+    assert r.status_code == 500 and r.json()["detail"] == "Generation error: bad"
