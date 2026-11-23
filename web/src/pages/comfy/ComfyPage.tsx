@@ -1,7 +1,10 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useId } from 'react'
 import { useSearchParams } from 'react-router'
 import { cn } from '@/lib/utils'
+import { ensureRunning } from './batchRunner'
+import { BatchTab } from './BatchTab'
 import { ConnectionCard } from './ConnectionCard'
 import { flushComfyForm } from './formStore'
 import { GalleryTab } from './GalleryTab'
@@ -26,6 +29,9 @@ export function ComfyPage() {
   const tab: Tab = isTab(raw) ? raw : 'lora'
   const uid = useId()
   useEffect(() => flushComfyForm, [])
+  // A batch left running before a reload goes on (a no-op while this page's loop runs).
+  const qc = useQueryClient()
+  useEffect(() => ensureRunning(qc), [qc])
 
   return (
     <div className="flex flex-col gap-6 px-10 py-8">
@@ -85,6 +91,8 @@ export function ComfyPage() {
         >
           {tab === 'lora' ? (
             <LoraTestTab />
+          ) : tab === 'batch' ? (
+            <BatchTab />
           ) : tab === 'gallery' ? (
             <GalleryTab />
           ) : (

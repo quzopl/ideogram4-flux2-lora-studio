@@ -119,14 +119,16 @@ export const deleteGalleryItem = (id: string) =>
 // ---- LoRA list (ComfyUI's /object_info) and the prompt library (.work/comfy_prompts.json) ---- //
 
 /**
- * GET /api/comfy/loras, asked on entry (and by refresh). Cached as the server
- * sends it: the bbox render reads the same key. ComfyUI down is a 502, shown
- * at once (no retry).
+ * GET /api/comfy/loras, asked on the first entry, then kept (each ask makes
+ * the backend fetch ComfyUI's whole /object_info): the refresh button and a
+ * changed server URL ask again. Cached as the server sends it: the bbox render
+ * reads the same key. ComfyUI down is a 502, shown at once (no retry).
  */
 export function useComfyLoras() {
   return useQuery({
     queryKey: ['comfy-loras'],
     queryFn: () => api<{ loras: string[] }>('/api/comfy/loras'),
+    staleTime: Infinity,
     retry: false,
   })
 }

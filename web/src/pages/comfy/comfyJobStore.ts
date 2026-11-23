@@ -7,7 +7,8 @@ import { JOB_ENDS, type ComfyJob } from './pollJob'
 export interface SlimImage {
   id: string
   url: string
-  seed: number
+  /** Missing when the image has none (shown as "—"). */
+  seed?: number
   width?: number
   height?: number
 }
@@ -29,17 +30,30 @@ export interface JobSlot {
 /** The slots run by one job each (the LoRA test, the workflow editor). */
 export type SlotName = 'lora' | 'editor'
 
-/** One line of the reference batch and how it went (Task 36 runs it). */
+/** One line of the reference batch and how it went (batchRunner runs it). */
 export interface BatchLine {
   line: string
+  /**
+   * queued, queueing (its POST in flight), the job's pending/running/done/
+   * error/cancelled, gone, skipped, or unknown (page reloaded while queueing).
+   */
   state: string
   images: SlimImage[]
   error: string
 }
 
+/** What every line of a batch is sent with (taken from the form when it starts). */
+export interface BatchParams {
+  width: number
+  height: number
+  steps: number
+  cfg: number
+}
+
 /** The reference batch: one job per prompt line, one line after another. */
 export interface BatchState {
   lines: string[]
+  params: BatchParams
   /** The line being sent or run. */
   index: number
   jobId: string | null
@@ -60,7 +74,8 @@ export interface ComfyJobs {
 const KEY = 'flux.comfy.jobs'
 const ENDED = JOB_ENDS as readonly JobOutcome['state'][]
 const EMPTY_BATCH: BatchState = {
-  lines: [], index: 0, jobId: null, posting: false, results: [], cancelled: false, running: false,
+  lines: [], params: { width: 1024, height: 1024, steps: 20, cfg: 3.5 },
+  index: 0, jobId: null, posting: false, results: [], cancelled: false, running: false,
 }
 const EMPTY: ComfyJobs = { lora: { jobId: null }, editor: { jobId: null }, batch: EMPTY_BATCH }
 
@@ -76,11 +91,11 @@ export function slimImages(images: unknown): SlimImage[] {
     const m = obj(i)
     const id = str(m.id)
     if (!id) return []
-    const width = num(m.width), height = num(m.height)
+    const seed = num(m.seed), width = num(m.width), height = num(m.height)
     return [{
       id,
       url: str(m.url) || `/api/comfy/gallery/${encodeURIComponent(id)}`,
-      seed: num(m.seed) ?? 0,
+      ...(seed !== undefined ? { seed } : {}),
       ...(width !== undefined ? { width } : {}),
       ...(height !== undefined ? { height } : {}),
     }]
@@ -105,8 +120,12 @@ function loadBatch(v: unknown): BatchState {
       return { line: str(l.line), state: str(l.state), images: slimImages(l.images), error: str(l.error) }
     })
     : []
+  const p = obj(b.params), d = EMPTY_BATCH.params
   return {
     lines: Array.isArray(b.lines) ? b.lines.filter((l): l is string => typeof l === 'string') : [],
+    params: {
+      width: num(p.width) ?? d.width, height: num(p.height) ?? d.height, steps: num(p.steps) ?? d.steps, cfg: num(p.cfg) ?? d.cfg,
+    },
     index: num(b.index) ?? 0,
     jobId: str(b.jobId) || null,
     posting: b.posting === true,
@@ -171,6 +190,26 @@ export function dropJob(slot: SlotName, jobId: string) {
 /** Replaces part of the batch state. */
 export function setBatch(patch: Partial<BatchState>) {
   update({ ...jobs, batch: { ...jobs.batch, ...patch } })
+}
+
+/** Replaces part of batch line i's result. */
+export function setBatchLine(i: number, patch: Partial<BatchLine>) {
+  setBatch({ results: jobs.batch.results.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
+}
+
+/**
+ * Compare-and-set before line i's POST: only while the running batch is at
+ * line i with no job and no POST in flight is `posting` set (and the line
+ * marked queueing); true when it was, and only then may the POST be sent.
+ */
+export function claimBatchLine(i: number) {
+  const b = jobs.batch
+  if (!b.running || b.index !== i || b.jobId !== null || b.posting) return false
+  update({
+    ...jobs,
+    batch: { ...b, posting: true, results: b.results.map((r, j) => (j === i ? { ...r, state: 'queueing' } : r)) },
+  })
+  return true
 }
 
 function subscribe(l: () => void) {

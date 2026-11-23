@@ -18,8 +18,26 @@ export interface LoraForm {
   loras: string[] | null
 }
 
-/** The reference batch form (Task 36 adds its fields). */
-export type BatchForm = Record<string, never>
+/** A number field of a form: its key, label and bounds. */
+export interface NumberSpec<K> { k: K; label: string; min: number; max: number; step?: number; decimal?: boolean }
+
+/** Size, steps and CFG (classic labels; the bounds are the port's): the LoRA test and the reference batch have these. */
+export const SIZE_FIELDS: NumberSpec<'width' | 'height' | 'steps' | 'cfg'>[] = [
+  { k: 'width', label: 'Width', min: 64, max: 8192, step: 64 },
+  { k: 'height', label: 'Height', min: 64, max: 8192, step: 64 },
+  { k: 'steps', label: 'Steps', min: 1, max: 1000 },
+  { k: 'cfg', label: 'CFG / Guidance', min: 0, max: 100, step: 0.1, decimal: true },
+]
+
+/** The reference batch form (classic defaults). */
+export interface BatchForm {
+  /** One prompt per line. */
+  prompts: string
+  width: number
+  height: number
+  steps: number
+  cfg: number
+}
 
 /**
  * This tab's ComfyUI page form. `url` is the server URL typed but not saved
@@ -38,7 +56,8 @@ export interface ComfyForm {
 const KEY = 'flux.comfy.form'
 const DEBOUNCE_MS = 300
 const LORA_DEFAULTS: LoraForm = { prompt: '', width: 1024, height: 1024, steps: 20, cfg: 3.5, seed: -1, batch: 2, loras: null }
-const DEFAULTS: ComfyForm = { lora: LORA_DEFAULTS, batch: {} }
+const BATCH_DEFAULTS: BatchForm = { prompts: '', width: 1024, height: 1024, steps: 20, cfg: 3.5 }
+const DEFAULTS: ComfyForm = { lora: LORA_DEFAULTS, batch: BATCH_DEFAULTS }
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
 
@@ -55,6 +74,18 @@ function loadLora(v: unknown): LoraForm {
   return out
 }
 
+/** The stored batch form field by field over the defaults. */
+function loadBatch(v: unknown): BatchForm {
+  const b = obj(v)
+  const out: BatchForm = { ...BATCH_DEFAULTS }
+  if (typeof b.prompts === 'string') out.prompts = b.prompts
+  for (const k of ['width', 'height', 'steps', 'cfg'] as const) {
+    const n = b[k]
+    if (typeof n === 'number' && Number.isFinite(n)) out[k] = n
+  }
+  return out
+}
+
 /** Stored values of the right type over the defaults (a missing or broken field keeps its default). */
 function load(): ComfyForm {
   try {
@@ -63,7 +94,7 @@ function load(): ComfyForm {
       ...(typeof r.url === 'string' ? { url: r.url } : {}),
       ...(typeof r.mapping === 'string' ? { mapping: r.mapping } : {}),
       lora: loadLora(r.lora),
-      batch: { ...DEFAULTS.batch },
+      batch: loadBatch(r.batch),
     }
   } catch {
     return DEFAULTS
@@ -118,6 +149,10 @@ export const setMappingDraft = (mapping: string | undefined) => setDraft('mappin
 
 export function setLoraForm(patch: Partial<LoraForm>) {
   update({ ...form, lora: { ...form.lora, ...patch } })
+}
+
+export function setBatchForm(patch: Partial<BatchForm>) {
+  update({ ...form, batch: { ...form.batch, ...patch } })
 }
 
 function subscribe(l: () => void) {

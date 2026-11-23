@@ -98,7 +98,7 @@ function Running({ slot, jobId, job }: { slot: SlotName; jobId: string; job: Com
 }
 
 /** A job error: its first line, the whole text (a traceback) behind "Details". */
-function ErrorText({ text, prefix, className }: { text: string; prefix: string; className: string }) {
+export function ErrorText({ text, prefix, className }: { text: string; prefix: string; className: string }) {
   const [first, ...rest] = text.split('\n')
   return (
     <div role="alert" className={cn('flex flex-col gap-1.5 text-sm', className)}>
@@ -142,7 +142,7 @@ function Outcome({ outcome }: { outcome: JobOutcome }) {
               className="overflow-hidden rounded-lg border border-line bg-bg/60"
             >
               <Link to={galleryLink(img.id)} title="Open in the gallery" className="block outline-none focus-visible:shadow-glow">
-                <img src={img.url} alt={`Seed ${img.seed}`} loading="lazy" className="aspect-square w-full object-contain" />
+                <img src={img.url} alt={`Seed ${img.seed ?? '—'}`} loading="lazy" className="aspect-square w-full object-contain" />
               </Link>
             </motion.li>
           ))}

@@ -69,7 +69,8 @@ export function LoraRows({ slots, hasWorkflow, rows, onChange }: LoraRowsProps) 
           <ol className="flex flex-col gap-1.5">
             {rows.map((value, i) => {
               const name = value.trim()
-              const unknown = known !== undefined && name !== '' && !known.includes(name)
+              // An empty list (e.g. loader types the backend does not list) has nothing to compare with.
+              const unknown = !!known?.length && name !== '' && !known.includes(name)
               return (
                 <li key={i} className="flex flex-col gap-1">
                   <div className="flex items-center gap-1.5">

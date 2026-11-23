@@ -8,7 +8,7 @@ import { api } from '@/lib/api'
 import { useMutationWithToast } from '@/lib/queries'
 import { ComfyJobBox } from './ComfyJobBox'
 import { startJob, useComfyJobs } from './comfyJobStore'
-import { setLoraForm, useComfyForm, type LoraForm } from './formStore'
+import { setLoraForm, SIZE_FIELDS, useComfyForm, type LoraForm, type NumberSpec } from './formStore'
 import { LoraRows } from './LoraRows'
 import { NamedLibrary } from './NamedLibrary'
 import { deletePrompt, errorText, loraSlots, savePrompt, useComfyConfig, usePrompts } from './queries'
@@ -19,12 +19,9 @@ const START_KEY = ['comfy-lora-start']
 
 type NumberField = 'width' | 'height' | 'steps' | 'cfg' | 'seed' | 'batch'
 
-/** The number fields (classic labels and defaults; the bounds are the port's). */
-const NUMBERS: { k: NumberField; label: string; min: number; max: number; step?: number; decimal?: boolean }[] = [
-  { k: 'width', label: 'Width', min: 64, max: 8192, step: 64 },
-  { k: 'height', label: 'Height', min: 64, max: 8192, step: 64 },
-  { k: 'steps', label: 'Steps', min: 1, max: 1000 },
-  { k: 'cfg', label: 'CFG / Guidance', min: 0, max: 100, step: 0.1, decimal: true },
+/** The number fields. */
+const NUMBERS: NumberSpec<NumberField>[] = [
+  ...SIZE_FIELDS,
   { k: 'seed', label: 'Seed (-1 = random)', min: -1, max: Number.MAX_SAFE_INTEGER },
   { k: 'batch', label: 'Sample count', min: 1, max: 8 },
 ]
@@ -195,7 +192,7 @@ function LoraTestCard() {
   )
 }
 
-function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
+export function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <label htmlFor={htmlFor} className="text-xs font-medium text-text-dim">{label}</label>

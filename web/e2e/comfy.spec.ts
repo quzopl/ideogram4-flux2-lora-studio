@@ -788,6 +788,34 @@ test('lora list loads, search narrows, unknown names warn', async ({ page }) => 
   await expect(loraRow(page, 2)).toBeEnabled()
 })
 
+test('lora list is asked once, not on every tab switch', async ({ page }) => {
+  await mockConfig(page, 1)
+  let calls = 0
+  await page.route('**/api/comfy/loras', (route) => {
+    calls++
+    return route.fulfill({ json: { loras: ['one.safetensors'] } })
+  })
+  await page.goto('/comfy')
+  await expect(loraCard(page).getByText('(1 available)')).toBeVisible()
+  for (let i = 0; i < 2; i++) {
+    await page.getByRole('tab', { name: 'Gallery' }).click()
+    await expect(loraCard(page)).toHaveCount(0)
+    await page.getByRole('tab', { name: 'LoRA test' }).click()
+    await expect(loraCard(page).getByText('(1 available)')).toBeVisible()
+  }
+  await page.waitForTimeout(500)
+  expect(calls).toBe(1)
+})
+
+test('empty lora list does not warn', async ({ page }) => {
+  // The fixture's list is empty (e.g. loader types the backend does not list): nothing to compare with.
+  await mockConfig(page, 1)
+  await page.goto('/comfy')
+  await expect(loraCard(page).getByText('(0 available)')).toBeVisible()
+  await loraRow(page, 1).fill('typed.safetensors')
+  await expect(loraCard(page).getByText('not on the ComfyUI list')).toHaveCount(0)
+})
+
 test('lora rows survive navigation', async ({ page }) => {
   await mockConfig(page, 2)
   await page.goto('/comfy')
@@ -883,6 +911,18 @@ test('job progress, preview, done with thumbnails', async ({ page }) => {
   await expect(galleryDialog(page)).toContainText('seed: 102')
 })
 
+test('job thumbnail without a seed shows a dash', async ({ page }) => {
+  const img = { ...metaOf({ id: galleryId('n'), ts: FUTURE + 22, prompt: 'no seed thumb', source: 'lora_test' }), seed: undefined }
+  await seedJobs(page, { lora: { jobId: 'job-noseed' } })
+  await mockJob(page, 'job-noseed', () => ({ state: 'done', current: 'Finished (1/1)', images: [img] }))
+  await page.goto('/comfy')
+  await expect(page.getByText('Done: 1 image(s).')).toBeVisible()
+  await expect(page.getByRole('img', { name: 'Seed —' })).toBeAttached()
+  // Kept unknown, not made 0.
+  await expect.poll(async () => (await savedJobs(page)).lora.last?.images[0]).toBeDefined()
+  expect((await savedJobs(page)).lora.last.images[0]).not.toHaveProperty('seed')
+})
+
 test('cancel ends cancelled', async ({ page }) => {
   await mockConfig(page, 2)
   await mockGenerate(page, 'job-cancel')
@@ -968,4 +1008,251 @@ test('prompt library save, load asks before replacing, delete', async ({ page })
   await page.getByRole('dialog', { name: 'Delete prompt?' }).getByRole('button', { name: 'Delete' }).click()
   await expect(card.getByText(`Deleted "${name}".`)).toBeVisible()
   expect(Object.keys((await (await page.request.get('/api/comfy/prompts')).json()).items)).not.toContain(name)
+})
+
+// ---- Reference batch (config, generate and jobs are mocked) ----
+
+const batchCard = (page: Page) => page.getByRole('region', { name: 'Reference batch', exact: true })
+const batchPrompts = (page: Page) => page.getByRole('textbox', { name: 'Prompts (one per line)' })
+const batchButton = (page: Page) => page.getByRole('button', { name: 'Generate batch' })
+/** The line items (not the thumbnails listed inside them). */
+const batchLines = (page: Page) => batchCard(page).getByRole('list', { name: 'Batch lines' }).locator(':scope > li')
+const lineState = (page: Page, i: number) => batchLines(page).nth(i).getByTestId('batch-line-state')
+const BATCH_BODY = { width: 1024, height: 1024, steps: 20, cfg: 3.5, batch: 1 }
+
+/** POST /api/comfy/generate answers job-<tag>-1, job-<tag>-2, … in turn; the bodies sent are collected. */
+async function mockBatchGenerate(page: Page, tag: string) {
+  const bodies: Record<string, unknown>[] = []
+  await page.route('**/api/comfy/generate', (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { job_id: `job-${tag}-${bodies.length}` } })
+  })
+  return bodies
+}
+
+/** The batch's jobs job-<tag>-1…n, each in the state `states` holds for it at the time of the poll. */
+async function mockBatchJobs(page: Page, tag: string, states: string[], extra: (i: number) => Record<string, unknown> = () => ({})) {
+  for (let i = 0; i < states.length; i++) await mockJob(page, `job-${tag}-${i + 1}`, () => ({ state: states[i], ...extra(i) }))
+}
+
+test('batch runs lines sequentially', async ({ page }) => {
+  const img = addImage({ id: galleryId('b'), ts: FUTURE + 30, prompt: 'red car', seed: 31, source: 'lora_test' })
+  await mockConfig(page, 1)
+  const bodies = await mockBatchGenerate(page, 'seq')
+  const states = ['running', 'running', 'running']
+  await mockBatchJobs(page, 'seq', states, (i) => (i === 0 && states[0] === 'done' ? { images: [img] } : {}))
+  await page.goto('/comfy?tab=batch')
+
+  // Classic labels and defaults.
+  await expect(batchCard(page).getByRole('spinbutton', { name: 'Width' })).toHaveValue('1024')
+  await expect(batchCard(page).getByRole('spinbutton', { name: 'Height' })).toHaveValue('1024')
+  await expect(batchCard(page).getByRole('spinbutton', { name: 'Steps' })).toHaveValue('20')
+  await expect(batchCard(page).getByRole('spinbutton', { name: 'CFG / Guidance' })).toHaveValue('3.5')
+  await expect(batchPrompts(page)).toHaveAttribute('placeholder', /^A photo of a red sports car on a coastal road at sunset\.\n/)
+  await expect(batchButton(page)).toBeDisabled()
+  await expect(batchCard(page).getByText('Enter at least one prompt.')).toBeVisible()
+
+  // Lines are trimmed, blank ones dropped.
+  await batchPrompts(page).fill('  red car on a coast \n\n wooden cabin \n   \ncoffee mug')
+  await batchButton(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  await expect(lineState(page, 0)).toHaveText('running')
+  await expect(lineState(page, 1)).toHaveText('queued')
+  await expect(batchCard(page).getByText('Generating 1/3: "red car on a coast…"')).toBeVisible()
+  await expect(batchButton(page)).toBeDisabled()
+  // One line at a time: the next is sent only once this one ends.
+  await page.waitForTimeout(900)
+  expect(bodies).toHaveLength(1)
+
+  states[0] = 'done'
+  await expect.poll(() => bodies.length).toBe(2)
+  await expect(lineState(page, 0)).toHaveText('done')
+  await expect(batchLines(page).nth(0).getByRole('img', { name: 'Seed 31' })).toBeVisible()
+  await expect(lineState(page, 1)).toHaveText('running')
+  states[1] = 'done'
+  await expect.poll(() => bodies.length).toBe(3)
+  states[2] = 'done'
+  await expect(batchCard(page).getByText('Done: 3.')).toBeVisible()
+  for (let i = 0; i < 3; i++) await expect(lineState(page, i)).toHaveText('done')
+  expect(bodies).toEqual([
+    { prompt: 'red car on a coast', ...BATCH_BODY },
+    { prompt: 'wooden cabin', ...BATCH_BODY },
+    { prompt: 'coffee mug', ...BATCH_BODY },
+  ])
+  await expect(batchButton(page)).toBeEnabled()
+  await batchLines(page).nth(0).getByRole('img', { name: 'Seed 31' }).click()
+  await expect(galleryDialog(page)).toContainText('seed: 31')
+})
+
+test('batch generate disabled without a workflow', async ({ page }) => {
+  await mockConfig(page, 0, false)
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('one line')
+  await expect(batchButton(page)).toBeDisabled()
+  await expect(batchCard(page).getByText('Upload a workflow on the LoRA test tab first.')).toBeVisible()
+})
+
+test('batch survives navigation', async ({ page }) => {
+  await mockConfig(page, 1)
+  const bodies = await mockBatchGenerate(page, 'nav')
+  const states = ['running', 'running', 'running']
+  await mockBatchJobs(page, 'nav', states)
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('line one\nline two\nline three')
+  await batchCard(page).getByRole('spinbutton', { name: 'Steps' }).fill('28')
+  await batchButton(page).click()
+  states[0] = 'done'
+  await expect.poll(() => bodies.length).toBe(2)
+  await expect(lineState(page, 1)).toHaveText('running')
+
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  await expect(batchCard(page)).toHaveCount(0)
+  // The batch runs on while the view is away.
+  states[1] = 'done'
+  await expect.poll(() => bodies.length).toBe(3)
+
+  await nav.getByRole('link', { name: 'ComfyUI', exact: true }).click()
+  await page.getByRole('tab', { name: 'Reference batch' }).click()
+  await expect(lineState(page, 1)).toHaveText('done')
+  await expect(lineState(page, 2)).toHaveText('running')
+  await expect(batchPrompts(page)).toHaveValue('line one\nline two\nline three')
+  await expect(batchCard(page).getByRole('spinbutton', { name: 'Steps' })).toHaveValue('28')
+  states[2] = 'done'
+  await expect(batchCard(page).getByText('Done: 3.')).toBeVisible()
+  await page.waitForTimeout(900)
+  expect(bodies.map((b) => b.prompt)).toEqual(['line one', 'line two', 'line three'])
+  expect(bodies.every((b) => b.steps === 28)).toBe(true)
+})
+
+test('batch reload resumes without sending a line again', async ({ page }) => {
+  await mockConfig(page, 1)
+  const bodies = await mockBatchGenerate(page, 'rld')
+  const states = ['done', 'running', 'running']
+  await mockBatchJobs(page, 'rld', states)
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('first\nsecond\nthird')
+  await batchButton(page).click()
+  await expect(lineState(page, 1)).toHaveText('running')
+
+  await page.reload()
+  await expect(lineState(page, 0)).toHaveText('done')
+  await expect(lineState(page, 1)).toHaveText('running')
+  await page.waitForTimeout(900)
+  expect(bodies).toHaveLength(2)
+  states[1] = 'done'
+  states[2] = 'done'
+  await expect(batchCard(page).getByText('Done: 3.')).toBeVisible()
+  expect(bodies.map((b) => b.prompt)).toEqual(['first', 'second', 'third'])
+})
+
+test('batch line reloaded while queueing is not sent again', async ({ page }) => {
+  const line = (l: string, state: string) => ({ line: l, state, images: [], error: '' })
+  // A reload hit while line 2's POST was in flight: whether it reached the server is unknown.
+  await seedJobs(page, {
+    batch: {
+      lines: ['first', 'second', 'third'], index: 1, jobId: null, posting: true, cancelled: false, running: true,
+      params: { width: 768, height: 512, steps: 12, cfg: 2 },
+      results: [line('first', 'done'), line('second', 'queueing'), line('third', 'queued')],
+    },
+  })
+  await mockConfig(page, 1)
+  const bodies = await mockBatchGenerate(page, 'q')
+  await mockBatchJobs(page, 'q', ['done'])
+  // On the LoRA tab: the page resumes the batch, whichever tab is shown.
+  await page.goto('/comfy')
+  await expect.poll(() => bodies.length).toBe(1)
+  // With the batch's own parameters, not the form's.
+  expect(bodies[0]).toEqual({ prompt: 'third', width: 768, height: 512, steps: 12, cfg: 2, batch: 1 })
+  await page.getByRole('tab', { name: 'Reference batch' }).click()
+  await expect(lineState(page, 1)).toHaveText('unknown (page reloaded while queueing)')
+  await expect(lineState(page, 2)).toHaveText('done')
+  await expect(batchCard(page).getByText('Done: 3.')).toBeVisible()
+  await page.waitForTimeout(900)
+  expect(bodies).toHaveLength(1)
+})
+
+test('batch cancel stops the rest', async ({ page }) => {
+  await mockConfig(page, 1)
+  const bodies = await mockBatchGenerate(page, 'cxb')
+  const states = ['running', 'running', 'running']
+  await mockBatchJobs(page, 'cxb', states)
+  const cancels: string[] = []
+  await page.route('**/api/comfy/job/*/cancel', (route) => {
+    cancels.push(pathOf(route.request().url()))
+    return route.fulfill({ json: { ok: true } })
+  })
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('one\ntwo\nthree')
+  await batchButton(page).click()
+  await expect(lineState(page, 0)).toHaveText('running')
+
+  await batchCard(page).getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(batchCard(page).getByRole('button', { name: 'Cancelling…' })).toBeDisabled()
+  expect(cancels).toEqual(['/api/comfy/job/job-cxb-1/cancel'])
+  // It waits for the job to report `cancelled`; nothing more is sent meanwhile.
+  await page.waitForTimeout(900)
+  await expect(lineState(page, 0)).toHaveText('running')
+  expect(bodies).toHaveLength(1)
+
+  states[0] = 'cancelled'
+  await expect(batchCard(page).getByText('Cancelled.', { exact: true })).toBeVisible()
+  await expect(lineState(page, 0)).toHaveText('cancelled')
+  await expect(lineState(page, 1)).toHaveText('skipped')
+  await expect(lineState(page, 2)).toHaveText('skipped')
+  expect(bodies).toHaveLength(1)
+  expect(cancels).toHaveLength(1)
+  await expect(batchButton(page)).toBeEnabled()
+})
+
+test('batch line error stops', async ({ page }) => {
+  await mockConfig(page, 1)
+  const bodies = await mockBatchGenerate(page, 'err')
+  const error = 'CLIPTextEncode (node 6): RuntimeError: out of memory\nTraceback (most recent call last):\n  File "x.py", line 1'
+  await mockBatchJobs(page, 'err', ['done', 'error', 'done'], (i) => (i === 1 ? { error } : {}))
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('one\ntwo\nthree')
+  await batchButton(page).click()
+
+  const alert = batchCard(page).getByRole('alert')
+  await expect(alert).toContainText('Stopped at line 2: CLIPTextEncode (node 6): RuntimeError: out of memory')
+  await expect(alert.getByText('Traceback (most recent call last):', { exact: false })).toBeHidden()
+  await alert.getByText('Details').click()
+  await expect(alert.locator('pre')).toHaveText(error)
+  await expect(lineState(page, 0)).toHaveText('done')
+  await expect(lineState(page, 1)).toHaveText('error')
+  await expect(lineState(page, 2)).toHaveText('skipped')
+  await page.waitForTimeout(900)
+  expect(bodies).toHaveLength(2)
+  await expect(batchButton(page)).toBeEnabled()
+})
+
+test('batch job gone stops', async ({ page }) => {
+  await mockConfig(page, 1)
+  // No job mock: the fixture answers 404 for every job (as after a server restart).
+  const bodies = await mockBatchGenerate(page, 'gone')
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('one\ntwo')
+  await batchButton(page).click()
+  await expect(batchCard(page).getByRole('alert')).toContainText(
+    'Stopped at line 1: The ComfyUI job is gone (was the server restarted?)')
+  await expect(lineState(page, 0)).toHaveText('gone')
+  await expect(lineState(page, 1)).toHaveText('skipped')
+  await page.waitForTimeout(900)
+  expect(bodies).toHaveLength(1)
+  await expect(batchButton(page)).toBeEnabled()
+})
+
+test('batch start error stops', async ({ page }) => {
+  await mockConfig(page, 1)
+  await page.route('**/api/comfy/generate', (route) =>
+    route.fulfill({ status: 502, json: { detail: 'ComfyUI is not reachable.' } }))
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('one\ntwo')
+  await batchButton(page).click()
+  await expect(batchCard(page).getByRole('alert')).toContainText('Stopped at line 1: ComfyUI is not reachable.')
+  await expect(lineState(page, 0)).toHaveText('error')
+  await expect(lineState(page, 1)).toHaveText('skipped')
+  await expect(batchButton(page)).toBeEnabled()
 })
