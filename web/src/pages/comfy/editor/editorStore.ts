@@ -86,7 +86,7 @@ export function loadWorkflow(workflow: Workflow, name?: string) {
   update({ workflow, name: name ?? state.name, dirty: false, invalid: {}, loads: state.loads + 1 })
 }
 
-/** The library name typed for the workflow (Save to library, Import and the .json file name use it). */
+/** The workflow's library name (Save to library saves under it, Save .json names the file after it; Load and Import set it). */
 export function setName(name: string) {
   if (name !== state.name) update({ ...state, name })
 }
