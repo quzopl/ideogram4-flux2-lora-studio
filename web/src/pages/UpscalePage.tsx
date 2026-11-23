@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { FileArchive, FolderOpen, FolderOutput, ImageOff, Plus, Sparkles, Wand2 } from 'lucide-react'
+import { FileArchive, FolderOpen, FolderOutput, ImageOff, Plus, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { motion } from 'motion/react'
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { BeforeAfter } from '@/components/BeforeAfter'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { DropZone } from '@/components/DropZone'
 import { FolderPicker } from '@/components/FolderPicker'
 import { GpuSelect } from '@/components/GpuSelect'
@@ -17,7 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
 import { useSavedForm } from '@/hooks/useAutosave'
 import { api, ApiError } from '@/lib/api'
-import { useMutationWithToast } from '@/lib/queries'
+import { useMutationWithToast, useStoreModels } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 
 type Scale = 'x2' | 'x3' | 'x4' | 'custom' | 'long_side' | 'native'
@@ -324,6 +325,7 @@ export function UpscalePage() {
   const [sourcePicker, setSourcePicker] = useState(false)
   const [exportPicker, setExportPicker] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [removing, setRemoving] = useState(false)
   // Kept for the session, so leaving the view and coming back resumes it.
   const [run, setRunState] = useState<Run | null>(loadRun)
   const setRun = (r: Run) => {
@@ -368,6 +370,12 @@ export function UpscalePage() {
 
   const start = useMutationWithToast((body: ReturnType<typeof runBody>) =>
     api<{ job_id: string; total: number }>('/api/upscale/run', { method: 'POST', json: body }))
+  const storeModels = useStoreModels()
+  const customModel = storeModels.data?.models.find((m) => m.id === form.model_id && m.source === 'custom')
+  const removeModel = useMutationWithToast(
+    (v: { repo_id: string; filename: string }) => api('/api/upscale/models/custom', { method: 'DELETE', json: v }),
+    { success: 'Model removed', invalidate: [['store-models']], onSuccess: () => set('model_id', '') },
+  )
   const exportTo = useMutationWithToast((output_folder: string) =>
     api<{ written: number; folder: string }>('/api/upscale/export', {
       method: 'POST',
@@ -433,6 +441,12 @@ export function UpscalePage() {
               <Plus />
               Add custom model…
             </Button>
+            {customModel && (
+              <Button type="button" variant="ghost" size="sm" className="self-start text-text-dim" onClick={() => setRemoving(true)}>
+                <Trash2 />
+                Remove custom model
+              </Button>
+            )}
           </Field>
 
           <Field label="Scale">
@@ -605,6 +619,16 @@ export function UpscalePage() {
             onSuccess: (r) => toast.success(`Exported ${r.written === 1 ? '1 image' : `${r.written} images`} to ${r.folder}`),
           })}
       />
+      <ConfirmDialog
+        open={removing}
+        onOpenChange={setRemoving}
+        title="Remove custom model?"
+        action="Remove"
+        destructive
+        onConfirm={() => customModel && removeModel.mutate({ repo_id: customModel.repo_id, filename: customModel.filename })}
+      >
+        Remove “{customModel?.label}” from the list? The downloaded file stays on disk.
+      </ConfirmDialog>
       <AddModelDialog open={adding} onOpenChange={setAdding} onAdded={(id) => set('model_id', id)} />
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>

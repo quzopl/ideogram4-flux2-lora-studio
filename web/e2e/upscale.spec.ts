@@ -213,6 +213,43 @@ test('add custom model sends repo and file', async ({ page }) => {
   expect(bodies).toEqual([{ repo_id: 'someone/upscalers', filename: '4x-Test.pth' }])
 })
 
+test('remove custom model asks, sends repo and file, and resets the choice', async ({ page }) => {
+  const entry = (id: string, source: string, extra: Record<string, unknown> = {}) => ({
+    id, kind: 'upscale', label: id, repo_id: 'me/x', filename: 'up.pth', source,
+    status: 'missing', local_path: null, download: null, ...extra,
+  })
+  await page.route('**/api/store/models', (route) =>
+    route.fulfill({
+      json: {
+        models_dir: '/m',
+        models: [entry('hf:me/x/up.pth', 'custom'), entry('builtin:4x', 'builtin', { label: 'Builtin 4x', repo_id: 'b/y', filename: '4x.pth' })],
+      },
+    }))
+  const bodies: unknown[] = []
+  await page.route('**/api/upscale/models/custom', (route) => {
+    if (route.request().method() !== 'DELETE') return route.fallback()
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { models: [] } })
+  })
+  await page.goto('/upscale')
+  const model = page.getByRole('combobox', { name: 'Model' })
+  const remove = page.getByRole('button', { name: 'Remove custom model' })
+
+  await model.click()
+  await page.getByRole('option', { name: /Builtin 4x/ }).click()
+  await expect(remove).toHaveCount(0)
+
+  await model.click()
+  await page.getByRole('option', { name: /hf:me\/x\/up\.pth/ }).click()
+  await remove.click()
+  const dialog = page.getByRole('dialog', { name: 'Remove custom model?' })
+  await dialog.getByRole('button', { name: 'Remove', exact: true }).click()
+  await expect(page.getByText('Model removed')).toBeVisible()
+  expect(bodies).toEqual([{ repo_id: 'me/x', filename: 'up.pth' }])
+  await expect(model).toHaveText('Choose a model')
+  await expect(remove).toHaveCount(0)
+})
+
 test('device list has no Auto and a saved "auto" runs on the role default', async ({ page, request }) => {
   // A form saved before Auto was hidden.
   await request.put('/api/settings/forms/upscale', { data: { values: { device: 'auto' } } })
