@@ -1,6 +1,7 @@
 // Pure functions of the ComfyUI page, run in Node (no page): Playwright transpiles the TS module.
 import { expect, test } from './fixtures.ts'
-import { downloadName, fmtEta, fmtProgress, promptPreview, sourceLabel } from '../src/pages/comfy/format.ts'
+import { downloadName, fmtEta, fmtProgress, loraName, promptPreview, sourceLabel } from '../src/pages/comfy/format.ts'
+import { pollJobCore } from '../src/pages/comfy/pollJobCore.ts'
 
 test('fmtEta formats like classic', () => {
   expect(fmtEta(0)).toBe('0s')
@@ -48,77 +49,103 @@ test('gallery download name', () => {
   expect(downloadName({ id: '', filename: '' })).toBe('image.png')
 })
 
-// ---- pollJob (the batch's polling core) against a stubbed fetch ----
+test('gallery lora name', () => {
+  expect(loraName('a.safetensors')).toBe('a.safetensors')
+  expect(loraName({ lora: 'old.safetensors', strength: 1 })).toBe('old.safetensors')
+  expect(loraName(null)).toBe('')
+  expect(loraName(undefined)).toBe('')
+  expect(loraName({ other: 1 })).toBe('{"other":1}')
+})
+
+// ---- pollJobCore (the batch's polling loop), with a stubbed `get` ----
+
+type Job = { id: string; state: string }
+const GONE = new Error('gone')
+
+/** `get` answers these in turn (an Error is thrown); the polled ids are collected. */
+function stubGet(answers: (Job | Error)[]) {
+  const ids: string[] = []
+  const get = async (id: string) => {
+    ids.push(id)
+    const a = answers.shift() ?? new Error('no more answers')
+    if (a instanceof Error) throw a
+    return a
+  }
+  return { ids, get }
+}
+const isGone = (e: unknown) => e === GONE
+
+test('pollJobCore waits out errors and ends with the job', async () => {
+  const stub = stubGet([new TypeError('network down'), new Error('500'), { id: 'j', state: 'running' }, { id: 'j', state: 'cancelled' }])
+  const seen: string[] = []
+  const job = await pollJobCore(stub.get, isGone, 'j', { intervalMs: 1, onUpdate: (j) => seen.push(j.state) })
+  expect(job).toEqual({ id: 'j', state: 'cancelled' })
+  expect(seen).toEqual(['running', 'cancelled'])
+  expect(stub.ids).toEqual(['j', 'j', 'j', 'j'])
+})
+
+test('pollJobCore ends on done and error, and is gone', async () => {
+  for (const state of ['done', 'error']) {
+    const stub = stubGet([{ id: 'j', state: 'pending' }, { id: 'j', state }])
+    expect(await pollJobCore(stub.get, isGone, 'j', { intervalMs: 1 })).toEqual({ id: 'j', state })
+  }
+  const stub = stubGet([{ id: 'j', state: 'running' }, GONE, { id: 'j', state: 'done' }])
+  expect(await pollJobCore(stub.get, isGone, 'j', { intervalMs: 1 })).toBe('gone')
+  expect(stub.ids).toHaveLength(2)
+})
+
+test('pollJobCore rejects when onUpdate throws', async () => {
+  // Not a transient error: it must not be retried (the loop would never end).
+  const stub = stubGet([{ id: 'j', state: 'running' }, { id: 'j', state: 'running' }, { id: 'j', state: 'done' }])
+  const polling = pollJobCore(stub.get, isGone, 'j', {
+    intervalMs: 1,
+    onUpdate: () => {
+      throw new Error('update failed')
+    },
+  })
+  // A loop that retries never settles: give it half a second.
+  const outcome = await Promise.race([
+    polling.then(() => 'resolved', (e: Error) => e.message),
+    new Promise((r) => setTimeout(() => r('still polling'), 500)),
+  ])
+  expect(outcome).toBe('update failed')
+  expect(stub.ids).toHaveLength(1)
+})
+
+test('pollJobCore stops when aborted', async () => {
+  const stub = stubGet(Array.from({ length: 1000 }, () => ({ id: 'j', state: 'running' })))
+  const ctrl = new AbortController()
+  const polling = pollJobCore(stub.get, isGone, 'j', { signal: ctrl.signal, intervalMs: 50 })
+  await expect.poll(() => stub.ids.length).toBe(1)
+  ctrl.abort(new Error('left the page'))
+  await expect(polling).rejects.toThrow('left the page')
+  const polls = stub.ids.length
+  await new Promise((r) => setTimeout(r, 150))
+  expect(stub.ids).toHaveLength(polls)
+})
+
+// ---- pollJob (pollJobCore over the app's fetch), its 404 path ----
 
 // pollJob imports app modules ('@/…', extensionless): loaded at run time only, so the Node typecheck does not follow it.
 const POLL_JOB = '../src/pages/comfy/pollJob.ts'
-type Job = { id: string; state: string }
-type PollJob = (
-  id: string,
-  opts: { signal?: AbortSignal; intervalMs?: number; onUpdate?: (job: Job) => void },
-) => Promise<Job | 'gone'>
+type PollJob = (id: string, opts: { intervalMs?: number }) => Promise<Job | 'gone'>
 const loadPollJob = async () => (await import(POLL_JOB)).pollJob as PollJob
 
-/** fetch answers these in turn (an Error is thrown, a number is that status); the requested URLs are collected. */
-function stubFetch(answers: (Job | number | Error)[]) {
+test('pollJob fetches the job URL and is gone on 404', async () => {
+  const pollJob = await loadPollJob()
+  const answers: (Job | number)[] = [{ id: 'j/1', state: 'running' }, 500, 404]
   const urls: string[] = []
   const real = globalThis.fetch
   globalThis.fetch = (async (url: string) => {
     urls.push(url)
     const a = answers.shift() ?? 500
-    if (a instanceof Error) throw a
     if (typeof a === 'number') return new Response(JSON.stringify({ detail: `status ${a}` }), { status: a })
     return new Response(JSON.stringify(a))
   }) as typeof fetch
-  return { urls, restore: () => { globalThis.fetch = real } }
-}
-
-test('pollJob waits out errors and ends with the job', async () => {
-  const pollJob = await loadPollJob()
-  const stub = stubFetch([new TypeError('network down'), 500, { id: 'j', state: 'running' }, { id: 'j', state: 'cancelled' }])
   try {
-    const seen: string[] = []
-    const job = await pollJob('j', { intervalMs: 1, onUpdate: (j) => seen.push(j.state) })
-    expect(job).toEqual({ id: 'j', state: 'cancelled' })
-    expect(seen).toEqual(['running', 'cancelled'])
-    expect(stub.urls).toEqual(Array(4).fill('/api/comfy/job/j'))
+    expect(await pollJob('j/1', { intervalMs: 1 })).toBe('gone')
+    expect(urls).toEqual(Array(3).fill('/api/comfy/job/j%2F1'))
   } finally {
-    stub.restore()
-  }
-})
-
-test('pollJob ends on done and error, and is gone on 404', async () => {
-  const pollJob = await loadPollJob()
-  for (const state of ['done', 'error']) {
-    const stub = stubFetch([{ id: 'j', state: 'pending' }, { id: 'j', state }])
-    try {
-      expect(await pollJob('j', { intervalMs: 1 })).toEqual({ id: 'j', state })
-    } finally {
-      stub.restore()
-    }
-  }
-  const stub = stubFetch([{ id: 'j', state: 'running' }, 404, { id: 'j', state: 'done' }])
-  try {
-    expect(await pollJob('j', { intervalMs: 1 })).toBe('gone')
-    expect(stub.urls).toHaveLength(2)
-  } finally {
-    stub.restore()
-  }
-})
-
-test('pollJob stops when aborted', async () => {
-  const pollJob = await loadPollJob()
-  const stub = stubFetch(Array.from({ length: 1000 }, () => ({ id: 'j', state: 'running' })))
-  try {
-    const ctrl = new AbortController()
-    const polling = pollJob('j', { signal: ctrl.signal, intervalMs: 50 })
-    await expect.poll(() => stub.urls.length).toBe(1)
-    ctrl.abort(new Error('left the page'))
-    await expect(polling).rejects.toThrow('left the page')
-    const polls = stub.urls.length
-    await new Promise((r) => setTimeout(r, 150))
-    expect(stub.urls).toHaveLength(polls)
-  } finally {
-    stub.restore()
+    globalThis.fetch = real
   }
 })

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { copyText } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
-import { downloadName, sourceLabel } from './format'
+import { downloadName, loraName, sourceLabel } from './format'
 import type { GalleryItem } from './queries'
 
 /** Badge colours per source (an unknown one is plain). */
@@ -23,12 +23,6 @@ export function SourceBadge({ source }: { source: string }) {
     </span>
   )
 }
-
-/** A LoRA entry's name: a string, or an old item's `{lora}` object. */
-const loraName = (l: unknown) =>
-  typeof l === 'string' ? l : l && typeof l === 'object' && typeof (l as { lora?: unknown }).lora === 'string'
-    ? (l as { lora: string }).lora
-    : JSON.stringify(l)
 
 const tag = 'rounded-md border border-line bg-bg/60 px-2 py-0.5 font-mono text-[11px] text-text-dim tabular-nums'
 

@@ -11,6 +11,8 @@ const WORKFLOW_PROMPT = 'a photo of ohwx person in a park'
 
 const urlField = (page: Page) => page.getByRole('textbox', { name: 'ComfyUI address (server URL)' })
 const mappingJson = (page: Page) => page.getByRole('textbox', { name: 'Mapping JSON' })
+/** The Workflow card (the LoRA test card has a library with the same buttons). */
+const workflowCard = (page: Page) => page.getByRole('region', { name: 'Workflow', exact: true })
 const pathOf = (url: string) => new URL(url).pathname
 
 async function uploadWorkflow(page: Page) {
@@ -153,7 +155,7 @@ test('invalid mapping json is rejected locally', async ({ page }) => {
 
   await mappingJson(page).fill('[1, 2]')
   await page.getByRole('textbox', { name: 'Name for the new mapping' }).fill('e2e-never-saved')
-  await page.getByRole('button', { name: 'Save as', exact: true }).click()
+  await workflowCard(page).getByRole('button', { name: 'Save as', exact: true }).click()
   await expect(page.getByText('The mapping must be a JSON object.')).toBeVisible()
   expect(posts).toEqual([])
 
@@ -180,7 +182,7 @@ test('mapping library save, load activates, delete asks', async ({ page }) => {
   const edited = { ...JSON.parse(await mappingJson(page).inputValue()), positive_node: null }
   await mappingJson(page).fill(JSON.stringify(edited))
   await page.getByRole('textbox', { name: 'Name for the new mapping' }).fill(name)
-  await page.getByRole('button', { name: 'Save as', exact: true }).click()
+  await workflowCard(page).getByRole('button', { name: 'Save as', exact: true }).click()
   await expect(page.getByText(`Saved "${name}".`)).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Name for the new mapping' })).toHaveValue('')
   await expect(page.getByText('positive: mapped', { exact: true })).toBeVisible()
@@ -192,26 +194,26 @@ test('mapping library save, load activates, delete asks', async ({ page }) => {
   await mappingJson(page).fill('{"scratch": true}')
   await library.click()
   await page.getByRole('option', { name, exact: true }).click()
-  await page.getByRole('button', { name: 'Load', exact: true }).click()
+  await workflowCard(page).getByRole('button', { name: 'Load', exact: true }).click()
   await expect(page.getByText(`Loaded "${name}".`)).toBeVisible()
   expect(JSON.parse(await mappingJson(page).inputValue())).toEqual(edited)
   await expect(page.getByText('positive: unmapped', { exact: true })).toBeVisible()
   expect(activated).toEqual([{ mapping: edited }])
   // The selection outlives a refresh of the list.
   await page.getByRole('textbox', { name: 'Name for the new mapping' }).fill(`${name}-b`)
-  await page.getByRole('button', { name: 'Save as', exact: true }).click()
+  await workflowCard(page).getByRole('button', { name: 'Save as', exact: true }).click()
   await expect(page.getByText(`Saved "${name}-b".`)).toBeVisible()
   await expect(library).toHaveText(name)
 
   // Delete asks first.
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await workflowCard(page).getByRole('button', { name: 'Delete', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Delete mapping?' })
   await expect(dialog).toContainText(name)
   await dialog.getByRole('button', { name: 'Cancel' }).click()
   await expect(dialog).toHaveCount(0)
   expect(Object.keys((await (await page.request.get('/api/comfy/mappings')).json()).items)).toContain(name)
 
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await workflowCard(page).getByRole('button', { name: 'Delete', exact: true }).click()
   await page.getByRole('dialog', { name: 'Delete mapping?' }).getByRole('button', { name: 'Delete' }).click()
   await expect(page.getByText(`Deleted "${name}".`)).toBeVisible()
   await expect(library).toHaveText('— saved mappings —')
@@ -552,4 +554,418 @@ test('job state over the storage quota shows a toast', async ({ page }) => {
   await expect(page.getByText('Could not keep the job state in this tab.')).toBeVisible()
   // The page carries on with the state in memory.
   await expect(page.getByText('Cancelled.', { exact: true })).toBeVisible()
+})
+
+test('gallery card without a seed shows a dash', async ({ page }) => {
+  addImage({ id: galleryId('s'), ts: FUTURE + 9, prompt: 'no seed card', seed: undefined, source: 'editor' })
+  await page.goto('/comfy?tab=gallery')
+  const card = galleryCards(page).filter({ hasText: 'no seed card' })
+  await expect(card).toContainText('seed: —')
+})
+
+test('one job is polled once', async ({ page }) => {
+  const polls: number[] = []
+  await seedJobs(page, { lora: { jobId: 'job-once' } })
+  await mockJob(page, 'job-once', () => {
+    polls.push(Date.now())
+    return { state: 'running', current: 'Sample 1/1: step 1/20', progress: { value: 1, max: 20 } }
+  })
+  await page.goto('/comfy')
+  await expect(page.getByText('Sample 1/1: step 1/20', { exact: false })).toBeVisible()
+  // Only the page's observer polls, one GET 700 ms after the last answer; the job box reads its
+  // cache. A box polling too would also fetch each time it mounts, off that beat: leave the tab
+  // and come back, again and again, and look at the gaps between the GETs.
+  const from = polls.length
+  for (let i = 0; i < 8; i++) {
+    await page.getByRole('tab', { name: 'Gallery' }).click()
+    await expect(page.getByTestId('comfy-job')).toHaveCount(0)
+    await page.getByRole('tab', { name: 'LoRA test' }).click()
+    await expect(page.getByText('Sample 1/1: step 1/20', { exact: false })).toBeVisible()
+  }
+  await page.waitForTimeout(1000)
+  const gaps = polls.slice(from).map((t, i, a) => (i ? t - a[i - 1] : Infinity))
+  expect(gaps.length).toBeGreaterThan(3)
+  expect(Math.min(...gaps)).toBeGreaterThanOrEqual(600)
+})
+
+test('cancelling survives a tab switch', async ({ page }) => {
+  let state = 'running'
+  const cancels: string[] = []
+  await seedJobs(page, { lora: { jobId: 'job-cxl' } })
+  await mockJob(page, 'job-cxl', () => ({ state, current: state === 'running' ? 'Sample 1/1: step 2/20' : 'Cancelled' }))
+  await page.route('**/api/comfy/job/job-cxl/cancel', (route) => {
+    cancels.push(route.request().method())
+    return route.fulfill({ json: { ok: true } })
+  })
+  await page.goto('/comfy')
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Cancelling…' })).toBeDisabled()
+  expect(cancels).toEqual(['POST'])
+
+  // The cancel was answered; the job runs on until ComfyUI stops it. Away and back: still cancelling.
+  await page.getByRole('tab', { name: 'Gallery' }).click()
+  await expect(page.getByRole('button', { name: 'Cancelling…' })).toHaveCount(0)
+  await page.getByRole('tab', { name: 'LoRA test' }).click()
+  await expect(page.getByRole('button', { name: 'Cancelling…' })).toBeDisabled()
+
+  state = 'cancelled'
+  await expect(page.getByText('Cancelled.', { exact: true })).toBeVisible()
+  expect(cancels).toEqual(['POST'])
+})
+
+// ---- LoRA test (config, LoRA list, generate and jobs are mocked; the prompt library is real) ----
+
+const loraCard = (page: Page) => page.getByRole('region', { name: 'LoRA test', exact: true })
+const loraRow = (page: Page, n: number) => page.getByRole('combobox', { name: `LoRA ${n}`, exact: true })
+const loraRows = (page: Page) => loraCard(page).getByRole('combobox', { name: /^LoRA \d+$/ })
+const promptBox = (page: Page) => page.getByRole('textbox', { name: 'Prompt (FLUX.2)' })
+const generateButton = (page: Page) => page.getByRole('button', { name: 'Generate samples' })
+
+/** GET /api/comfy/config answers a stored workflow with `slots` LoRA loaders (or none at all). */
+async function mockConfig(page: Page, slots: number, hasWorkflow = true) {
+  const mapping = {
+    positive_node: '6', positive_field: 'text',
+    lora_nodes: Array.from({ length: slots }, (_, i) => ({ node: String(10 + i), field: 'lora_name', current: '', class_type: 'LoraLoader' })),
+  }
+  await page.route('**/api/comfy/config', (route) =>
+    route.fulfill({
+      json: { url: 'http://127.0.0.1:9', has_workflow: hasWorkflow, workflow_node_count: hasWorkflow ? 9 : 0, mapping: hasWorkflow ? mapping : null },
+    }))
+}
+
+/** POST /api/comfy/generate answers `jobId`; the bodies sent are collected. */
+async function mockGenerate(page: Page, jobId: string) {
+  const bodies: Record<string, unknown>[] = []
+  await page.route('**/api/comfy/generate', (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { job_id: jobId } })
+  })
+  return bodies
+}
+
+/** Starts the tab with this LoRA test form in `flux.comfy.form` (only on the first load). */
+async function seedLoraForm(page: Page, lora: Record<string, unknown>) {
+  await page.addInitScript((value) => {
+    if (sessionStorage.getItem('flux.comfy.form') === null) sessionStorage.setItem('flux.comfy.form', value)
+  }, JSON.stringify({ lora, batch: {} }))
+}
+
+test('generate sends the form', async ({ page }) => {
+  await mockConfig(page, 2)
+  const bodies = await mockGenerate(page, 'job-form')
+  await mockJob(page, 'job-form', () => ({ state: 'done', current: 'Finished (2/2)' }))
+  await page.goto('/comfy')
+
+  await expect(page.getByRole('spinbutton', { name: 'Width' })).toHaveValue('1024')
+  await expect(page.getByRole('spinbutton', { name: 'Width' })).toHaveAttribute('step', '64')
+  await expect(page.getByRole('spinbutton', { name: 'Height' })).toHaveValue('1024')
+  await expect(page.getByRole('spinbutton', { name: 'Steps' })).toHaveValue('20')
+  await expect(page.getByRole('spinbutton', { name: 'CFG / Guidance' })).toHaveValue('3.5')
+  await expect(page.getByRole('spinbutton', { name: 'Seed (-1 = random)' })).toHaveValue('-1')
+  await expect(page.getByRole('spinbutton', { name: 'Sample count' })).toHaveValue('2')
+
+  // No prompt yet: nothing to send.
+  await expect(generateButton(page)).toBeDisabled()
+  await expect(page.getByText('Enter a prompt.')).toBeVisible()
+  await promptBox(page).fill('a photo of ohwx person')
+  // A field out of range is marked at the field and holds Generate back.
+  await page.getByRole('spinbutton', { name: 'Sample count' }).fill('9')
+  await expect(page.getByText('Enter a whole number from 1 to 8')).toBeVisible()
+  await expect(generateButton(page)).toBeDisabled()
+  await page.getByRole('spinbutton', { name: 'Sample count' }).fill('2')
+
+  await generateButton(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  expect(bodies[0]).toEqual({
+    prompt: 'a photo of ohwx person', width: 1024, height: 1024, steps: 20, cfg: 3.5, seed: null, batch: 2, loras: ['', ''],
+  })
+  // The job is the LoRA slot's: its box shows how it ended.
+  await expect(page.getByText('Done: 0 image(s).')).toBeVisible()
+
+  // A seed of its own is sent as typed.
+  await page.getByRole('spinbutton', { name: 'Seed (-1 = random)' }).fill('42')
+  await page.getByRole('spinbutton', { name: 'CFG / Guidance' }).fill('4.5')
+  await generateButton(page).click()
+  await expect.poll(() => bodies.length).toBe(2)
+  expect(bodies[1]).toMatchObject({ seed: 42, cfg: 4.5 })
+})
+
+test('lora slots are positional', async ({ page }) => {
+  await mockConfig(page, 2)
+  const bodies = await mockGenerate(page, 'job-pos')
+  await seedLoraForm(page, { prompt: 'positional' })
+  await page.goto('/comfy')
+
+  await loraRow(page, 1).fill('a.safetensors')
+  await loraRow(page, 2).fill('b')
+  // − clears its row; the next one keeps its slot.
+  await page.getByRole('button', { name: 'Clear LoRA 1' }).click()
+  await expect(loraRow(page, 1)).toHaveValue('')
+  await expect(loraRow(page, 2)).toHaveValue('b')
+  await expect(loraRows(page)).toHaveCount(2)
+
+  await generateButton(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+  expect(bodies[0].loras).toEqual(['', 'b'])
+})
+
+test('lora rows match slots and cap', async ({ page }) => {
+  await mockConfig(page, 2)
+  await page.goto('/comfy')
+  // As many rows as the workflow has LoRA loaders.
+  await expect(loraRows(page)).toHaveCount(2)
+  await expect(loraRow(page, 1)).toHaveAttribute('placeholder', 'pick or type a name…')
+  await page.getByRole('button', { name: 'add LoRA' }).click()
+  await expect(page.getByText('The workflow has only 2 LoRA loader(s). Add more LoRA loaders in ComfyUI to stack more.')).toBeVisible()
+  await expect(loraRows(page)).toHaveCount(2)
+  await expect(page.getByText('This workflow has no LoRA loader — add one in ComfyUI.')).toHaveCount(0)
+
+  // Rows kept from a workflow with fewer loaders: add LoRA adds up to the slots. (A later route wins.)
+  await mockConfig(page, 3)
+  await page.evaluate(() => sessionStorage.setItem('flux.comfy.form', JSON.stringify({ lora: { prompt: '', loras: ['x'] }, batch: {} })))
+  await page.reload()
+  await expect(loraRows(page)).toHaveCount(1)
+  await expect(loraRow(page, 1)).toHaveValue('x')
+  await page.getByRole('button', { name: 'add LoRA' }).click()
+  await page.getByRole('button', { name: 'add LoRA' }).click()
+  await expect(loraRows(page)).toHaveCount(3)
+  await expect(page.getByText(/The workflow has only/)).toHaveCount(0)
+  await page.getByRole('button', { name: 'add LoRA' }).click()
+  await expect(page.getByText('The workflow has only 3 LoRA loader(s). Add more LoRA loaders in ComfyUI to stack more.')).toBeVisible()
+  await expect(loraRows(page)).toHaveCount(3)
+
+  // More rows kept than the workflow has: only its slots are shown.
+  await mockConfig(page, 1)
+  await page.reload()
+  await expect(loraRows(page)).toHaveCount(1)
+  await expect(loraRow(page, 1)).toHaveValue('x')
+
+  // No LoRA loader at all.
+  await mockConfig(page, 0)
+  await page.reload()
+  await expect(page.getByText('This workflow has no LoRA loader — add one in ComfyUI.')).toBeVisible()
+  await expect(loraRows(page)).toHaveCount(0)
+})
+
+test('lora list loads, search narrows, unknown names warn', async ({ page }) => {
+  await mockConfig(page, 2)
+  let calls = 0
+  let loras = ['alpha_v1.safetensors', 'Beta.safetensors', 'gamma.safetensors']
+  await page.route('**/api/comfy/loras', (route) => {
+    calls++
+    return route.fulfill({ json: { loras } })
+  })
+  await page.goto('/comfy')
+  // Loaded on entry.
+  await expect(loraCard(page).getByText('(3 available)')).toBeVisible()
+  const listId = await loraRow(page, 1).getAttribute('list')
+  const options = page.locator(`datalist[id="${listId}"] option`)
+  await expect(options).toHaveCount(3)
+
+  await page.getByRole('textbox', { name: 'Search LoRAs' }).fill('BETA')
+  await expect(options).toHaveCount(1)
+  await expect(options.first()).toHaveAttribute('value', 'Beta.safetensors')
+  await page.getByRole('textbox', { name: 'Search LoRAs' }).fill('')
+  await expect(options).toHaveCount(3)
+
+  // A name not on the list is allowed, with a warning.
+  await loraRow(page, 1).fill('alpha_v1.safetensors')
+  await loraRow(page, 2).fill('missing.safetensors')
+  await expect(loraCard(page).getByText('not on the ComfyUI list')).toHaveCount(1)
+
+  // Refresh asks ComfyUI again.
+  loras = [...loras, 'missing.safetensors']
+  const before = calls
+  await page.getByRole('button', { name: 'refresh list from ComfyUI' }).click()
+  await expect(loraCard(page).getByText('(4 available)')).toBeVisible()
+  expect(calls).toBe(before + 1)
+  await expect(loraCard(page).getByText('not on the ComfyUI list')).toHaveCount(0)
+
+  // ComfyUI down: the error, and free text is still accepted.
+  await page.route('**/api/comfy/loras', (route) => route.fulfill({ status: 502, json: { detail: 'ComfyUI is down.' } }))
+  await page.getByRole('button', { name: 'refresh list from ComfyUI' }).click()
+  await expect(loraCard(page).getByText('LoRA list error: ComfyUI is down.')).toBeVisible()
+  await expect(loraRow(page, 2)).toBeEnabled()
+})
+
+test('lora rows survive navigation', async ({ page }) => {
+  await mockConfig(page, 2)
+  await page.goto('/comfy')
+  await loraRow(page, 2).fill('kept.safetensors')
+  await promptBox(page).fill('kept prompt')
+  await page.getByRole('spinbutton', { name: 'Steps' }).fill('28')
+
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  await expect(loraCard(page)).toHaveCount(0)
+  await nav.getByRole('link', { name: 'ComfyUI', exact: true }).click()
+  await expect(loraRow(page, 1)).toHaveValue('')
+  await expect(loraRow(page, 2)).toHaveValue('kept.safetensors')
+  await expect(promptBox(page)).toHaveValue('kept prompt')
+  await expect(page.getByRole('spinbutton', { name: 'Steps' })).toHaveValue('28')
+
+  await page.getByRole('tab', { name: 'Gallery' }).click()
+  await expect(loraCard(page)).toHaveCount(0)
+  await page.getByRole('tab', { name: 'LoRA test' }).click()
+  await expect(loraRow(page, 2)).toHaveValue('kept.safetensors')
+
+  await page.reload()
+  await expect(loraRow(page, 2)).toHaveValue('kept.safetensors')
+  await expect(promptBox(page)).toHaveValue('kept prompt')
+  await expect(page.getByRole('spinbutton', { name: 'Steps' })).toHaveValue('28')
+})
+
+test('generate disabled without a workflow', async ({ page }) => {
+  await mockConfig(page, 0, false)
+  await seedLoraForm(page, { prompt: 'no workflow' })
+  await page.goto('/comfy')
+  await expect(page.getByText('No workflow uploaded yet.')).toBeVisible()
+  await expect(generateButton(page)).toBeDisabled()
+  await expect(loraCard(page).getByText('Upload a workflow above first.')).toBeVisible()
+  await expect(page.getByText('This workflow has no LoRA loader — add one in ComfyUI.')).toHaveCount(0)
+})
+
+test('lora job survives navigation and reload', async ({ page }) => {
+  await mockConfig(page, 2)
+  await mockGenerate(page, 'job-nav')
+  await seedLoraForm(page, { prompt: 'navigation' })
+  let state = 'running'
+  await mockJob(page, 'job-nav', () => state === 'running'
+    ? { state, current: 'Sample 1/2: step 5/20', progress: { value: 5, max: 20 } }
+    : { state, current: 'Finished (2/2)' })
+  await page.goto('/comfy')
+  await generateButton(page).click()
+  await expect(page.getByText('Sample 1/2: step 5/20  ·  5/20')).toBeVisible()
+  // One job at a time.
+  await expect(generateButton(page)).toBeDisabled()
+
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(loraCard(page)).toHaveCount(0)
+  await nav.getByRole('link', { name: 'ComfyUI', exact: true }).click()
+  await expect(page.getByText('Sample 1/2: step 5/20  ·  5/20')).toBeVisible()
+  await expect(generateButton(page)).toBeDisabled()
+
+  await page.reload()
+  await expect(page.getByText('Sample 1/2: step 5/20  ·  5/20')).toBeVisible()
+  state = 'done'
+  await expect(page.getByText('Done: 0 image(s).')).toBeVisible()
+  await expect(generateButton(page)).toBeEnabled()
+})
+
+test('job progress, preview, done with thumbnails', async ({ page }) => {
+  const a = addImage({ id: galleryId('t'), ts: FUTURE + 20, prompt: 'thumb a', seed: 101, source: 'lora_test' })
+  const b = addImage({ id: galleryId('u'), ts: FUTURE + 21, prompt: 'thumb b', seed: 102, source: 'lora_test' })
+  await mockConfig(page, 2)
+  await mockGenerate(page, 'job-thumbs')
+  await seedLoraForm(page, { prompt: 'thumbnails' })
+  let state = 'pending'
+  await mockJob(page, 'job-thumbs', () => state === 'running'
+    ? { state, current: 'Sample 2/2: step 7/20', progress: { value: 7, max: 20, speed: 2, eta: 6.5 }, has_preview: true, preview_ts: 77 }
+    : state === 'done'
+      ? { state, current: 'Finished (2/2)', done_count: 2, images: [a, b] }
+      : { state, current: 'Starting…' })
+  await page.goto('/comfy')
+  await generateButton(page).click()
+  await expect(page.getByText('Starting…')).toBeVisible()
+  state = 'running'
+  await expect(page.getByText('Sample 2/2: step 7/20  ·  7/20  ·  2.00 it/s  ·  ~7s left')).toBeVisible()
+  await expect(page.getByRole('progressbar', { name: 'Job progress' })).toHaveAttribute('aria-valuenow', '7')
+  await expect(page.getByRole('img', { name: 'Live preview' })).toHaveAttribute('src', '/api/comfy/job/job-thumbs/preview?t=77')
+
+  state = 'done'
+  await expect(page.getByText('Done: 2 image(s).')).toBeVisible()
+  await expect(page.getByRole('img', { name: 'Live preview' })).toHaveCount(0)
+  await expect(page.getByRole('img', { name: 'Seed 101' })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'Seed 102' })).toBeVisible()
+  await page.getByRole('img', { name: 'Seed 102' }).click()
+  await expect(galleryDialog(page)).toContainText('seed: 102')
+})
+
+test('cancel ends cancelled', async ({ page }) => {
+  await mockConfig(page, 2)
+  await mockGenerate(page, 'job-cancel')
+  await seedLoraForm(page, { prompt: 'cancel me' })
+  let state = 'running'
+  await mockJob(page, 'job-cancel', () => ({ state, current: state === 'running' ? 'Sample 1/2: step 1/20' : 'Cancelled' }))
+  await page.route('**/api/comfy/job/job-cancel/cancel', (route) => {
+    state = 'cancelled'
+    return route.fulfill({ json: { ok: true } })
+  })
+  await page.goto('/comfy')
+  await generateButton(page).click()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByText('Cancelled.', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await savedJobs(page)).lora).toEqual({ jobId: null, last: { state: 'cancelled', images: [], error: '' } })
+  await expect(generateButton(page)).toBeEnabled()
+})
+
+test('error shows first line and expandable details', async ({ page }) => {
+  await mockConfig(page, 2)
+  await mockGenerate(page, 'job-err')
+  await seedLoraForm(page, { prompt: 'fail' })
+  const error = 'LoraLoader (node 10): ValueError: value not in list\nTraceback (most recent call last):\n  File "x.py", line 1'
+  await mockJob(page, 'job-err', () => ({ state: 'error', current: 'Error', error }))
+  await page.goto('/comfy')
+  await generateButton(page).click()
+  const alert = loraCard(page).getByRole('alert')
+  await expect(alert).toContainText('Error: LoraLoader (node 10): ValueError: value not in list')
+  await expect(alert.getByText('Traceback (most recent call last):', { exact: false })).toBeHidden()
+  await alert.getByText('Details').click()
+  await expect(alert.locator('pre')).toHaveText(error)
+})
+
+test('generate start error is shown', async ({ page }) => {
+  await mockConfig(page, 2)
+  await seedLoraForm(page, { prompt: 'refused' })
+  await page.route('**/api/comfy/generate', (route) =>
+    route.fulfill({ status: 400, json: { detail: 'Upload a workflow first (LoRA test → Workflow).' } }))
+  await page.goto('/comfy')
+  await generateButton(page).click()
+  await expect(page.getByText('Upload a workflow first (LoRA test → Workflow).')).toBeVisible()
+  await expect(generateButton(page)).toBeEnabled()
+})
+
+test('prompt library save, load asks before replacing, delete', async ({ page }) => {
+  const name = `e2e-prompt-${Date.now()}`
+  await mockConfig(page, 2)
+  await page.goto('/comfy')
+  const card = loraCard(page)
+  const library = card.getByRole('combobox', { name: 'Saved prompts' })
+  await expect(library).toHaveText('— saved prompts —')
+
+  // Nothing to save yet.
+  await card.getByRole('textbox', { name: 'Name for the new prompt' }).fill(name)
+  await card.getByRole('button', { name: 'Save as', exact: true }).click()
+  await expect(card.getByText('Enter a prompt first.')).toBeVisible()
+  expect(Object.keys((await (await page.request.get('/api/comfy/prompts')).json()).items)).not.toContain(name)
+
+  await promptBox(page).fill('library prompt text')
+  await card.getByRole('button', { name: 'Save as', exact: true }).click()
+  await expect(card.getByText(`Saved prompt "${name}".`)).toBeVisible()
+  expect((await (await page.request.get('/api/comfy/prompts')).json()).items[name]).toBe('library prompt text')
+
+  // Load over a typed prompt asks first; Cancel keeps it.
+  await promptBox(page).fill('typed over')
+  await library.click()
+  await page.getByRole('option', { name, exact: true }).click()
+  await card.getByRole('button', { name: 'Load', exact: true }).click()
+  const ask = page.getByRole('dialog', { name: 'Replace the prompt?' })
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(promptBox(page)).toHaveValue('typed over')
+  await card.getByRole('button', { name: 'Load', exact: true }).click()
+  await ask.getByRole('button', { name: 'Replace' }).click()
+  await expect(promptBox(page)).toHaveValue('library prompt text')
+
+  // Into an empty prompt: no question.
+  await promptBox(page).fill('')
+  await card.getByRole('button', { name: 'Load', exact: true }).click()
+  await expect(promptBox(page)).toHaveValue('library prompt text')
+  await expect(ask).toHaveCount(0)
+
+  await card.getByRole('button', { name: 'Delete', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Delete prompt?' }).getByRole('button', { name: 'Delete' }).click()
+  await expect(card.getByText(`Deleted "${name}".`)).toBeVisible()
+  expect(Object.keys((await (await page.request.get('/api/comfy/prompts')).json()).items)).not.toContain(name)
 })

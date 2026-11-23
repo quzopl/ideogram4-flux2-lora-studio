@@ -82,7 +82,7 @@ export function GalleryTab() {
               >
                 <button
                   type="button"
-                  aria-label={`Open image (seed ${im.seed})`}
+                  aria-label={`Open image (seed ${im.seed ?? '—'})`}
                   title="Click to see the prompt"
                   onClick={() => openImage(im.id)}
                   className="block outline-none focus-visible:shadow-glow"
@@ -102,7 +102,7 @@ export function GalleryTab() {
                 <div className="flex flex-col gap-1.5 px-2.5 py-2">
                   <p className="truncate text-xs text-text" title={im.prompt}>{promptPreview(im.prompt, im.filename)}</p>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-[11px] text-text-dim tabular-nums">seed: {im.seed}</span>
+                    <span className="font-mono text-[11px] text-text-dim tabular-nums">seed: {im.seed ?? '—'}</span>
                     <SourceBadge source={im.source} />
                   </div>
                 </div>

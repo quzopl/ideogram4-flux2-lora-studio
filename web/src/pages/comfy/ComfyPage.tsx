@@ -2,12 +2,11 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useId } from 'react'
 import { useSearchParams } from 'react-router'
 import { cn } from '@/lib/utils'
-import { ComfyJobBox } from './ComfyJobBox'
 import { ConnectionCard } from './ConnectionCard'
 import { flushComfyForm } from './formStore'
 import { GalleryTab } from './GalleryTab'
 import { JobObservers } from './JobObservers'
-import { WorkflowCard } from './WorkflowCard'
+import { LoraTestTab } from './LoraTestTab'
 
 const TABS = [
   ['lora', 'LoRA test'],
@@ -85,10 +84,7 @@ export function ComfyPage() {
           className="flex flex-col gap-6"
         >
           {tab === 'lora' ? (
-            <>
-              <WorkflowCard />
-              <ComfyJobBox slot="lora" />
-            </>
+            <LoraTestTab />
           ) : tab === 'gallery' ? (
             <GalleryTab />
           ) : (

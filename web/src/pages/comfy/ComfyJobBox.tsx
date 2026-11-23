@@ -1,3 +1,4 @@
+import { useMutationState } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Link } from 'react-router'
@@ -13,27 +14,35 @@ const SPRING = { type: 'spring', stiffness: 380, damping: 30 } as const
 
 /**
  * The slot's job: while it runs its step with speed and ETA, the bar, the live
- * preview and Cancel; afterwards how it ended. Reads the query JobObservers
- * polls (it also moves the ended job into the slot's outcome). Nothing when
- * the slot has had no job.
+ * preview and Cancel; afterwards how it ended. Reads (without polling) the
+ * query JobObservers polls (it also moves the ended job into the slot's
+ * outcome). Nothing when the slot has had no job.
  */
 export function ComfyJobBox({ slot }: { slot: SlotName }) {
   const { jobId, last } = useComfyJobs()[slot]
-  const job = useSlotJob(jobId).data
+  const job = useSlotJob(jobId, { poll: false }).data
   if (!jobId && !last) return null
   return (
     <div data-testid="comfy-job" className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-4">
-      {jobId ? <Running jobId={jobId} job={job} /> : last && <Outcome outcome={last} />}
+      {jobId ? <Running slot={slot} jobId={jobId} job={job} /> : last && <Outcome outcome={last} />}
     </div>
   )
 }
 
-function Running({ jobId, job }: { jobId: string; job: ComfyJob | undefined }) {
-  const cancel = useMutationWithToast((id: string) => api(`/api/comfy/job/${encodeURIComponent(id)}/cancel`, { method: 'POST' }))
-  // Cancel is asked: the job keeps showing until it reports `cancelled`.
-  const cancelling = cancel.isSuccess && cancel.variables === jobId
-  const max = job?.progress.max ?? 0
-  const pct = max > 0 ? Math.min(100, (100 * (job?.progress.value ?? 0)) / max) : 0
+function Running({ slot, jobId, job }: { slot: SlotName; jobId: string; job: ComfyJob | undefined }) {
+  const cancelKey = ['comfy-cancel', slot]
+  const cancel = useMutationWithToast(
+    (id: string) => api(`/api/comfy/job/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+    { mutationKey: cancelKey },
+  )
+  // Cancel asked (in flight or answered) for this job: it keeps showing until it reports `cancelled`.
+  // Read from the mutation cache, so leaving the tab and coming back keeps it.
+  const cancelling = useMutationState({
+    filters: { mutationKey: cancelKey, predicate: (m) => m.state.variables === jobId && m.state.status !== 'error' },
+  }).length > 0
+  const max = job?.progress?.max ?? 0
+  const value = job?.progress?.value ?? 0
+  const pct = max > 0 ? Math.min(100, (100 * value) / max) : 0
   // The src (so the request) changes only with a new frame.
   const preview = job?.has_preview
     ? `/api/comfy/job/${encodeURIComponent(jobId)}/preview?${new URLSearchParams({ t: String(job.preview_ts) })}`
@@ -48,7 +57,7 @@ function Running({ jobId, job }: { jobId: string; job: ComfyJob | undefined }) {
         <Button
           size="sm"
           variant="outline"
-          disabled={cancel.isPending || cancelling}
+          disabled={cancelling}
           onClick={() => cancel.mutate(jobId)}
         >
           <X />
@@ -60,7 +69,7 @@ function Running({ jobId, job }: { jobId: string; job: ComfyJob | undefined }) {
         aria-label="Job progress"
         aria-valuemin={0}
         aria-valuemax={max || undefined}
-        aria-valuenow={max ? job?.progress.value : undefined}
+        aria-valuenow={max ? value : undefined}
         className="relative h-2 overflow-hidden rounded-full bg-white/[0.06]"
       >
         <motion.div

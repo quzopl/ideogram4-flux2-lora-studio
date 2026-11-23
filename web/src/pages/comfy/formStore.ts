@@ -1,8 +1,21 @@
 import { useSyncExternalStore } from 'react'
 
-/** The LoRA test form. */
+/** The LoRA test form (classic defaults). */
 export interface LoraForm {
   prompt: string
+  width: number
+  height: number
+  steps: number
+  cfg: number
+  /** -1 = random. */
+  seed: number
+  /** Sample count. */
+  batch: number
+  /**
+   * The LoRA rows as typed, row i for the workflow's LoRA slot i ('' leaves
+   * the slot as it is). null until a row is touched: one empty row per slot.
+   */
+  loras: string[] | null
 }
 
 /** The reference batch form (Task 36 adds its fields). */
@@ -24,19 +37,32 @@ export interface ComfyForm {
 
 const KEY = 'flux.comfy.form'
 const DEBOUNCE_MS = 300
-const DEFAULTS: ComfyForm = { lora: { prompt: '' }, batch: {} }
+const LORA_DEFAULTS: LoraForm = { prompt: '', width: 1024, height: 1024, steps: 20, cfg: 3.5, seed: -1, batch: 2, loras: null }
+const DEFAULTS: ComfyForm = { lora: LORA_DEFAULTS, batch: {} }
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
+
+/** The stored LoRA form field by field over the defaults (a missing or broken field keeps its default). */
+function loadLora(v: unknown): LoraForm {
+  const l = obj(v)
+  const out: LoraForm = { ...LORA_DEFAULTS }
+  if (typeof l.prompt === 'string') out.prompt = l.prompt
+  for (const k of ['width', 'height', 'steps', 'cfg', 'seed', 'batch'] as const) {
+    const n = l[k]
+    if (typeof n === 'number' && Number.isFinite(n)) out[k] = n
+  }
+  if (Array.isArray(l.loras) && l.loras.every((s) => typeof s === 'string')) out.loras = l.loras
+  return out
+}
 
 /** Stored values of the right type over the defaults (a missing or broken field keeps its default). */
 function load(): ComfyForm {
   try {
     const r = obj(JSON.parse(sessionStorage.getItem(KEY) ?? 'null'))
-    const lora = obj(r.lora)
     return {
       ...(typeof r.url === 'string' ? { url: r.url } : {}),
       ...(typeof r.mapping === 'string' ? { mapping: r.mapping } : {}),
-      lora: { ...DEFAULTS.lora, ...(typeof lora.prompt === 'string' ? { prompt: lora.prompt } : {}) },
+      lora: loadLora(r.lora),
       batch: { ...DEFAULTS.batch },
     }
   } catch {

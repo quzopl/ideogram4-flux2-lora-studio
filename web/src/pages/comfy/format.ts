@@ -2,10 +2,10 @@
 
 /** A job's progress (GET /api/comfy/job/{id} `progress`); `speed` in it/s, `eta` in seconds. */
 export interface JobProgressInfo {
-  value?: number
-  max?: number
-  speed?: number
-  eta?: number
+  value?: number | null
+  max?: number | null
+  speed?: number | null
+  eta?: number | null
 }
 
 /** Seconds as "Ns", "Mm SSs" or "Hh MMm" (classic fmtEta). */
@@ -45,6 +45,14 @@ export const sourceLabel = (source: string) => SOURCES[source] ?? source
 export function downloadName(item: { id: string; filename: string }): string {
   const name = item.filename || item.id || 'image'
   return /\.\w+$/.test(item.filename) ? name : name + '.png'
+}
+
+/** A gallery LoRA entry's name: a string, or an old item's `{lora}` object; nothing is ''. */
+export function loraName(l: unknown): string {
+  if (l === null || l === undefined) return ''
+  if (typeof l === 'string') return l
+  if (typeof l === 'object' && typeof (l as { lora?: unknown }).lora === 'string') return (l as { lora: string }).lora
+  return JSON.stringify(l)
 }
 
 /** Where a gallery image opens (the gallery tab with its dialog), as a router location. */

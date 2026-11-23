@@ -1,6 +1,9 @@
 import { api, ApiError } from '@/lib/api'
 import type { JobProgressInfo } from './format'
+import { pollJobCore, type PollOptions } from './pollJobCore'
 import type { GalleryItem } from './queries'
+
+export { isJobEnd, JOB_ENDS } from './pollJobCore'
 
 export type JobState = 'pending' | 'running' | 'done' | 'error' | 'cancelled'
 
@@ -14,7 +17,7 @@ export interface ComfyJob {
   current: string
   /** The id of the node ComfyUI executes. */
   current_node: string
-  progress: Required<JobProgressInfo>
+  progress: JobProgressInfo
   has_preview: boolean
   /** Changes with each preview frame. */
   preview_ts: number
@@ -23,51 +26,11 @@ export interface ComfyJob {
   error: string
 }
 
-/** The states a job ends in. */
-export const JOB_ENDS: readonly string[] = ['done', 'error', 'cancelled']
-
-export const isJobEnd = (state: string | undefined) => JOB_ENDS.includes(state ?? '')
-
-/** Resolves after `ms`, rejects as soon as `signal` aborts. */
-function sleep(ms: number, signal?: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason)
-    const done = () => {
-      signal?.removeEventListener('abort', abort)
-      resolve()
-    }
-    const t = setTimeout(done, ms)
-    const abort = () => {
-      clearTimeout(t)
-      reject(signal!.reason)
-    }
-    signal?.addEventListener('abort', abort, { once: true })
-  })
-}
-
-/**
- * Polls a job until it ends, outside React (the batch runs this way), with
- * useJobPoll's rules: a failed poll is waited out, the job ending (`done`,
- * `error`, `cancelled`) resolves with it, a 404 resolves with "gone" (e.g. the
- * server was restarted). `onUpdate` gets every answer. Aborting `signal`
- * rejects with its reason.
- */
-export async function pollJob(
-  jobId: string,
-  opts: { signal?: AbortSignal; intervalMs?: number; onUpdate?: (job: ComfyJob) => void } = {},
-): Promise<ComfyJob | 'gone'> {
-  const { signal, intervalMs = 700, onUpdate } = opts
-  for (;;) {
-    signal?.throwIfAborted()
-    try {
-      const job = await api<ComfyJob>(`/api/comfy/job/${encodeURIComponent(jobId)}`, { signal })
-      onUpdate?.(job)
-      if (isJobEnd(job.state)) return job
-    } catch (e) {
-      signal?.throwIfAborted()
-      if (e instanceof ApiError && e.status === 404) return 'gone'
-      // Anything else (the server busy or briefly away): try again.
-    }
-    await sleep(intervalMs, signal)
-  }
-}
+/** Polls GET /api/comfy/job/{id} until it ends (pollJobCore); a 404 is "gone". */
+export const pollJob = (jobId: string, opts: PollOptions<ComfyJob> = {}): Promise<ComfyJob | 'gone'> =>
+  pollJobCore(
+    (id, signal) => api<ComfyJob>(`/api/comfy/job/${encodeURIComponent(id)}`, { signal }),
+    (e) => e instanceof ApiError && e.status === 404,
+    jobId,
+    opts,
+  )

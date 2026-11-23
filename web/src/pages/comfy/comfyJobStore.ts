@@ -184,10 +184,14 @@ export function useComfyJobs() {
   return useSyncExternalStore(subscribe, getComfyJobs)
 }
 
-/** The slot's job as polled; one query per job, shared by JobObservers and ComfyJobBox. */
-export function useSlotJob(jobId: string | null) {
+/**
+ * The slot's job as polled; one query per job, shared by JobObservers (the
+ * only one polling it) and ComfyJobBox (`poll: false`, reads the same cache).
+ */
+export function useSlotJob(jobId: string | null, { poll = true }: { poll?: boolean } = {}) {
   return useJobPoll<ComfyJob>(['comfy-job', jobId], jobId ? `/api/comfy/job/${encodeURIComponent(jobId)}` : null, {
     intervalMs: 700,
     terminal: [...JOB_ENDS],
+    poll,
   })
 }

@@ -92,7 +92,8 @@ export interface GalleryItem {
   url: string
   /** ComfyUI's own file name (not unique). */
   filename: string
-  seed: number
+  /** Missing on an item written without one. */
+  seed?: number | null
   prompt: string
   /** LoRA names (an old item may hold `{lora}` objects); empty names are unused slots. */
   loras: unknown[]
@@ -114,3 +115,37 @@ export function useGallery() {
 
 export const deleteGalleryItem = (id: string) =>
   api<{ ok: boolean }>(`/api/comfy/gallery/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+// ---- LoRA list (ComfyUI's /object_info) and the prompt library (.work/comfy_prompts.json) ---- //
+
+/**
+ * GET /api/comfy/loras, asked on entry (and by refresh). Cached as the server
+ * sends it: the bbox render reads the same key. ComfyUI down is a 502, shown
+ * at once (no retry).
+ */
+export function useComfyLoras() {
+  return useQuery({
+    queryKey: ['comfy-loras'],
+    queryFn: () => api<{ loras: string[] }>('/api/comfy/loras'),
+    retry: false,
+  })
+}
+
+type Prompts = Record<string, string>
+const PROMPTS_KEY = ['comfy-prompts']
+
+export function usePrompts() {
+  return useQuery({
+    queryKey: PROMPTS_KEY,
+    queryFn: () => api<{ items: Prompts }>('/api/comfy/prompts').then((r) => r.items),
+  })
+}
+
+const storePrompts = (qc: QueryClient, r: { items: Prompts }) => qc.setQueryData(PROMPTS_KEY, r.items)
+
+export const savePrompt = (qc: QueryClient, name: string, value: string) =>
+  api<{ items: Prompts }>('/api/comfy/prompts', { method: 'POST', json: { name, value } }).then((r) => storePrompts(qc, r))
+
+export const deletePrompt = (qc: QueryClient, name: string) =>
+  api<{ items: Prompts }>(`/api/comfy/prompts/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) =>
+    storePrompts(qc, r))
