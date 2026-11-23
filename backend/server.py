@@ -26,8 +26,7 @@ from typing import Callable, Literal
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Match
 from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
@@ -40,9 +39,13 @@ from . import (crop_store, captioner, comfy_client, comfy_workflows, crop_auto, 
                upscaler, v15_lint)
 
 ROOT = Path(__file__).resolve().parent.parent
-FRONTEND = ROOT / "frontend"
 WORK = Path(os.environ.get("FLUX_PREP_WORK") or ROOT / ".work")
 WEB_DIST = ROOT / "web" / "dist"
+_NOT_BUILT = (
+    "<!doctype html><title>FLUX LoRA Studio</title>"
+    "<h1>The web UI is not built</h1>"
+    "<p>Build it once, then reload:</p>"
+    "<pre>cd web && pnpm install && pnpm build</pre>")
 WORK.mkdir(parents=True, exist_ok=True)
 
 COMFY_CONFIG_PATH = WORK / "comfy_config.json"
@@ -138,7 +141,7 @@ async def _no_cache_frontend(request, call_next):
 
     'no-cache' forces revalidation (ETag/Last-Modified), so unchanged files
     still go out as 304 — no cost, no stale app.js. Every HTML response gets it
-    (the SPA index under any deep link, /legacy/), so a rebuilt web/dist is
+    (the SPA index under any deep link), so a rebuilt web/dist is
     never paired with a cached index.html that names vanished assets.
     """
     response = await call_next(request)
@@ -212,20 +215,8 @@ class ExportRequest(BaseModel):
     exclude_idx: list[int] = []    # indices removed by the user in the UI
 
 
-class PromptRequest(BaseModel):
-    text: str
-    action: str = "expand"   # "expand" | "refine"
-    subject: str = "auto"    # auto | person | product | landscape | architecture
-    model: str = captioner.DEFAULT_MODEL
-    quant: str = "4bit"      # "4bit" | "none"
-    max_tokens: int = 768
-    caption_format: str = "flux"  # "flux" | "ideogram"
-    elements_detail: str = "balanced"  # few | balanced | detailed | maximal
-    desc_detail: str = "balanced"      # brief | balanced | rich
-
-
 class PromptJobRequest(BaseModel):
-    """PromptRequest with strict validation, for the background prompt job."""
+    """The background prompt job's request, strictly validated."""
     text: str
     action: Literal["expand", "refine"] = "expand"
     subject: Literal["auto", "person", "product", "landscape", "architecture"] = "auto"
@@ -606,11 +597,6 @@ def _ensure_model_mapped(model_id: str, job: dict | None) -> str:
         raise HTTPException(502, str(e)) from e
 
 
-def _ensure_model_http(model_id: str) -> str:
-    """_ensure_model for synchronous endpoints."""
-    return _ensure_model_mapped(model_id, None)
-
-
 florence.SOURCE_RESOLVER = lambda: _ensure_model(florence.DEFAULT_MODEL, None)
 
 
@@ -744,31 +730,6 @@ def api_models_custom_add(req: CustomModel):
 def api_models_custom_remove(req: CustomModel):
     _remove_custom_model(req.path)
     return {"models": _all_models(), "default": captioner.DEFAULT_MODEL}
-
-
-@app.post("/api/fs/pick")
-def api_fs_pick():
-    """Open the native system folder picker (zenity/WSLg) and return the path.
-
-    The browser does not expose absolute paths, so we use the standard system
-    dialog — it works because the app is local.
-    """
-    import subprocess
-
-    try:
-        proc = subprocess.run(
-            ["zenity", "--file-selection", "--directory",
-             "--title=Wybierz folder z modelem Qwen2.5-VL"],
-            capture_output=True, text=True, timeout=300,
-        )
-    except FileNotFoundError:
-        raise HTTPException(500, "'zenity' missing — the native folder picker is unavailable.")
-    except subprocess.TimeoutExpired:
-        return {"cancelled": True}
-    path = proc.stdout.strip()
-    if proc.returncode != 0 or not path:
-        return {"cancelled": True}  # the user cancelled
-    return {"path": path}
 
 
 class LmStudioConfig(BaseModel):
@@ -1036,7 +997,7 @@ def _gpu_status() -> dict:
     info["upscale_device"] = up["device"]
     info["upscale_note"] = up["note"]
     info["loaded"] = bool(info.get("loaded")) or up["loaded"]
-    # The legacy topbar shows one card: the VLM role's (none when it runs on
+    # The status shows one card: the VLM role's (none when it runs on
     # the CPU). "cards" carries all of them for the v2 topbar.
     cards = _gpu_cards(gpu.probe(), settings.load())
     vlm = next((c for c in cards if "vlm" in c["roles"]), None)
@@ -1068,8 +1029,7 @@ def _smi_snapshot() -> dict:
 def _gpu_cards(devices: list[dict], doc: dict) -> list[dict]:
     """``gpu.listing`` rows plus each card's VRAM (nvidia-smi; None when it did
     not report the card), the roles assigned to it and the roles whose model
-    is loaded on it. ``selected`` marks the VLM role's card, as the legacy
-    select expects."""
+    is loaded on it. ``selected`` marks the VLM role's card."""
     stats = _smi_snapshot()
     assigned = {role: gpu.device_for(role, doc, devices) for role in settings.ROLES}
     loaded = {"vlm": captioner.loaded_device(), "florence": florence.loaded_device(),
@@ -1099,10 +1059,6 @@ def api_unload():
     florence.unload()
     upscaler.unload()
     return _gpu_status()
-
-
-class GpuSelectRequest(BaseModel):
-    uuid: str
 
 
 class GpuAssignRequest(BaseModel):
@@ -1139,22 +1095,6 @@ def api_gpu_assign(req: GpuAssignRequest):
     return _gpu_status()
 
 
-@app.post("/api/gpu/select")
-def api_gpu_select(req: GpuSelectRequest):
-    """Legacy UI: put every role on one card. Loaded models sit on the old
-    card, so they are released; the next use loads them on the new one."""
-    if _busy():
-        raise HTTPException(409, "Processing in progress — wait for it to finish.")
-    if not any(d["uuid"] == req.uuid for d in gpu.probe()):
-        raise HTTPException(400, "Unknown GPU.")
-    gpu.save_selected(gpu.CONFIG_PATH, req.uuid)
-    settings.update(lambda d: d.__setitem__("gpu", {role: req.uuid for role in settings.ROLES}))
-    captioner.unload()
-    florence.unload()
-    upscaler.unload()
-    return _gpu_status()
-
-
 class UpscaleScanRequest(BaseModel):
     folder: str
 
@@ -1163,28 +1103,6 @@ class UpscaleCustomRequest(BaseModel):
     repo_id: str
     filename: str
     scale: int = 0
-
-
-class UpscaleDownloadRequest(BaseModel):
-    model_id: str
-
-
-def _upscale_registry(cfg: dict) -> list[dict]:
-    """upscaler.registry with ``cached`` from the model store (Models folder,
-    chosen location or HF cache) instead of the HF cache alone."""
-    ctx = _model_ctx()
-    store = {e["id"]: e for e in model_store.entries(ctx)}
-    out = upscaler.registry(cfg)
-    for m in out:
-        if m["id"] in store:
-            m["cached"] = model_store.resolve_path(store[m["id"]], ctx) is not None
-    return out
-
-
-@app.get("/api/upscale/models")
-def api_upscale_models():
-    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
-    return {"models": _upscale_registry(cfg), "folder": cfg.get("folder", "")}
 
 
 @app.post("/api/upscale/models/scan")
@@ -1217,16 +1135,6 @@ def api_upscale_custom_del(req: UpscaleCustomRequest):
                      (req.repo_id, req.filename)]
     upscaler.save_config(UPSCALER_CONFIG_PATH, cfg)
     return {"models": upscaler.registry(cfg)}
-
-
-@app.post("/api/upscale/download")
-def api_upscale_download(req: UpscaleDownloadRequest):
-    cfg = upscaler.load_config(UPSCALER_CONFIG_PATH)
-    entry = upscaler.resolve(req.model_id, cfg)
-    if not entry:
-        raise HTTPException(404, "Unknown upscale model.")
-    path = _ensure_model_http(entry["id"])
-    return {"ok": True, "path": path, "models": _upscale_registry(cfg)}
 
 
 # --------------------------------------------------------------------------- #
@@ -2592,32 +2500,6 @@ def _analyze_image(image, engine: str, model: str, quant: str, max_tokens: int,
             "model": used_model, "warnings": v15_lint.lint_v15(draft)}
 
 
-@app.post("/api/ideogram/analyze")
-async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
-                               model: str = Form(captioner.DEFAULT_MODEL),
-                               quant: str = Form("4bit"),
-                               max_tokens: int = Form(768)):
-    """Reference image -> v15 prompt draft (classic, synchronous; see _analyze_image)."""
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(400, "Upload an image file.")
-    data = await file.read()
-    try:
-        image = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
-    except Exception:
-        raise HTTPException(400, "Failed to read the image.")
-
-    try:
-        # Model download, load and inference: blocking, so run off the event loop.
-        return await run_in_threadpool(
-            _analyze_image, image, engine, model, quant, max_tokens, _ensure_model_http)
-    except HTTPException:
-        raise
-    except lmstudio.LMStudioError as e:
-        raise HTTPException(502, f"LM Studio: {e}")
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"Image analysis failed: {e}")
-
-
 def _decode_image(data: bytes):
     """Decode an upload by content, not MIME (HEIC arrives with an empty type),
     upright as shown (the EXIF orientation applied)."""
@@ -2680,12 +2562,11 @@ def api_ideogram_analyze_job(job_id: str):
             "error": job["error"], "result": job["result"]}
 
 
-def _generate_prompt(req: PromptRequest | PromptJobRequest, ensure: Callable[[str], str],
+def _generate_prompt(req: PromptJobRequest, ensure: Callable[[str], str],
                      job: dict | None = None) -> dict:
     """Expand or refine ``req.text`` and save the result to the library.
 
-    ``ensure`` turns a model id into a local path (``_ensure_model_http`` for
-    the synchronous endpoint, a job-bound ``_ensure_model`` for the job).
+    ``ensure`` turns a model id into a local path (a job-bound ``_ensure_model_mapped``).
     When ``job`` is given its ``state`` follows loading_model -> generating.
     Returns {prompt, warnings, library_id}; errors propagate to the caller.
     """
@@ -2720,21 +2601,6 @@ def _generate_prompt(req: PromptRequest | PromptJobRequest, ensure: Callable[[st
     library_id = _save_prompt_to_library(
         _prompt_category(req.caption_format), req.action, text, final)
     return {"prompt": final, "warnings": warnings, "library_id": library_id}
-
-
-@app.post("/api/prompt")
-def api_prompt(req: PromptRequest):
-    """Expand or refine a generation prompt (FLUX.2 or Ideogram 4 JSON) using the local LLM."""
-    if not req.text.strip():
-        raise HTTPException(400, "Type a prompt to expand or refine.")
-    try:
-        return _generate_prompt(req, _ensure_model_http)
-    except HTTPException:
-        raise
-    except lmstudio.LMStudioError as e:
-        raise HTTPException(502, f"LM Studio: {e}")
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"Generation error: {e}")
 
 
 def _run_prompt_job(job: dict, req: PromptJobRequest) -> None:
@@ -2836,12 +2702,10 @@ app.include_router(models_api.router)
 
 
 @app.get("/legacy", include_in_schema=False)
-def legacy_slash():
-    # The mount below only matches "/legacy/..."; without this, the SPA would answer.
-    return RedirectResponse("/legacy/", 307)
-
-
-app.mount("/legacy", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
+@app.get("/legacy/{rest:path}", include_in_schema=False)
+def legacy_redirect(rest: str = ""):
+    """The classic UI is gone; old bookmarks land in the app."""
+    return RedirectResponse("/", 307)
 
 
 @app.get("/{path:path}", include_in_schema=False)
@@ -2870,5 +2734,5 @@ def spa(path: str, request: Request):
         raise HTTPException(404, "Not found.")
     index = WEB_DIST / "index.html"
     if not index.is_file():
-        return RedirectResponse("/legacy/", 307)
+        return HTMLResponse(_NOT_BUILT, 503, headers={"Cache-Control": "no-cache"})
     return FileResponse(str(index))

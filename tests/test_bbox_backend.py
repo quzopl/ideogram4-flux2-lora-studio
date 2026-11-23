@@ -321,32 +321,6 @@ def test_analyze_job_unknown_or_wrong_kind():
     assert client.get("/api/ideogram/analyze/jobs/nope").status_code == 404
 
 
-def test_legacy_analyze_unchanged():
-    r = client.post("/api/ideogram/analyze",
-                    files={"file": ("t.png", _png(), "image/png")})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert set(body) == {"json", "elements", "model", "warnings"}
-    assert body["elements"] == 1 and body["model"] == florence.DEFAULT_MODEL
-    # the legacy endpoint keeps its content-type check
-    r = client.post("/api/ideogram/analyze",
-                    files={"file": ("t.png", _png(), "application/octet-stream")})
-    assert r.status_code == 400
-    assert r.json()["detail"] == "Upload an image file."
-    assert not server.JOBS
-
-
-def test_legacy_analyze_vlm_default_tokens(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(captioner, "query_image",
-                        lambda img, instr, max_new_tokens=0:
-                        seen.update(tokens=max_new_tokens) or json.dumps(V15))
-    r = client.post("/api/ideogram/analyze", data={"engine": "vlm", "model": "Qwen/X"},
-                    files={"file": ("t.png", _png(), "image/png")})
-    assert r.status_code == 200, r.text
-    assert seen["tokens"] == 768
-
-
 def _rotated_jpeg() -> bytes:
     """A 400x300 JPEG whose EXIF says "rotate 90° CW" (Orientation=6): shown 300x400."""
     img = Image.new("RGB", (400, 300), "red")
@@ -375,15 +349,6 @@ def test_analyze_job_honours_exif_orientation(monkeypatch):
     assert j["state"] == "done", j["error"]
     assert seen["size"] == (300, 400)
     assert json.loads(j["result"]["json"])["aspect_ratio"] == "3:4"
-
-
-def test_legacy_analyze_honours_exif_orientation(monkeypatch):
-    seen = _capture_florence_size(monkeypatch)
-    r = client.post("/api/ideogram/analyze",
-                    files={"file": ("phone.jpg", _rotated_jpeg(), "image/jpeg")})
-    assert r.status_code == 200, r.text
-    assert seen["size"] == (300, 400)
-    assert json.loads(r.json()["json"])["aspect_ratio"] == "3:4"
 
 
 # --------------------------------------------------------------------------- #

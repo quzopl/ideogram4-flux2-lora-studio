@@ -78,18 +78,29 @@ def test_build_v15_draft_caps_hld_at_sentence():
     assert hld.startswith("The first sentence")
 
 
-def _upload_png(width=800, height=600):
+def _analyze(width=800, height=600, **form) -> dict:
+    """Run an analysis through the background job route; return its result."""
     import io
+    import time
+    from fastapi.testclient import TestClient
     from PIL import Image
-    from starlette.datastructures import UploadFile, Headers
+    from backend import server
     buf = io.BytesIO()
     Image.new("RGB", (width, height), "red").save(buf, format="PNG")
-    buf.seek(0)
-    return UploadFile(buf, filename="t.png", headers=Headers({"content-type": "image/png"}))
+    client = TestClient(server.app)
+    r = client.post("/api/ideogram/analyze/jobs", data={k: str(v) for k, v in form.items()},
+                    files={"file": ("t.png", buf.getvalue(), "image/png")})
+    assert r.status_code == 200, r.text
+    for _ in range(200):
+        job = client.get(f"/api/ideogram/analyze/jobs/{r.json()['job_id']}").json()
+        if job["state"] in ("done", "error"):
+            break
+        time.sleep(0.05)
+    assert job["state"] == "done", job["error"]
+    return job["result"]
 
 
 def test_analyze_endpoint_florence_engine(monkeypatch):
-    import asyncio
     from backend import server
 
     def fake_analyze(img):
@@ -97,7 +108,7 @@ def test_analyze_endpoint_florence_engine(monkeypatch):
     monkeypatch.setattr(server.florence, "analyze_image", fake_analyze)
     monkeypatch.setattr(server, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
 
-    out = asyncio.run(server.api_ideogram_analyze(_upload_png()))
+    out = _analyze()
     obj = json.loads(out["json"])
     assert obj["aspect_ratio"] == "4:3"
     assert obj["compositional_deconstruction"]["elements"][0]["desc"] == "a thing"
@@ -106,7 +117,6 @@ def test_analyze_endpoint_florence_engine(monkeypatch):
 
 
 def test_analyze_endpoint_vlm_engine(monkeypatch):
-    import asyncio
     from backend import server
 
     seen = {}
@@ -118,8 +128,7 @@ def test_analyze_endpoint_vlm_engine(monkeypatch):
                         '{"aspect_ratio":"1:1","high_level_description":"a vlm draft",'
                         '"compositional_deconstruction":{"background":"plain wall","elements":[]}}')
 
-    out = asyncio.run(server.api_ideogram_analyze(
-        _upload_png(), engine="vlm", model="Qwen/Qwen2.5-VL-7B-Instruct"))
+    out = _analyze(engine="vlm", model="Qwen/Qwen2.5-VL-7B-Instruct")
     obj = json.loads(out["json"])
     assert obj["high_level_description"] == "a vlm draft"
     # aspect z obrazu wygrywa, gdy model zwrócił inny / brak
@@ -131,7 +140,6 @@ def test_analyze_endpoint_vlm_engine(monkeypatch):
 
 
 def test_analyze_endpoint_hybrid_engine(monkeypatch):
-    import asyncio
     from backend import server
 
     def fake_analyze(img):
@@ -152,9 +160,8 @@ def test_analyze_endpoint_hybrid_engine(monkeypatch):
                 '{"type":"text","bbox":[50,600,120,950],"text":"HELLO","desc":"white sans-serif sign"}]}}')
     monkeypatch.setattr(server.captioner, "query_image", fake_query)
 
-    out = asyncio.run(server.api_ideogram_analyze(
-        _upload_png(), engine="hybrid", model="Qwen/Qwen2.5-VL-7B-Instruct",
-        quant="4bit", max_tokens=768))
+    out = _analyze(engine="hybrid", model="Qwen/Qwen2.5-VL-7B-Instruct",
+                   quant="4bit", max_tokens=768)
     obj = json.loads(out["json"])
     # instrukcja hybrydowa zawiera szkic Florence z realnymi bboxami
     assert '"bbox":[100,100,900,500]' in seen["instr"].replace(" ", "")

@@ -7,18 +7,16 @@ download for real (fake ``_fetch``) set ``models_dir`` through settings.update.
 """
 from __future__ import annotations
 
-import asyncio
 import io
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 from PIL import Image
-from starlette.datastructures import Headers, UploadFile
 
 from backend import captioner, florence, gpu, server, settings, upscaler
 from backend import model_store as ms
@@ -78,13 +76,6 @@ class _Job(dict):
 def _png(path: Path, size=(64, 48)) -> Path:
     Image.new("RGB", size, "red").save(path, format="PNG")
     return path
-
-
-def _upload_png():
-    buf = io.BytesIO()
-    Image.new("RGB", (80, 60), "red").save(buf, format="PNG")
-    buf.seek(0)
-    return UploadFile(buf, filename="t.png", headers=Headers({"content-type": "image/png"}))
 
 
 # --------------------------------------------------------------------------- #
@@ -366,45 +357,6 @@ def test_dataset_upscale_hook_remembers_a_failed_ensure(monkeypatch):
     assert calls == [X4]  # one attempt, not one fetch (or restarted download) per image
 
 
-def test_legacy_upscale_download_without_folder_400(monkeypatch):
-    monkeypatch.setattr(server.upscaler, "weights_path",
-                        lambda *a, **kw: pytest.fail("must not download into the HF cache"))
-    with pytest.raises(HTTPException) as exc:
-        server.api_upscale_download(server.UpscaleDownloadRequest(model_id=X4))
-    assert exc.value.status_code == 400
-    assert exc.value.detail == NO_FOLDER
-
-
-def test_legacy_upscale_download_goes_to_models_folder(tmp_path, monkeypatch):
-    monkeypatch.setattr(server.upscaler, "weights_path",
-                        lambda *a, **kw: pytest.fail("must not download into the HF cache"))
-    md = tmp_path / "models"
-    _set_models_dir(md)
-
-    def fetch(entry, target_dir, token, progress):
-        f = target_dir / entry["filename"]
-        f.write_bytes(b"w")
-        return f
-
-    monkeypatch.setattr(ms, "_fetch", fetch)
-    out = server.api_upscale_download(server.UpscaleDownloadRequest(model_id=X4))
-    assert out["ok"] is True
-    assert out["path"] == str(md / "ai-forever--Real-ESRGAN" / "RealESRGAN_x4.pth")
-    row = next(m for m in out["models"] if m["id"] == X4)
-    assert row["cached"] is True
-
-
-def test_upscale_models_cached_flag_uses_model_store(tmp_path):
-    md = tmp_path / "models"
-    f = md / "ai-forever--Real-ESRGAN" / "RealESRGAN_x4.pth"
-    f.parent.mkdir(parents=True)
-    f.write_bytes(b"w")
-    _set_models_dir(md)
-    models = {m["id"]: m for m in server.api_upscale_models()["models"]}
-    assert models[X4]["cached"] is True
-    assert models["realesrgan-x2"]["cached"] is False
-
-
 # --------------------------------------------------------------------------- #
 # Florence users: auto-crop job and image analysis
 # --------------------------------------------------------------------------- #
@@ -432,13 +384,31 @@ def test_crop_auto_job_needs_florence_only_when_it_detects(tmp_path, monkeypatch
     assert run("landscape")["state"] == "done"  # no detection, so no Florence needed
 
 
-def test_analyze_without_models_folder_answers_400(monkeypatch):
-    monkeypatch.setattr(server.florence, "analyze_image",
-                        lambda img: ("A scene.", []))
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(server.api_ideogram_analyze(_upload_png()))
-    assert exc.value.status_code == 400
-    assert exc.value.detail == NO_FOLDER
+def _await_job(client, route: str, job_id: str) -> dict:
+    for _ in range(200):
+        job = client.get(f"{route}/{job_id}").json()
+        if job["state"] in ("done", "error"):
+            return job
+        time.sleep(0.05)
+    raise AssertionError("the job never finished")
+
+
+def _analyze_png() -> dict:
+    buf = io.BytesIO()
+    Image.new("RGB", (80, 60), "red").save(buf, format="PNG")
+    return {"file": ("t.png", buf.getvalue(), "image/png")}
+
+
+def test_analyze_job_without_models_folder_fails_with_the_setup_text(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(server.florence, "analyze_image", lambda img: ("A scene.", []))
+    with TestClient(server.app) as client:
+        r = client.post("/api/ideogram/analyze/jobs", files=_analyze_png())
+        assert r.status_code == 200, r.text
+        job = _await_job(client, "/api/ideogram/analyze/jobs", r.json()["job_id"])
+    assert job["state"] == "error"
+    assert job["error"].split("\n")[0] == NO_FOLDER
 
 
 def test_analyze_download_does_not_block_the_event_loop(monkeypatch):
@@ -453,54 +423,56 @@ def test_analyze_download_does_not_block_the_event_loop(monkeypatch):
 
     monkeypatch.setattr(server, "_ensure_model", slow_download)
     monkeypatch.setattr(server.florence, "analyze_image", lambda img: ("A scene.", []))
-    buf = io.BytesIO()
-    Image.new("RGB", (80, 60), "red").save(buf, format="PNG")
-    out = {}
-    with TestClient(server.app) as client:  # one event loop serves both requests
-        analyze = threading.Thread(target=lambda: out.update(analyze=client.post(
-            "/api/ideogram/analyze", files={"file": ("t.png", buf.getvalue(), "image/png")})))
-        poll = threading.Thread(
-            target=lambda: out.update(poll=client.get("/api/store/downloads")))
+    route = "/api/ideogram/analyze/jobs"
+    with TestClient(server.app) as client:  # one event loop serves every request
         try:
-            analyze.start()
+            r = client.post(route, files=_analyze_png())
+            assert r.status_code == 200, r.text
+            job_id = r.json()["job_id"]
             assert entered.wait(5)
+            out = {}
+            poll = threading.Thread(target=lambda: out.update(
+                downloads=client.get("/api/store/downloads"),
+                job=client.get(f"{route}/{job_id}")))
             poll.start()
             poll.join(2)
-            assert "poll" in out, "the event loop is blocked while the model downloads"
-            assert out["poll"].status_code == 200
+            assert "job" in out, "the event loop is blocked while the model downloads"
+            assert out["downloads"].status_code == 200
+            assert out["job"].status_code == 200 and out["job"].json()["state"] != "done"
         finally:
             release.set()
-            analyze.join(10)
-            poll.join(10)
-    assert out["analyze"].status_code == 200
-    assert out["analyze"].json()["model"] == florence.DEFAULT_MODEL
+        job = _await_job(client, route, job_id)
+    assert job["state"] == "done", job["error"]
+    assert job["result"]["model"] == florence.DEFAULT_MODEL
 
 
-def test_prompt_maps_model_errors_to_http(tmp_path, monkeypatch):
+def test_prompt_job_maps_model_errors_to_the_job_error(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
     monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q, source=None: None)
     monkeypatch.setattr(server.captioner, "generate_text", lambda *a, **kw: "a prompt")
     monkeypatch.setattr(server, "_save_prompt_to_library", lambda *a: 1)
 
-    def status(model: str) -> tuple[int, str]:
-        with pytest.raises(HTTPException) as exc:
-            server.api_prompt(server.PromptRequest(text="a cat", model=model))
-        return exc.value.status_code, exc.value.detail
+    with TestClient(server.app) as client:
+        def error_of(model: str) -> str:
+            r = client.post("/api/prompt/jobs", json={"text": "a cat", "model": model})
+            assert r.status_code == 200, r.text
+            job = _await_job(client, "/api/prompt/jobs", r.json()["job_id"])
+            assert job["state"] == "error"
+            return job["error"].split("\n")[0]
 
-    assert status(QWEN7) == (400, NO_FOLDER)
-    assert status("nope/nope") == (400, "Unknown model: nope/nope")
+        assert error_of(QWEN7) == NO_FOLDER
+        assert error_of("nope/nope") == "Unknown model: nope/nope"
 
-    _set_models_dir(tmp_path / "models")
+        _set_models_dir(tmp_path / "models")
 
-    def broken(entry, target_dir, token, progress):
-        raise RuntimeError("Hub unreachable")
+        def broken(entry, target_dir, token, progress):
+            raise RuntimeError("Hub unreachable")
 
-    monkeypatch.setattr(ms, "_fetch", broken)
-    assert status(QWEN7) == (502, "Hub unreachable")
+        monkeypatch.setattr(ms, "_fetch", broken)
+        assert error_of(QWEN7) == "Hub unreachable"
 
 
-# --------------------------------------------------------------------------- #
-# run.sh
-# --------------------------------------------------------------------------- #
 def test_run_sh_has_no_hardcoded_hf_home():
     text = (ROOT / "run.sh").read_text(encoding="utf-8")
     assert "/mnt/intel" not in text

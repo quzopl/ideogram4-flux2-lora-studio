@@ -165,11 +165,6 @@ def load_selected(path) -> str | None:
     return uuid if isinstance(uuid, str) and uuid else None
 
 
-def save_selected(path, uuid: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps({"uuid": uuid}, indent=2), encoding="utf-8")
-
-
 def device_for(role: str, doc: dict | None = None,
                devices: list[dict] | None = None) -> str:
     """'cuda:N' or 'cpu' for one role's model, read fresh at every load.

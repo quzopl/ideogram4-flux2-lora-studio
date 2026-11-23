@@ -36,7 +36,6 @@ def test_store_models_survives_import_of_bad_location():
     assert r.status_code == 200
     row = next(m for m in r.json()["models"] if m["id"] == "Qwen/Qwen2.5-VL-7B-Instruct")
     assert row["status"] == "missing"
-    assert client.get("/api/upscale/models").status_code == 200
 
 
 def test_download_without_any_folder_400():

@@ -63,7 +63,7 @@ def test_device_for_cases(value, devices, expected):
 
 
 # --------------------------------------------------------------------------- #
-# /api/gpu/assign and the legacy /api/gpu/select
+# /api/gpu/assign
 # --------------------------------------------------------------------------- #
 def test_assign_unloads_only_that_role(fake_gpus):
     r = client.post("/api/gpu/assign", json={"role": "upscale", "device": "GPU-4070"})
@@ -93,16 +93,6 @@ def test_assign_409_when_busy(fake_gpus, monkeypatch):
     assert r.status_code == 409
     assert fake_gpus == []
     assert settings.load()["gpu"]["vlm"] == "auto"
-
-
-def test_legacy_select_sets_all_roles(fake_gpus):
-    # A settings file exists, so the gpu.json migration cannot do the work.
-    settings.update(lambda d: d["gpu"].update(vlm="cpu", florence="GPU-5080"))
-    r = client.post("/api/gpu/select", json={"uuid": "GPU-4070"})
-    assert r.status_code == 200
-    assert settings.load()["gpu"] == {role: "GPU-4070" for role in settings.ROLES}
-    assert gpu.load_selected(gpu.CONFIG_PATH) == "GPU-4070"
-    assert sorted(fake_gpus) == ["florence", "upscale", "vlm"]
 
 
 # --------------------------------------------------------------------------- #

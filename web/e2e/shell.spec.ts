@@ -21,11 +21,10 @@ test('deep link works', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 })
 
-test('legacy hash opens view', async ({ page }) => {
+test('old /legacy/ link lands in the app', async ({ page }) => {
   await page.goto('/legacy/#upscale')
-  await expect(page.locator('.navtab[data-view="upscale"]')).toHaveClass(/\bactive\b/)
-  await expect(page.locator('#view-upscale')).not.toHaveClass(/\bhidden\b/)
-  await expect(page.locator('#view-dataset')).toHaveClass(/\bhidden\b/)
+  await expect(page).not.toHaveURL(/legacy/)
+  await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible()
 })
 
 test('gpu bar renders', async ({ page }) => {

@@ -25,7 +25,6 @@ def _env(monkeypatch, prompt_db):
     monkeypatch.setattr(captioner, "ensure_loaded", lambda *a, **k: None)
     monkeypatch.setattr(captioner, "generate_text", lambda *a, **k: "A tabby cat.")
     monkeypatch.setattr(server, "_ensure_model", lambda m, job=None: "/p")
-    monkeypatch.setattr(server, "_ensure_model_http", lambda m: "/p")
     server.JOBS.clear()
     yield
     server.JOBS.clear()
@@ -98,27 +97,6 @@ def test_busy_while_generating():
     assert client.post("/api/unload").status_code == 409
 
 
-def test_legacy_prompt_endpoint_unchanged():
-    r = client.post("/api/prompt", json={"text": "a cat"})
-    assert r.status_code == 200
-    body = r.json()
-    assert set(body) == {"prompt", "library_id", "warnings"}
-
-
-def test_legacy_prompt_error_codes(monkeypatch):
-    def nofolder(m):
-        raise server.HTTPException(400, "No models folder chosen.")
-    monkeypatch.setattr(server, "_ensure_model_http", nofolder)
-    r = client.post("/api/prompt", json={"text": "a"})
-    assert r.status_code == 400 and r.json()["detail"].startswith("No models folder chosen")
-
-    def lm(*a, **k):
-        raise lmstudio.LMStudioError("x")
-    monkeypatch.setattr(lmstudio, "generate_text", lm)
-    r = client.post("/api/prompt", json={"text": "a", "model": "lmstudio:a"})
-    assert r.status_code == 502 and r.json()["detail"].startswith("LM Studio:")
-
-
 def test_prompt_job_lmstudio_error_text(monkeypatch):
     def lm(*a, **k):
         raise lmstudio.LMStudioError("x")
@@ -146,15 +124,11 @@ def test_prompt_job_409_while_busy(monkeypatch):
                        json={"text": "a", "model": "lmstudio:x"}).status_code == 200
 
 
-def test_download_failure_same_text_job_and_legacy(monkeypatch):
+def test_download_failure_text_in_job(monkeypatch):
     def dl(m, job=None):
         raise RuntimeError("Download incomplete: x")
     monkeypatch.setattr(server, "_ensure_model", dl)
-    monkeypatch.setattr(server, "_ensure_model_http",
-                        lambda m: server._ensure_model_mapped(m, None))
     assert _get(_start())["error"].split("\n")[0] == "Download incomplete: x"
-    r = client.post("/api/prompt", json={"text": "a"})
-    assert r.status_code == 502 and r.json()["detail"] == "Download incomplete: x"
 
 
 def test_value_error_outside_ensure_is_generation_error(monkeypatch):
@@ -162,8 +136,6 @@ def test_value_error_outside_ensure_is_generation_error(monkeypatch):
         raise ValueError("bad")
     monkeypatch.setattr(captioner, "generate_text", bad)
     assert _get(_start())["error"].split("\n")[0] == "Generation error: bad"
-    r = client.post("/api/prompt", json={"text": "a"})
-    assert r.status_code == 500 and r.json()["detail"] == "Generation error: bad"
 
 
 @pytest.mark.parametrize("where, exc, first", [

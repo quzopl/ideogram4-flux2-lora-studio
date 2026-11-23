@@ -23,12 +23,12 @@ uv pip install -r requirements.txt
 
 # Nowe UI (web/): budowane, gdy brakuje dist albo źródła są nowsze.
 if ! command -v pnpm >/dev/null 2>&1; then
-  echo "Brak 'pnpm' — nowe UI nie zostanie zbudowane (zostaje klasyczne pod /legacy/). Zainstaluj: https://pnpm.io/installation"
+  echo "Brak 'pnpm' — nowe UI nie zostanie zbudowane — bez web/dist aplikacja pokaże instrukcję budowania. Zainstaluj: https://pnpm.io/installation"
 elif [ ! -f web/dist/index.html ] || [ -n "$(find web/src web/public web/index.html web/package.json web/pnpm-lock.yaml web/vite.config.ts -newer web/dist/index.html 2>/dev/null)" ]; then
   echo ">> Buduję nowe UI (web/)…"
-  # Nieudany build nie blokuje startu serwera (set -e): zostaje poprzedni build albo klasyczne UI.
+  # Nieudany build nie blokuje startu serwera (set -e): zostaje poprzedni build (jeśli jest).
   (cd web && pnpm install --frozen-lockfile && pnpm build) \
-    || echo "!! Budowanie nowego UI nie powiodło się — zostaje poprzedni build (jeśli jest), a bez niego klasyczne UI pod /legacy/."
+    || echo "!! Budowanie nowego UI nie powiodło się — zostaje poprzedni build (jeśli jest)."
 fi
 
 PORT="${PORT:-8123}"

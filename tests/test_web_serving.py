@@ -3,7 +3,6 @@ import sys
 import threading
 import time
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,17 +45,33 @@ def test_unknown_api_path_is_json_404(dist):
     assert r.headers["content-type"].startswith("application/json")
 
 
-def test_root_redirects_to_legacy_without_dist(tmp_path, monkeypatch):
+def test_root_without_dist_is_a_503_with_build_instructions(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "WEB_DIST", tmp_path / "missing")
     r = client.get("/", follow_redirects=False)
-    assert r.status_code == 307 and r.headers["location"] == "/legacy/"
+    assert r.status_code == 503
+    assert r.headers["cache-control"] == "no-cache"
+    assert "The web UI is not built" in r.text
+    assert "cd web && pnpm install && pnpm build" in r.text
 
 
-def test_legacy_serves_frontend():
-    r = client.get("/legacy/")
-    assert r.status_code == 200 and "app.js" in r.text
-    assert 'href="/style.css"' not in r.text and 'src="/app.js"' not in r.text
-    assert client.get("/legacy/style.css").status_code == 200
+@pytest.mark.parametrize("path", ["/legacy", "/legacy/", "/legacy/style.css"])
+def test_legacy_paths_redirect_to_the_app(path):
+    r = client.get(path, follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/"
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/api/fs/pick"),
+    ("POST", "/api/gpu/select"),
+    ("GET", "/api/upscale/models"),
+    ("POST", "/api/upscale/download"),
+    ("POST", "/api/ideogram/analyze"),
+    ("POST", "/api/prompt"),
+])
+def test_legacy_routes_gone(method, path):
+    # Not a status check: a POST to an unknown path is a 405 through the GET catch-all.
+    assert not any(getattr(r, "path", None) == path and method in getattr(r, "methods", ())
+                   for r in server.app.routes)
 
 
 def test_work_dir_env(tmp_path):
@@ -67,14 +82,6 @@ def test_work_dir_env(tmp_path):
         cwd=ROOT, env={**__import__("os").environ, "FLUX_PREP_WORK": str(tmp_path)},
         capture_output=True, text=True, check=True).stdout.split()
     assert out == [str(tmp_path), str(tmp_path / "settings.json"), str(tmp_path / "gpu.json")]
-
-
-def test_fs_pick_is_post():
-    assert client.get("/api/fs/pick").status_code == 405
-    fake = subprocess.CompletedProcess([], 0, stdout="/tmp/x\n", stderr="")
-    with patch("subprocess.run", return_value=fake):
-        r = client.post("/api/fs/pick")
-    assert r.status_code == 200 and r.json() == {"path": "/tmp/x"}
 
 
 def test_gpus_concurrent_polls_share_one_smi_run(monkeypatch):
@@ -102,7 +109,7 @@ def test_gpus_concurrent_polls_share_one_smi_run(monkeypatch):
 
 
 def test_html_responses_are_not_cached(dist):
-    for p in ("/", "/settings", "/upscale", "/legacy/"):
+    for p in ("/", "/settings", "/upscale"):
         r = client.get(p)
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
         assert r.headers.get("cache-control") == "no-cache", p
@@ -119,13 +126,7 @@ def test_missing_asset_is_404_without_dist(tmp_path, monkeypatch):
     assert client.get("/assets/index-OLD.js", follow_redirects=False).status_code == 404
 
 
-def test_legacy_without_slash_redirects(dist):
-    r = client.get("/legacy", follow_redirects=False)
-    assert r.status_code == 307 and r.headers["location"] == "/legacy/"
-
-
 def test_nul_byte_in_path_is_not_a_server_error(dist):
     r = client.get("/x%00y")
     assert r.status_code == 200 and 'id="root"' in r.text
     assert client.get("/assets/%00.js").status_code == 404
-    assert client.get("/legacy/%00").status_code < 500

@@ -38,8 +38,7 @@ export function Onboarding() {
     settings.isSuccess &&
     settings.data.models_dir === '' &&
     !dismissed &&
-    pathname !== '/_playground' &&
-    !pathname.startsWith('/legacy')
+    pathname !== '/_playground'
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && later()}>

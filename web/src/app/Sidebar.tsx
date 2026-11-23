@@ -1,6 +1,5 @@
 import {
   Boxes,
-  ExternalLink,
   ImageUpscale,
   Images,
   Settings,
@@ -88,14 +87,6 @@ export function Sidebar() {
           <Item key={item.to} {...item} />
         ))}
       </nav>
-
-      <a
-        href="/legacy/"
-        className="mx-3 mb-4 flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-text-dim transition-colors hover:bg-white/[0.03] hover:text-text"
-      >
-        <ExternalLink className="size-3.5" />
-        Classic UI
-      </a>
     </aside>
   )
 }
