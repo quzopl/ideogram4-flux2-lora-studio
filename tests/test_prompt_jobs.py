@@ -4,7 +4,7 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import captioner, lmstudio, model_store, prompts, server
+from backend import captioner, core, lmstudio, model_store, prompts, server
 
 client = TestClient(server.app)
 
@@ -24,10 +24,10 @@ def _env(monkeypatch, prompt_db):
     monkeypatch.setattr(threading, "Thread", _SyncThread)
     monkeypatch.setattr(captioner, "ensure_loaded", lambda *a, **k: None)
     monkeypatch.setattr(captioner, "generate_text", lambda *a, **k: "A tabby cat.")
-    monkeypatch.setattr(server, "_ensure_model", lambda m, job=None: "/p")
-    server.JOBS.clear()
+    monkeypatch.setattr(core, "_ensure_model", lambda m, job=None: "/p")
+    core.JOBS.clear()
     yield
-    server.JOBS.clear()
+    core.JOBS.clear()
 
 
 def _start(**kw):
@@ -67,7 +67,7 @@ def test_prompt_job_ideogram_lints(monkeypatch):
 def test_prompt_job_reports_missing_models_folder(monkeypatch):
     def boom(m, job=None):
         raise model_store.ModelsFolderNotSet()
-    monkeypatch.setattr(server, "_ensure_model", boom)
+    monkeypatch.setattr(core, "_ensure_model", boom)
     j = _get(_start())
     assert j["state"] == "error"
     assert j["error"].startswith("No models folder chosen")
@@ -81,7 +81,7 @@ def test_prompt_job_validation():
 
 
 def test_prompt_job_wrong_kind_404():
-    server.JOBS["d"] = {"id": "d", "kind": "dataset", "state": "done"}
+    core.JOBS["d"] = {"id": "d", "kind": "dataset", "state": "done"}
     assert client.get("/api/prompt/jobs/d").status_code == 404
     assert client.get("/api/prompt/jobs/nope").status_code == 404
 
@@ -93,7 +93,7 @@ def test_lint_endpoint():
 
 
 def test_busy_while_generating():
-    server.JOBS["g"] = {"id": "g", "kind": "prompt", "state": "generating"}
+    core.JOBS["g"] = {"id": "g", "kind": "prompt", "state": "generating"}
     assert client.post("/api/unload").status_code == 409
 
 
@@ -115,7 +115,7 @@ def test_prompt_job_crash_ends_in_error(monkeypatch):
 
 
 def test_prompt_job_409_while_busy(monkeypatch):
-    server.JOBS["p"] = {"id": "p", "kind": "dataset", "state": "processing"}
+    core.JOBS["p"] = {"id": "p", "kind": "dataset", "state": "processing"}
     r = client.post("/api/prompt/jobs", json={"text": "a"})
     assert r.status_code == 409
     assert r.json()["detail"] == "Processing in progress — wait for it to finish."
@@ -127,7 +127,7 @@ def test_prompt_job_409_while_busy(monkeypatch):
 def test_download_failure_text_in_job(monkeypatch):
     def dl(m, job=None):
         raise RuntimeError("Download incomplete: x")
-    monkeypatch.setattr(server, "_ensure_model", dl)
+    monkeypatch.setattr(core, "_ensure_model", dl)
     assert _get(_start())["error"].split("\n")[0] == "Download incomplete: x"
 
 
@@ -148,7 +148,7 @@ def test_prompt_job_error_has_traceback_after_first_line(monkeypatch, where, exc
         raise exc
     kw = {}
     if where == "ensure":
-        monkeypatch.setattr(server, "_ensure_model", boom)
+        monkeypatch.setattr(core, "_ensure_model", boom)
     elif where == "lmstudio":
         monkeypatch.setattr(lmstudio, "generate_text", boom)
         kw["model"] = "lmstudio:a"
@@ -170,9 +170,9 @@ def test_prompt_job_download_progress_cleared_before_loading(monkeypatch):
     seen = []
 
     def loaded(*a, **k):
-        job = next(iter(server.JOBS.values()))
+        job = next(iter(core.JOBS.values()))
         seen.append((job["state"], job["current"]))
-    monkeypatch.setattr(server, "_ensure_model", ensure)
+    monkeypatch.setattr(core, "_ensure_model", ensure)
     monkeypatch.setattr(captioner, "ensure_loaded", loaded)
     assert _get(_start())["state"] == "done"
     assert seen == [("loading_model", "")]

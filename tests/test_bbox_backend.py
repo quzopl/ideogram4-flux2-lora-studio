@@ -8,7 +8,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend import captioner, comfy_client, florence, lmstudio, prompts, server
+from backend import (captioner, comfy_client, comfy_workflows, core, florence, lmstudio, prompts,
+                     server)
 
 client = TestClient(server.app)
 
@@ -34,16 +35,16 @@ class _SyncThread:
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setattr(threading, "Thread", _SyncThread)
-    monkeypatch.setattr(server, "_ensure_model", lambda m, job=None: f"/models/{m}")
+    monkeypatch.setattr(core, "_ensure_model", lambda m, job=None: f"/models/{m}")
     monkeypatch.setattr(florence, "analyze_image", lambda img: (
         "A fox in snow.", [{"type": "obj", "bbox": [100, 100, 900, 500], "desc": "fox"}]))
     monkeypatch.setattr(captioner, "ensure_loaded", lambda *a, **k: None)
     monkeypatch.setattr(captioner, "query_image", lambda *a, **k: json.dumps(V15))
-    server.JOBS.clear()
-    server.COMFY_JOBS.clear()
+    core.JOBS.clear()
+    core.COMFY_JOBS.clear()
     yield
-    server.JOBS.clear()
-    server.COMFY_JOBS.clear()
+    core.JOBS.clear()
+    core.COMFY_JOBS.clear()
 
 
 def _png(w=80, h=60) -> bytes:
@@ -195,7 +196,7 @@ def test_analyze_job_florence_done():
     assert isinstance(res["elements"], int) and res["elements"] == 1
     assert res["model"] == florence.DEFAULT_MODEL
     assert isinstance(res["warnings"], list)
-    assert server.JOBS[r.json()["job_id"]]["kind"] == "analyze"
+    assert core.JOBS[r.json()["job_id"]]["kind"] == "analyze"
 
 
 def test_analyze_job_vlm_passes_max_tokens_and_quant(monkeypatch):
@@ -220,7 +221,7 @@ def test_analyze_job_validation():
     assert _post_analyze({"quant": "8bit"}).status_code == 422
     assert _post_analyze({"max_tokens": "10"}).status_code == 422
     assert _post_analyze({"max_tokens": "9000"}).status_code == 422
-    assert not server.JOBS
+    assert not core.JOBS
 
 
 def test_analyze_job_rejects_non_image():
@@ -230,7 +231,7 @@ def test_analyze_job_rejects_non_image():
     r = _post_analyze(content=b"", mime="image/png")
     assert r.status_code == 400
     assert r.json()["detail"] == "Upload an image file."
-    assert not server.JOBS
+    assert not core.JOBS
 
 
 def test_analyze_job_accepts_empty_mime_image():
@@ -252,7 +253,7 @@ def test_analyze_job_accepts_heic(tmp_path):
 def test_analyze_job_error_first_line(monkeypatch):
     def boom(model_id, job):
         raise HTTPException(400, NO_FOLDER)
-    monkeypatch.setattr(server, "_ensure_model_mapped", boom)
+    monkeypatch.setattr(core, "_ensure_model_mapped", boom)
     j = _job(_post_analyze().json()["job_id"])
     assert j["state"] == "error"
     first, rest = j["error"].split("\n", 1)
@@ -289,33 +290,33 @@ def test_analyze_job_states(monkeypatch):
     def ensure(model_id, job):
         states.append(job["state"])
         return "/m"
-    monkeypatch.setattr(server, "_ensure_model_mapped", ensure)
+    monkeypatch.setattr(core, "_ensure_model_mapped", ensure)
     monkeypatch.setattr(florence, "analyze_image", lambda img: states.append(
-        next(iter(server.JOBS.values()))["state"]) or ("A.", []))
+        next(iter(core.JOBS.values()))["state"]) or ("A.", []))
     _post_analyze()
     assert states == ["loading_model", "analyzing"]
 
 
 def test_analyze_job_409_while_busy(monkeypatch):
-    server.JOBS["busy"] = {"id": "busy", "kind": "dataset", "state": "processing"}
+    core.JOBS["busy"] = {"id": "busy", "kind": "dataset", "state": "processing"}
     monkeypatch.setattr(lmstudio, "caption_image", lambda *a, **k: json.dumps(V15))
     for data in ({}, {"engine": "florence"}, {"engine": "hybrid", "model": "lmstudio:q"},
                  {"engine": "vlm", "model": "Qwen/X"}):
         r = _post_analyze(data)
         assert r.status_code == 409, data
-    assert list(server.JOBS) == ["busy"]
+    assert list(core.JOBS) == ["busy"]
     # pure LM Studio never touches the local GPU
     r = _post_analyze({"engine": "vlm", "model": "lmstudio:q"})
     assert r.status_code == 200, r.text
 
 
 def test_busy_counts_analyzing():
-    server.JOBS["a"] = {"id": "a", "kind": "analyze", "state": "analyzing"}
-    assert server._busy()
+    core.JOBS["a"] = {"id": "a", "kind": "analyze", "state": "analyzing"}
+    assert core._busy()
 
 
 def test_analyze_job_unknown_or_wrong_kind():
-    server.JOBS["p"] = {"id": "p", "kind": "prompt", "state": "done",
+    core.JOBS["p"] = {"id": "p", "kind": "prompt", "state": "done",
                         "current": "", "error": "", "result": None}
     assert client.get("/api/ideogram/analyze/jobs/p").status_code == 404
     assert client.get("/api/ideogram/analyze/jobs/nope").status_code == 404
@@ -482,7 +483,7 @@ def comfy(monkeypatch, tmp_path):
     calls = {"interrupt": [], "delete": [], "history": 0,
              "queue": {"queue_running": [], "queue_pending": [[0, "P1", {}, {}, []]]}}
     monkeypatch.setattr(server, "_load_comfy_config", lambda: {"url": "http://c"})
-    monkeypatch.setattr(server, "COMFY_GALLERY_DIR", tmp_path)
+    monkeypatch.setattr(core, "COMFY_GALLERY_DIR", tmp_path)
     monkeypatch.setattr(comfy_client, "interrupt",
                         lambda url, prompt_id=None: calls["interrupt"].append((url, prompt_id)))
 
@@ -508,7 +509,7 @@ def _comfy_job(**extra):
     job = {"id": "j", "state": "running", "total": 1, "done_count": 0, "current": "",
            "current_node": "", "progress": {"value": 0, "max": 0}, "preview": None,
            "preview_ts": 0, "images": [], "error": "", "cancel": False, **extra}
-    server.COMFY_JOBS["j"] = job
+    core.COMFY_JOBS["j"] = job
     return job
 
 
@@ -566,7 +567,7 @@ def test_cancel_racing_the_runner_is_not_lost(comfy):
                 super().__setitem__("executing", False)
             super().__setitem__(k, v)
     job = _Job(_comfy_job(state="running"))
-    server.COMFY_JOBS["j"] = job
+    core.COMFY_JOBS["j"] = job
     _cancel()
     assert comfy["delete"] == [("http://c", "P1")]
     assert comfy["interrupt"] == []
@@ -587,7 +588,7 @@ def test_cancel_queued_deletes_from_queue(comfy):
 
 def test_cancel_terminal_sends_nothing(comfy):
     for state in ("done", "error", "cancelled"):
-        server.COMFY_JOBS.clear()
+        core.COMFY_JOBS.clear()
         job = _comfy_job(state=state, prompt_id="P1", executing=True, comfy_url="http://c")
         _cancel()
         assert job["state"] == state
@@ -609,7 +610,7 @@ def test_runner_records_prompt_id_and_executing(comfy, monkeypatch):
     seen = {}
 
     def fake_stream(url, cid, pid, on_event, **kw):
-        job = server.COMFY_JOBS["j"]
+        job = core.COMFY_JOBS["j"]
         seen["queued"] = (job.get("prompt_id"), job.get("executing"))
         on_event("started", None)
         seen["running"] = job.get("executing")
@@ -625,7 +626,7 @@ def test_runner_records_prompt_id_and_executing(comfy, monkeypatch):
 def test_interrupted_run_ends_cancelled(comfy, monkeypatch):
     def fake_stream(url, cid, pid, on_event, **kw):
         on_event("started", None)
-        server.COMFY_JOBS["j"]["cancel"] = True  # the Cancel button was pressed
+        core.COMFY_JOBS["j"]["cancel"] = True  # the Cancel button was pressed
         on_event("interrupted", {"prompt_id": pid})
     monkeypatch.setattr(comfy_client, "stream_events", fake_stream)
     job = _comfy_job(state="pending")
@@ -646,7 +647,7 @@ def test_interrupted_elsewhere_ends_cancelled(comfy, monkeypatch):
 
 def test_cancel_arriving_before_prompt_id_deletes_after_queueing(comfy, monkeypatch):
     def queue(url, wf, client_id=None):
-        server.COMFY_JOBS["j"]["cancel"] = True  # cancel lands while queueing
+        core.COMFY_JOBS["j"]["cancel"] = True  # cancel lands while queueing
         return "P1"
     monkeypatch.setattr(comfy_client, "queue_prompt", queue)
     monkeypatch.setattr(comfy_client, "stream_events",
@@ -660,7 +661,7 @@ def test_cancel_arriving_before_prompt_id_deletes_after_queueing(comfy, monkeypa
 
 def test_early_cancel_of_already_running_prompt_interrupts(comfy, monkeypatch):
     def queue(url, wf, client_id=None):
-        server.COMFY_JOBS["j"]["cancel"] = True
+        core.COMFY_JOBS["j"]["cancel"] = True
         return "P1"
     monkeypatch.setattr(comfy_client, "queue_prompt", queue)
     comfy["queue"] = _running()
@@ -688,7 +689,7 @@ def test_raw_runner_execution_error_ends_error(comfy, monkeypatch):
 def test_mapped_runner_execution_error_ends_error(comfy, monkeypatch):
     monkeypatch.setattr(server, "_load_comfy_config",
                         lambda: {"url": "http://c", "workflow": {}, "mapping": {}})
-    monkeypatch.setattr(server.comfy_workflows, "apply_overrides_multi_lora",
+    monkeypatch.setattr(comfy_workflows, "apply_overrides_multi_lora",
                         lambda *a, **k: {})
     monkeypatch.setattr(comfy_client, "stream_events", _error_stream)
     job = _comfy_job(state="pending")
@@ -703,7 +704,7 @@ def test_runner_passes_should_stop(comfy, monkeypatch):
 
     def fake_stream(url, cid, pid, on_event, should_stop=None):
         seen["before"] = should_stop()
-        server.COMFY_JOBS["j"]["cancel"] = True
+        core.COMFY_JOBS["j"]["cancel"] = True
         seen["after"] = should_stop()
     monkeypatch.setattr(comfy_client, "stream_events", fake_stream)
     job = _comfy_job(state="pending")
@@ -716,12 +717,12 @@ def test_mapped_runner_records_prompt_id(comfy, monkeypatch):
     """The classic ComfyUI view's batch runner shares the cancel endpoint."""
     monkeypatch.setattr(server, "_load_comfy_config",
                         lambda: {"url": "http://c", "workflow": {}, "mapping": {}})
-    monkeypatch.setattr(server.comfy_workflows, "apply_overrides_multi_lora",
+    monkeypatch.setattr(comfy_workflows, "apply_overrides_multi_lora",
                         lambda *a, **k: {})
     seen = {}
 
     def fake_stream(url, cid, pid, on_event, **kw):
-        job = server.COMFY_JOBS["j"]
+        job = core.COMFY_JOBS["j"]
         seen["queued"] = (job.get("prompt_id"), job.get("executing"))
         on_event("started", None)
         seen["running"] = job.get("executing")
@@ -739,7 +740,7 @@ def test_raw_runner_step_text(comfy, monkeypatch):
 
     def fake_stream(url, cid, pid, on_event, **kw):
         on_event("progress", {"value": 3, "max": 10})
-        seen["current"] = server.COMFY_JOBS["j"]["current"]
+        seen["current"] = core.COMFY_JOBS["j"]["current"]
         on_event("done", None)
     monkeypatch.setattr(comfy_client, "stream_events", fake_stream)
     monkeypatch.setattr(comfy_client, "history", lambda url, pid: {
@@ -797,7 +798,7 @@ def _run_mapped():
 def mapped_config(monkeypatch):
     monkeypatch.setattr(server, "_load_comfy_config",
                         lambda: {"url": "http://c", "workflow": {}, "mapping": {}})
-    monkeypatch.setattr(server.comfy_workflows, "apply_overrides_multi_lora",
+    monkeypatch.setattr(comfy_workflows, "apply_overrides_multi_lora",
                         lambda *a, **k: {})
 
 

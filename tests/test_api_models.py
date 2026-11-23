@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import model_store, server, settings, upscaler
+from backend import core, model_store, server, settings, upscaler
 
 client = TestClient(server.app)
 
@@ -9,9 +9,9 @@ client = TestClient(server.app)
 @pytest.fixture(autouse=True)
 def _hermetic(tmp_path, monkeypatch):
     """Never read the dev box's .work/ configs or its HF cache."""
-    monkeypatch.setattr(server, "UPSCALER_CONFIG_PATH", tmp_path / "upscaler.json")
-    monkeypatch.setattr(server, "CUSTOM_MODELS_PATH", tmp_path / "custom_models.json")
-    monkeypatch.setattr(server, "HF_TOKEN_PATH", tmp_path / "hf.json")
+    monkeypatch.setattr(core, "UPSCALER_CONFIG_PATH", tmp_path / "upscaler.json")
+    monkeypatch.setattr(core, "CUSTOM_MODELS_PATH", tmp_path / "custom_models.json")
+    monkeypatch.setattr(core, "HF_TOKEN_PATH", tmp_path / "hf.json")
     monkeypatch.setattr(model_store, "_hf_snapshot_path", lambda repo_id: None)
     monkeypatch.setattr(model_store, "_hf_file_path", lambda repo_id, filename: None)
     monkeypatch.setattr(upscaler, "_hf_cached", lambda repo_id, filename: False)

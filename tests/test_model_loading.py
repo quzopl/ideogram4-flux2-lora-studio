@@ -1,4 +1,4 @@
-"""Models load through the model manager (server._ensure_model).
+"""Models load through the model manager (core._ensure_model).
 
 No test touches the network or loads a real model: the fixture stubs both
 network seams of model_store (``_remote_size`` and ``_fetch``) and every HF
@@ -18,7 +18,8 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from backend import captioner, florence, gpu, server, settings, upscaler
+from backend import (api_dataset, api_upscale, captioner, core, crop_auto, florence, gpu, server,
+                     settings, upscaler)
 from backend import model_store as ms
 from tests.conftest import ML_MODULES
 
@@ -37,9 +38,9 @@ def _no_network(entry, target_dir, token, progress):
 
 @pytest.fixture(autouse=True)
 def _hermetic(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "UPSCALER_CONFIG_PATH", tmp_path / "upscaler.json")
-    monkeypatch.setattr(server, "CUSTOM_MODELS_PATH", tmp_path / "custom_models.json")
-    monkeypatch.setattr(server, "HF_TOKEN_PATH", tmp_path / "hf.json")
+    monkeypatch.setattr(core, "UPSCALER_CONFIG_PATH", tmp_path / "upscaler.json")
+    monkeypatch.setattr(core, "CUSTOM_MODELS_PATH", tmp_path / "custom_models.json")
+    monkeypatch.setattr(core, "HF_TOKEN_PATH", tmp_path / "hf.json")
     monkeypatch.setattr(ms, "_hf_snapshot_path", lambda repo_id: None)
     monkeypatch.setattr(ms, "_hf_file_path", lambda repo_id, filename: None)
     monkeypatch.setattr(upscaler, "_hf_cached", lambda repo_id, filename: False)
@@ -96,7 +97,7 @@ def test_ensure_model_reports_download_progress_in_job(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ms, "_fetch", fetch)
     job = _Job(on_current=lambda v: v.endswith("50%") and half_seen.set())
-    path = server._ensure_model(X4, job)
+    path = core._ensure_model(X4, job)
     assert path == str(md / "ai-forever--Real-ESRGAN" / "RealESRGAN_x4.pth")
     assert f"Downloading {X4_LABEL}… 50%" in job.history
     assert "Downloading" in job["current"] and "%" in job["current"]
@@ -114,27 +115,27 @@ def test_ensure_model_reports_gigabytes_when_size_unknown(tmp_path, monkeypatch)
 
     monkeypatch.setattr(ms, "_fetch", fetch)
     job = _Job()
-    server._ensure_model(X4, job)
+    core._ensure_model(X4, job)
     assert job["current"] == f"Downloading {X4_LABEL}… 2.5 GB"
 
 
 def test_ensure_model_without_folder_raises_models_folder_not_set():
     with pytest.raises(ms.ModelsFolderNotSet, match=f"^{re.escape(NO_FOLDER)}$"):
-        server._ensure_model(QWEN7, None)
+        core._ensure_model(QWEN7, None)
     assert ms.DOWNLOADS == {}
 
 
 def test_ensure_model_unknown_id_is_readable():
     with pytest.raises(RuntimeError, match=r"^Unknown model: nope/nope$"):
-        server._ensure_model("nope/nope", {"current": ""})
+        core._ensure_model("nope/nope", {"current": ""})
 
 
 def test_ensure_model_returns_existing_local_path_without_download(tmp_path):
     f = tmp_path / "x.pth"
     f.write_bytes(b"w")
-    upscaler.save_config(server.UPSCALER_CONFIG_PATH, {"folder": str(tmp_path), "custom": []})
-    assert server._ensure_model(f"local:{f}", None) == str(f)
-    assert server._ensure_model(str(tmp_path / "my-vlm"), None) == str(tmp_path / "my-vlm")
+    upscaler.save_config(core.UPSCALER_CONFIG_PATH, {"folder": str(tmp_path), "custom": []})
+    assert core._ensure_model(f"local:{f}", None) == str(f)
+    assert core._ensure_model(str(tmp_path / "my-vlm"), None) == str(tmp_path / "my-vlm")
 
 
 # --------------------------------------------------------------------------- #
@@ -224,50 +225,50 @@ def test_florence_loads_from_source_resolver(monkeypatch, fake_ml):
 
 def test_server_wires_florence_resolver_to_ensure_model(monkeypatch):
     calls = []
-    monkeypatch.setattr(server, "_ensure_model",
+    monkeypatch.setattr(core, "_ensure_model",
                         lambda model_id, job: calls.append((model_id, job)) or "/m/flo")
     assert florence.SOURCE_RESOLVER() == "/m/flo"
     assert calls == [(florence.DEFAULT_MODEL, None)]
 
 
 def test_dataset_job_loads_vlm_from_resolved_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "WORK", tmp_path / "work")
+    monkeypatch.setattr(core, "WORK", tmp_path / "work")
     src = tmp_path / "src"
     src.mkdir()
     _png(src / "a.png")
     calls = []
-    monkeypatch.setattr(server, "_ensure_model",
+    monkeypatch.setattr(core, "_ensure_model",
                         lambda model_id, job: calls.append(model_id) or "/m/qwen7")
     loaded = []
-    monkeypatch.setattr(server.captioner, "ensure_loaded",
+    monkeypatch.setattr(captioner, "ensure_loaded",
                         lambda m, q, source=None: loaded.append((m, q, source)))
-    monkeypatch.setattr(server.captioner, "caption_image", lambda *a, **kw: "a caption")
+    monkeypatch.setattr(captioner, "caption_image", lambda *a, **kw: "a caption")
     job_id = "test-model-loading-dataset"
-    server.JOBS[job_id] = {"id": job_id, "kind": "dataset", "state": "pending", "total": 1,
+    core.JOBS[job_id] = {"id": job_id, "kind": "dataset", "state": "pending", "total": 1,
                            "processed": 0, "current": "", "error": "", "config": {},
                            "results": []}
     try:
-        req = server.ProcessRequest(folder=str(src), model=QWEN7, quant="4bit")
-        server._run_job(job_id, req, [src / "a.png"])
-        job = server.JOBS[job_id]
+        req = api_dataset.ProcessRequest(folder=str(src), model=QWEN7, quant="4bit")
+        api_dataset._run_job(job_id, req, [src / "a.png"])
+        job = core.JOBS[job_id]
         assert job["state"] == "done", job["error"]
         assert calls == [QWEN7]
         assert loaded == [(QWEN7, "4bit", "/m/qwen7")]
         assert job["results"][0]["caption"] == "a caption"
     finally:
-        del server.JOBS[job_id]
+        del core.JOBS[job_id]
 
 
 # --------------------------------------------------------------------------- #
 # Upscalers get the resolved weights path
 # --------------------------------------------------------------------------- #
 def test_upscale_job_uses_resolved_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "WORK", tmp_path / "work")
+    monkeypatch.setattr(core, "WORK", tmp_path / "work")
     src = tmp_path / "src"
     src.mkdir()
     _png(src / "a.png")
     ensured = []
-    monkeypatch.setattr(server, "_ensure_model",
+    monkeypatch.setattr(core, "_ensure_model",
                         lambda model_id, job: ensured.append(model_id) or "/m/x4.pth")
     paths = []
 
@@ -275,54 +276,54 @@ def test_upscale_job_uses_resolved_path(tmp_path, monkeypatch):
         paths.append(entry["path"])
         return img.resize((img.width * 4, img.height * 4))
 
-    monkeypatch.setattr(server.upscaler, "upscale", fake_upscale)
-    monkeypatch.setattr(server, "_resolve_device", lambda v: ("cpu", "CPU"))
+    monkeypatch.setattr(upscaler, "upscale", fake_upscale)
+    monkeypatch.setattr(api_upscale, "_resolve_device", lambda v: ("cpu", "CPU"))
     job_id = "test-model-loading-upscale"
-    server.JOBS[job_id] = {"id": job_id, "kind": "upscale", "state": "pending", "total": 1,
+    core.JOBS[job_id] = {"id": job_id, "kind": "upscale", "state": "pending", "total": 1,
                            "processed": 0, "current": "", "error": "", "results": []}
     try:
-        req = server.UpscaleRunRequest(folder=str(src), model_id=X4)
-        server._run_upscale_job(job_id, req, [src / "a.png"])
-        job = server.JOBS[job_id]
+        req = api_upscale.UpscaleRunRequest(folder=str(src), model_id=X4)
+        api_upscale._run_upscale_job(job_id, req, [src / "a.png"])
+        job = core.JOBS[job_id]
         assert job["state"] == "done", job["error"]
         assert job["results"][0]["error"] == ""
         assert ensured == [X4]
         assert paths == ["/m/x4.pth"]
     finally:
-        del server.JOBS[job_id]
+        del core.JOBS[job_id]
 
 
 def test_upscale_job_without_folder_fails_with_readable_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "WORK", tmp_path / "work")
-    monkeypatch.setattr(server.upscaler, "upscale",
+    monkeypatch.setattr(core, "WORK", tmp_path / "work")
+    monkeypatch.setattr(upscaler, "upscale",
                         lambda *a, **kw: pytest.fail("must not upscale without weights"))
-    monkeypatch.setattr(server, "_resolve_device", lambda v: ("cpu", "CPU"))
+    monkeypatch.setattr(api_upscale, "_resolve_device", lambda v: ("cpu", "CPU"))
     src = tmp_path / "src"
     src.mkdir()
     _png(src / "a.png")
     job_id = "test-model-loading-upscale-nofolder"
-    server.JOBS[job_id] = {"id": job_id, "kind": "upscale", "state": "pending", "total": 1,
+    core.JOBS[job_id] = {"id": job_id, "kind": "upscale", "state": "pending", "total": 1,
                            "processed": 0, "current": "", "error": "", "results": []}
     try:
-        server._run_upscale_job(job_id, server.UpscaleRunRequest(folder=str(src), model_id=X4),
+        api_upscale._run_upscale_job(job_id, api_upscale.UpscaleRunRequest(folder=str(src), model_id=X4),
                                 [src / "a.png"])
-        job = server.JOBS[job_id]
+        job = core.JOBS[job_id]
         assert job["state"] == "error"
         assert job["error"].startswith(NO_FOLDER)
     finally:
-        del server.JOBS[job_id]
+        del core.JOBS[job_id]
 
 
 def test_dataset_upscale_hook_uses_resolved_path(monkeypatch):
     job = {"current": ""}
     ensured = []
-    monkeypatch.setattr(server, "_ensure_model",
+    monkeypatch.setattr(core, "_ensure_model",
                         lambda model_id, j: ensured.append((model_id, j)) or "/m/x4.pth")
     paths = []
-    monkeypatch.setattr(server.upscaler, "upscale",
+    monkeypatch.setattr(upscaler, "upscale",
                         lambda img, entry, passes, token="": paths.append(entry["path"]) or img)
     entry = {"id": X4, "scale": 4}
-    hook = server._UpscaleHook(entry, min_ratio=1.05, job=job)
+    hook = api_dataset._UpscaleHook(entry, min_ratio=1.05, job=job)
     hook(Image.new("RGB", (100, 100)), (400, 400))
     assert paths == ["/m/x4.pth"] and hook.used
     assert ensured[0][0] == X4 and ensured[0][1] is job
@@ -331,7 +332,7 @@ def test_dataset_upscale_hook_uses_resolved_path(monkeypatch):
     def no_folder(model_id, j):
         raise ms.ModelsFolderNotSet()
 
-    monkeypatch.setattr(server, "_ensure_model", no_folder)
+    monkeypatch.setattr(core, "_ensure_model", no_folder)
     hook.reset()
     img = Image.new("RGB", (100, 100))
     assert hook(img, (400, 400)) is img  # degrades to plain resizing
@@ -345,10 +346,10 @@ def test_dataset_upscale_hook_remembers_a_failed_ensure(monkeypatch):
         calls.append(model_id)
         raise RuntimeError("Download cancelled.")
 
-    monkeypatch.setattr(server, "_ensure_model", failing)
-    monkeypatch.setattr(server.upscaler, "upscale",
+    monkeypatch.setattr(core, "_ensure_model", failing)
+    monkeypatch.setattr(upscaler, "upscale",
                         lambda *a, **kw: pytest.fail("no weights, nothing to upscale with"))
-    hook = server._UpscaleHook({"id": X4, "scale": 4}, min_ratio=1.05, job={})
+    hook = api_dataset._UpscaleHook({"id": X4, "scale": 4}, min_ratio=1.05, job={})
     for _ in range(3):  # three images that all need upscaling
         hook.reset()    # as _run_job does before each image
         img = Image.new("RGB", (100, 100))
@@ -364,19 +365,19 @@ def test_crop_auto_job_needs_florence_only_when_it_detects(tmp_path, monkeypatch
     src = tmp_path / "src"
     src.mkdir()
     _png(src / "a.png")
-    monkeypatch.setattr(server.crop_auto, "suggest_crop", lambda *a, **kw: None)
+    monkeypatch.setattr(crop_auto, "suggest_crop", lambda *a, **kw: None)
 
     def run(mode: str) -> dict:
         job_id = f"test-model-loading-crop-{mode}"
-        server.JOBS[job_id] = {"id": job_id, "kind": "crop_auto", "state": "pending",
+        core.JOBS[job_id] = {"id": job_id, "kind": "crop_auto", "state": "pending",
                                "total": 1, "processed": 0, "current": "", "error": "",
                                "crops": {}, "skipped": []}
         try:
-            server._run_crop_auto(job_id, server.CropAutoRequest(folder=str(src), mode=mode),
+            api_dataset._run_crop_auto(job_id, api_dataset.CropAutoRequest(folder=str(src), mode=mode),
                                   [src / "a.png"])
-            return dict(server.JOBS[job_id])
+            return dict(core.JOBS[job_id])
         finally:
-            del server.JOBS[job_id]
+            del core.JOBS[job_id]
 
     job = run("person")
     assert job["state"] == "error"
@@ -402,7 +403,7 @@ def _analyze_png() -> dict:
 def test_analyze_job_without_models_folder_fails_with_the_setup_text(monkeypatch):
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(server.florence, "analyze_image", lambda img: ("A scene.", []))
+    monkeypatch.setattr(florence, "analyze_image", lambda img: ("A scene.", []))
     with TestClient(server.app) as client:
         r = client.post("/api/ideogram/analyze/jobs", files=_analyze_png())
         assert r.status_code == 200, r.text
@@ -421,8 +422,8 @@ def test_analyze_download_does_not_block_the_event_loop(monkeypatch):
         release.wait(10)
         return "/m/florence"
 
-    monkeypatch.setattr(server, "_ensure_model", slow_download)
-    monkeypatch.setattr(server.florence, "analyze_image", lambda img: ("A scene.", []))
+    monkeypatch.setattr(core, "_ensure_model", slow_download)
+    monkeypatch.setattr(florence, "analyze_image", lambda img: ("A scene.", []))
     route = "/api/ideogram/analyze/jobs"
     with TestClient(server.app) as client:  # one event loop serves every request
         try:
@@ -449,8 +450,8 @@ def test_analyze_download_does_not_block_the_event_loop(monkeypatch):
 def test_prompt_job_maps_model_errors_to_the_job_error(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q, source=None: None)
-    monkeypatch.setattr(server.captioner, "generate_text", lambda *a, **kw: "a prompt")
+    monkeypatch.setattr(captioner, "ensure_loaded", lambda m, q, source=None: None)
+    monkeypatch.setattr(captioner, "generate_text", lambda *a, **kw: "a prompt")
     monkeypatch.setattr(server, "_save_prompt_to_library", lambda *a: 1)
 
     with TestClient(server.app) as client:
@@ -481,17 +482,17 @@ def test_run_sh_has_no_hardcoded_hf_home():
 
 
 def test_dataset_upscale_hook_uses_real_scale_for_local_models(monkeypatch):
-    monkeypatch.setattr(server, "_ensure_model", lambda model_id, j: "/m/local.pth")
+    monkeypatch.setattr(core, "_ensure_model", lambda model_id, j: "/m/local.pth")
     scales = []
-    monkeypatch.setattr(server.upscaler, "model_scale",
+    monkeypatch.setattr(upscaler, "model_scale",
                         lambda entry, token="", device=None: scales.append(entry["path"]) or 4)
     planned = []
-    real_plan = server.upscaler.plan_passes
-    monkeypatch.setattr(server.upscaler, "plan_passes",
+    real_plan = upscaler.plan_passes
+    monkeypatch.setattr(upscaler, "plan_passes",
                         lambda size, target, scale, *a, **kw:
                         planned.append(scale) or real_plan(size, target, scale, *a, **kw))
-    monkeypatch.setattr(server.upscaler, "upscale", lambda img, entry, passes, token="": img)
-    hook = server._UpscaleHook({"id": "local:/m/local.pth", "scale": 0}, min_ratio=1.05, job={})
+    monkeypatch.setattr(upscaler, "upscale", lambda img, entry, passes, token="": img)
+    hook = api_dataset._UpscaleHook({"id": "local:/m/local.pth", "scale": 0}, min_ratio=1.05, job={})
     hook(Image.new("RGB", (100, 100)), (400, 400))
     assert planned == [2, 4]            # early check (guess), then the real scale
     hook(Image.new("RGB", (100, 100)), (400, 400))
@@ -503,10 +504,10 @@ def test_dataset_upscale_hook_skips_model_when_no_pass_needed(monkeypatch):
     def boom(*a, **kw):
         raise AssertionError("must not touch the model")
 
-    monkeypatch.setattr(server, "_ensure_model", boom)
-    monkeypatch.setattr(server.upscaler, "model_scale", boom)
+    monkeypatch.setattr(core, "_ensure_model", boom)
+    monkeypatch.setattr(upscaler, "model_scale", boom)
     for entry in ({"id": X4, "scale": 4}, {"id": "local:/m/x.pth", "scale": 0}):
-        hook = server._UpscaleHook(entry, min_ratio=1.05, job={})
+        hook = api_dataset._UpscaleHook(entry, min_ratio=1.05, job={})
         img = Image.new("RGB", (1000, 1000))
         assert hook(img, (500, 500)) is img
         assert hook.error == "" and not hook.used

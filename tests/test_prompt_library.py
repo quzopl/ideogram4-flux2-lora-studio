@@ -1,13 +1,13 @@
 import json
 import pytest
-from backend import server
+from backend import core, server
 
 
 @pytest.fixture()
 def tmp_db(tmp_path, monkeypatch):
     """Fresh SQLite database per test — swaps DB_PATH and creates the schema."""
-    monkeypatch.setattr(server, "DB_PATH", tmp_path / "test.db")
-    server._init_db()
+    monkeypatch.setattr(core, "DB_PATH", tmp_path / "test.db")
+    core._init_db()
     return tmp_path / "test.db"
 
 

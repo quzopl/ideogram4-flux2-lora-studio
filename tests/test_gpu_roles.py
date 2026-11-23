@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import captioner, florence, gpu, server, settings
+from backend import captioner, core, florence, gpu, server, settings, upscaler
 from tests.conftest import ML_MODULES
 
 pytestmark = pytest.mark.usefixtures("ml_modules_at_start")
@@ -31,12 +31,12 @@ def fake_gpus(tmp_path, monkeypatch):
     # .work/gpu.json exists on the dev box; settings would migrate its UUID.
     monkeypatch.setattr(gpu, "CONFIG_PATH", tmp_path / "gpu.json")
     unloaded = []
-    monkeypatch.setattr(server.captioner, "unload", lambda: unloaded.append("vlm"))
-    monkeypatch.setattr(server.florence, "unload", lambda: unloaded.append("florence"))
-    monkeypatch.setattr(server.upscaler, "unload", lambda: unloaded.append("upscale"))
-    monkeypatch.setattr(server.captioner, "gpu_status", lambda: {
+    monkeypatch.setattr(captioner, "unload", lambda: unloaded.append("vlm"))
+    monkeypatch.setattr(florence, "unload", lambda: unloaded.append("florence"))
+    monkeypatch.setattr(upscaler, "unload", lambda: unloaded.append("upscale"))
+    monkeypatch.setattr(captioner, "gpu_status", lambda: {
         "loaded": False, "model": None, "quant": None, "cuda": True})
-    monkeypatch.setattr(server, "JOBS", {})
+    monkeypatch.setattr(core, "JOBS", {})
     return unloaded
 
 
@@ -88,7 +88,7 @@ def test_assign_rejects_unknown_role_and_device(fake_gpus):
 
 
 def test_assign_409_when_busy(fake_gpus, monkeypatch):
-    monkeypatch.setattr(server, "JOBS", {"j": {"state": "processing"}})
+    monkeypatch.setattr(core, "JOBS", {"j": {"state": "processing"}})
     r = client.post("/api/gpu/assign", json={"role": "vlm", "device": "cpu"})
     assert r.status_code == 409
     assert fake_gpus == []

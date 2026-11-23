@@ -119,8 +119,8 @@ def test_render_endpoint_rejects_bad_prompt():
 
 
 def test_render_endpoint_starts_job(tmp_path, monkeypatch):
-    from backend import server
-    monkeypatch.setattr(server, "IDEOGRAM_RENDER_CFG_PATH", tmp_path / "r.json")
+    from backend import core, server
+    monkeypatch.setattr(core, "IDEOGRAM_RENDER_CFG_PATH", tmp_path / "r.json")
     captured = {}
     monkeypatch.setattr(server, "_run_comfy_raw_job",
                         lambda job_id, wf, source="editor": captured.update(
@@ -130,7 +130,7 @@ def test_render_endpoint_starts_job(tmp_path, monkeypatch):
     assert out["job_id"]
     assert isinstance(out["warnings"], list)
     # the job is registered in the shared ComfyUI machinery
-    job = server.COMFY_JOBS.pop(out["job_id"])
+    job = core.COMFY_JOBS.pop(out["job_id"])
     assert job["state"] in ("pending", "running", "done")
     # the parameters persist for the next render
     saved = server.api_ideogram_render_config()["params"]

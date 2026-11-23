@@ -101,12 +101,12 @@ def _analyze(width=800, height=600, **form) -> dict:
 
 
 def test_analyze_endpoint_florence_engine(monkeypatch):
-    from backend import server
+    from backend import core
 
     def fake_analyze(img):
         return "A test scene.", [{"type": "obj", "bbox": [0, 0, 500, 500], "desc": "a thing"}]
-    monkeypatch.setattr(server.florence, "analyze_image", fake_analyze)
-    monkeypatch.setattr(server, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
+    monkeypatch.setattr(florence, "analyze_image", fake_analyze)
+    monkeypatch.setattr(core, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
 
     out = _analyze()
     obj = json.loads(out["json"])
@@ -117,13 +117,13 @@ def test_analyze_endpoint_florence_engine(monkeypatch):
 
 
 def test_analyze_endpoint_vlm_engine(monkeypatch):
-    from backend import server
+    from backend import captioner, core
 
     seen = {}
-    monkeypatch.setattr(server, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
-    monkeypatch.setattr(server.captioner, "ensure_loaded",
+    monkeypatch.setattr(core, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
+    monkeypatch.setattr(captioner, "ensure_loaded",
                         lambda m, q, source=None: seen.update(model=m, source=source))
-    monkeypatch.setattr(server.captioner, "query_image",
+    monkeypatch.setattr(captioner, "query_image",
                         lambda img, instr, max_new_tokens=768: seen.update(instr=instr) or
                         '{"aspect_ratio":"1:1","high_level_description":"a vlm draft",'
                         '"compositional_deconstruction":{"background":"plain wall","elements":[]}}')
@@ -140,17 +140,17 @@ def test_analyze_endpoint_vlm_engine(monkeypatch):
 
 
 def test_analyze_endpoint_hybrid_engine(monkeypatch):
-    from backend import server
+    from backend import captioner, core
 
     def fake_analyze(img):
         return "A cat by a sign.", [
             {"type": "obj", "bbox": [100, 100, 900, 500], "desc": "cat"},
             {"type": "text", "bbox": [50, 600, 120, 950], "text": "HELLO", "desc": 'text "HELLO"'},
         ]
-    monkeypatch.setattr(server.florence, "analyze_image", fake_analyze)
+    monkeypatch.setattr(florence, "analyze_image", fake_analyze)
     seen = {}
-    monkeypatch.setattr(server, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
-    monkeypatch.setattr(server.captioner, "ensure_loaded", lambda m, q, source=None: None)
+    monkeypatch.setattr(core, "_ensure_model", lambda model_id, job: f"/models/{model_id}")
+    monkeypatch.setattr(captioner, "ensure_loaded", lambda m, q, source=None: None)
 
     def fake_query(img, instr, max_new_tokens=768):
         seen["instr"] = instr
@@ -158,7 +158,7 @@ def test_analyze_endpoint_hybrid_engine(monkeypatch):
                 '"compositional_deconstruction":{"background":"a plain wall","elements":['
                 '{"type":"obj","bbox":[100,100,900,500],"desc":"a tabby cat sitting upright"},'
                 '{"type":"text","bbox":[50,600,120,950],"text":"HELLO","desc":"white sans-serif sign"}]}}')
-    monkeypatch.setattr(server.captioner, "query_image", fake_query)
+    monkeypatch.setattr(captioner, "query_image", fake_query)
 
     out = _analyze(engine="hybrid", model="Qwen/Qwen2.5-VL-7B-Instruct",
                    quant="4bit", max_tokens=768)

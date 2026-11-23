@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend import comfy_client, server
+from backend import comfy_client, core, server
 
 client = TestClient(server.app)
 
@@ -63,7 +63,7 @@ def _job(jid="j"):
     job = {"id": jid, "state": "pending", "total": 1, "done_count": 0, "current": "",
            "current_node": "", "progress": {"value": 0, "max": 0}, "preview": None,
            "preview_ts": 0, "images": [], "error": "", "cancel": False}
-    server.COMFY_JOBS[jid] = job
+    core.COMFY_JOBS[jid] = job
     return job
 
 
@@ -75,7 +75,7 @@ def _upload_workflow():
 
 
 def _sidecar(item_id, **meta):
-    (server.COMFY_GALLERY_DIR / f"{item_id}.json").write_text(
+    (core.COMFY_GALLERY_DIR / f"{item_id}.json").write_text(
         json.dumps({"id": item_id, "url": f"/api/comfy/gallery/{item_id}", **meta}),
         encoding="utf-8")
 
@@ -88,7 +88,7 @@ def _gallery():
 
 def _sidecars():
     return [json.loads(p.read_text(encoding="utf-8"))
-            for p in server.COMFY_GALLERY_DIR.glob("*.json")]
+            for p in core.COMFY_GALLERY_DIR.glob("*.json")]
 
 
 # --------------------------------------------------------------------------- #
@@ -182,7 +182,7 @@ def test_ideogram_render_labels_source(monkeypatch):
     monkeypatch.setattr(threading, "Thread", _SyncThread)
     r = client.post("/api/ideogram/render", json={"prompt": V15, "params": {}})
     assert r.status_code == 200, r.text
-    job = server.COMFY_JOBS[r.json()["job_id"]]
+    job = core.COMFY_JOBS[r.json()["job_id"]]
     assert job["state"] == "done", job["error"]
     [meta] = _sidecars()
     assert meta["source"] == "ideogram"
@@ -222,23 +222,23 @@ def test_comfy_config_concurrent_updates_keep_all(monkeypatch):
         t.join()
 
     assert statuses == [200] * 20
-    cfg = json.loads(server.COMFY_CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg = json.loads(core.COMFY_CONFIG_PATH.read_text(encoding="utf-8"))
     assert cfg["workflow"] == API_WF
     assert cfg["url"] in urls
     assert cfg["mapping"] in mappings
-    assert not list(server.COMFY_CONFIG_PATH.parent.glob("*.tmp"))
+    assert not list(core.COMFY_CONFIG_PATH.parent.glob("*.tmp"))
 
 
 def test_update_comfy_config_aborts_without_writing():
     _upload_workflow()
-    before = server.COMFY_CONFIG_PATH.read_text(encoding="utf-8")
+    before = core.COMFY_CONFIG_PATH.read_text(encoding="utf-8")
 
     def boom(cfg):
         cfg["url"] = "http://changed"
         raise RuntimeError("no")
     with pytest.raises(RuntimeError):
         server._update_comfy_config(boom)
-    assert server.COMFY_CONFIG_PATH.read_text(encoding="utf-8") == before
+    assert core.COMFY_CONFIG_PATH.read_text(encoding="utf-8") == before
 
 
 def test_editor_load_and_generate_persist_editor_workflow(monkeypatch):
@@ -250,7 +250,7 @@ def test_editor_load_and_generate_persist_editor_workflow(monkeypatch):
     edited = {**API_WF, "6": {**API_WF["6"], "inputs": {"text": "a dog", "clip": ["4", 0]}}}
     r = client.post("/api/comfy/editor/generate", json={"workflow": edited})
     assert r.status_code == 200, r.text
-    cfg = json.loads(server.COMFY_CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg = json.loads(core.COMFY_CONFIG_PATH.read_text(encoding="utf-8"))
     assert cfg["editor_workflow"] == edited
     assert cfg["workflow"] == API_WF
 
@@ -318,13 +318,13 @@ def test_workflow_import_checks_a_typed_name():
 
 
 def test_legacy_slash_names_still_deletable():
-    server.COMFY_MAPPINGS_PATH.write_text(
+    core.COMFY_MAPPINGS_PATH.write_text(
         json.dumps({"a/b": {"prompt_node": "6"}, "keep": {}}), encoding="utf-8")
     r = client.delete("/api/comfy/mappings/a%2Fb")
     assert r.status_code == 200, r.text
     assert r.json()["items"] == {"keep": {}}
 
-    server.COMFY_PROMPTS_PATH.write_text(json.dumps({"x/y": "p", "keep": "q"}),
+    core.COMFY_PROMPTS_PATH.write_text(json.dumps({"x/y": "p", "keep": "q"}),
                                          encoding="utf-8")
     r = client.delete("/api/comfy/prompts/x/y")
     assert r.status_code == 200, r.text

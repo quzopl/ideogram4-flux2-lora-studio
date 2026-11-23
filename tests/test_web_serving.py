@@ -77,8 +77,8 @@ def test_legacy_routes_gone(method, path):
 def test_work_dir_env(tmp_path):
     out = subprocess.run(
         [sys.executable, "-c",
-         "import backend.server as s, backend.settings as st, backend.gpu as g; "
-         "print(s.WORK, st.CONFIG_PATH, g.CONFIG_PATH)"],
+         "import backend.server, backend.core as c, backend.settings as st, backend.gpu as g; "
+         "print(c.WORK, st.CONFIG_PATH, g.CONFIG_PATH)"],
         cwd=ROOT, env={**__import__("os").environ, "FLUX_PREP_WORK": str(tmp_path)},
         capture_output=True, text=True, check=True).stdout.split()
     assert out == [str(tmp_path), str(tmp_path / "settings.json"), str(tmp_path / "gpu.json")]

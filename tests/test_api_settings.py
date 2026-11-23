@@ -3,7 +3,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import server, settings
+from backend import core, server, settings
 
 client = TestClient(server.app)
 
@@ -62,7 +62,7 @@ def test_unknown_view_400():
 
 
 def test_export_has_attachment_header_and_no_token(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "HF_TOKEN_PATH", tmp_path / "hf.json")
+    monkeypatch.setattr(core, "HF_TOKEN_PATH", tmp_path / "hf.json")
     monkeypatch.setenv("HF_TOKEN", "")  # restored on teardown; the endpoint sets it
     saved = client.post("/api/hf/token", json={"token": "hf_SECRETsaved123"})
     assert saved.status_code == 200
