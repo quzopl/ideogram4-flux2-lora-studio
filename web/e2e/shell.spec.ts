@@ -21,13 +21,6 @@ test('deep link works', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 })
 
-test('classic views link to legacy', async ({ page }) => {
-  await page.goto('/comfy')
-  const link = page.getByRole('link', { name: 'Open in classic UI' })
-  await expect(link).toBeVisible()
-  await expect(link).toHaveAttribute('href', /^\/legacy\//)
-})
-
 test('legacy hash opens view', async ({ page }) => {
   await page.goto('/legacy/#upscale')
   await expect(page.locator('.navtab[data-view="upscale"]')).toHaveClass(/\bactive\b/)

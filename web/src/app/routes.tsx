@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes, type Location } from 'react-router'
 import { BboxPage } from '@/pages/bbox/BboxPage'
-import { ClassicPlaceholder } from '@/pages/ClassicPlaceholder'
+import { ComfyPage } from '@/pages/comfy/ComfyPage'
 import { DatasetPage } from '@/pages/dataset/DatasetPage'
 import { ModelsPage } from '@/pages/ModelsPage'
 import { Playground } from '@/pages/Playground'
@@ -16,7 +16,7 @@ export function AppRoutes({ location }: { location: Location }) {
       <Route path="/dataset" element={<DatasetPage />} />
       <Route path="/prompts" element={<PromptsPage />} />
       <Route path="/bbox" element={<BboxPage />} />
-      <Route path="/comfy" element={<ClassicPlaceholder view="comfy" title="ComfyUI" />} />
+      <Route path="/comfy" element={<ComfyPage />} />
       <Route path="/upscale" element={<UpscalePage />} />
       <Route path="/models" element={<ModelsPage />} />
       <Route path="/settings" element={<SettingsPage />} />

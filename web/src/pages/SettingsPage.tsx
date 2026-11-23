@@ -13,6 +13,7 @@ import { ROLE_LABEL } from '@/lib/format'
 import { useMutationWithToast, useSetModelsDir, useSettings } from '@/lib/queries'
 import type { Role, Settings } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { fetchComfyConfig } from '@/pages/comfy/queries'
 
 /** A settings card; a labelled region so tests and screen readers can find it by title. */
 function Section({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
@@ -183,16 +184,18 @@ function HfTokenSection() {
   )
 }
 
-interface UrlFieldProps {
+interface UrlFieldProps<T> {
   label: string
   queryKey: string
-  load: () => Promise<string>
+  load: () => Promise<T>
+  /** The URL in what `load` returns (the query may be shared with another view). */
+  urlOf: (data: T) => string
   save: (url: string) => Promise<unknown>
   success: string
 }
 
-function UrlField({ label, queryKey, load, save, success }: UrlFieldProps) {
-  const query = useQuery({ queryKey: [queryKey], queryFn: load })
+function UrlField<T>({ label, queryKey, load, urlOf, save, success }: UrlFieldProps<T>) {
+  const query = useQuery({ queryKey: [queryKey], queryFn: load, select: urlOf })
   const [url, setUrl] = useState('')
   const mutation = useMutationWithToast(save, { success, invalidate: [[queryKey]] })
 
@@ -228,14 +231,16 @@ function ServicesSection() {
       <UrlField
         label="LM Studio URL"
         queryKey="lmstudio"
-        load={() => api<{ url: string }>('/api/lmstudio').then((r) => r.url)}
+        load={() => api<{ url: string }>('/api/lmstudio')}
+        urlOf={(r) => r.url}
         save={(url) => api('/api/lmstudio', { method: 'POST', json: { url } })}
         success="LM Studio URL saved"
       />
       <UrlField
         label="ComfyUI URL"
         queryKey="comfy-config"
-        load={() => api<{ url: string }>('/api/comfy/config').then((r) => r.url)}
+        load={fetchComfyConfig}
+        urlOf={(c) => c.url}
         save={(url) => api('/api/comfy/url', { method: 'POST', json: { url } })}
         success="ComfyUI URL saved"
       />
