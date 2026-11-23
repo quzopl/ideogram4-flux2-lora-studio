@@ -1,20 +1,33 @@
-"""Which GPU the local models run on, chosen by card name rather than number.
+"""Which GPU each local model runs on, chosen by card name rather than number.
 
 CUDA numbers cards with a driver heuristic (CUDA_DEVICE_ORDER=FASTEST_FIRST by
 default) that can disagree with nvidia-smi's PCI order — on a 5080 + 4070 Ti
 box it puts the 4070 Ti at cuda:0. So the choice is stored by the card's UUID
 and translated to the current cuda:N every time a model loads; the numbering
-never reaches the user. With nothing stored, the card with most memory wins.
+never reaches the user.
 
-``probe`` is the only function that touches torch; everything else works on
-the plain device dicts it returns and is testable without a GPU.
+Each role in ``settings.ROLES`` (the VLM, Florence-2, the upscaler) has its own
+choice in the settings doc: a card's UUID, "cpu", or "auto" — the card with
+most memory. A stored card that is gone (pulled out, another
+CUDA_VISIBLE_DEVICES) also falls back to that default, so a stale setting never
+stops a model from loading.
+
+``probe`` reads the cards through torch and ``empty_cache`` frees torch memory;
+everything else works on the plain device dicts ``probe`` returns and is
+testable without a GPU. VRAM is read from nvidia-smi (``smi_stats``), never
+from torch.
 """
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / ".work" / "gpu.json"
+from . import settings  # settings imports this module lazily, so no cycle
+
+CONFIG_PATH = Path(os.environ.get("FLUX_PREP_WORK")
+                   or Path(__file__).resolve().parent.parent / ".work") / "gpu.json"
 
 _VENDOR_PREFIXES = ("NVIDIA GeForce ", "NVIDIA ")
 
@@ -78,11 +91,41 @@ def is_cuda(device: str) -> bool:
     return device == "cuda" or device.startswith("cuda:")
 
 
-def vram_gb(dev: dict) -> tuple[float, float]:
-    """(used, total) GB on one card, measured on that card specifically."""
-    import torch
-    free, total = torch.cuda.mem_get_info(dev["index"])
-    return round((total - free) / 1e9, 2), round(total / 1e9, 2)
+def normalize_uuid(uuid: str) -> str:
+    """nvidia-smi prints 'GPU-1e5c…', torch's ``props.uuid`` prints '1e5c…';
+    both reduce to the bare lowercase form so the two can be joined."""
+    return uuid.strip().lower().removeprefix("gpu-")
+
+
+def smi_stats() -> dict[str, tuple[float, float]]:
+    """(used, total) GB per card, keyed by ``normalize_uuid``; {} without nvidia-smi.
+
+    Not torch: ``torch.cuda.mem_get_info(i)`` opens a CUDA context (~200 MB,
+    see ``empty_cache``) on card i, and the topbar polls this every 2 s — every
+    card would end up holding one, including those no role uses. nvidia-smi
+    reads the driver's counters without a context. It reports MiB; GB here are
+    GiB, like the size in ``label``. Cards it does not report — all of them
+    when the binary is missing, fails or hangs; one whose memory reads "[N/A]"
+    — have no entry, so callers show unknown VRAM instead of failing.
+    """
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=uuid,memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    stats = {}
+    for line in out.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 3:
+            continue
+        try:
+            used, total = float(parts[1]), float(parts[2])
+        except ValueError:
+            continue
+        stats[normalize_uuid(parts[0])] = (round(used / 1024, 2), round(total / 1024, 2))
+    return stats
 
 
 def empty_cache() -> None:
@@ -122,16 +165,28 @@ def load_selected(path) -> str | None:
     return uuid if isinstance(uuid, str) and uuid else None
 
 
-def save_selected(path, uuid: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps({"uuid": uuid}, indent=2), encoding="utf-8")
+def device_for(role: str, doc: dict | None = None,
+               devices: list[dict] | None = None) -> str:
+    """'cuda:N' or 'cpu' for one role's model, read fresh at every load.
+
+    ``doc`` is the settings doc and ``devices`` the ``probe`` result; both are
+    read when not given, so callers resolving several roles pass them once.
+    """
+    if doc is None:
+        doc = settings.load()
+    if devices is None:
+        devices = probe()
+    value = doc["gpu"][role]
+    if value == "cpu":
+        return "cpu"
+    return device_string(resolve(value, devices))
 
 
-def current() -> dict | None:
-    """The device dict models should load on right now (None = CPU)."""
-    return resolve(load_selected(CONFIG_PATH), probe())
+def assign_value_ok(value: str, devices: list[dict]) -> bool:
+    """What a role may be set to: "auto", "cpu" or the UUID of a card present now."""
+    return value in ("auto", "cpu") or any(d["uuid"] == value for d in devices)
 
 
 def current_device() -> str:
-    """'cuda:N' for the chosen card, or 'cpu' when CUDA is unavailable."""
-    return device_string(current())
+    """The VLM role's device; kept for callers from before per-role GPUs."""
+    return device_for("vlm")

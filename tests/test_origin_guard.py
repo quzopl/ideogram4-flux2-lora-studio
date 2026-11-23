@@ -1,0 +1,125 @@
+"""Request-origin guard: CSRF and DNS-rebinding protection for /api/*."""
+import pytest
+from fastapi.testclient import TestClient
+
+from backend import server, settings
+from backend.origin_guard import OriginGuard, is_loopback_host
+
+client = TestClient(server.app)
+LOCAL = {"host": "127.0.0.1:8123"}
+BODY = {"version": 1}
+
+
+@pytest.mark.parametrize("host,expected", [
+    ("127.0.0.1:8123", True),
+    ("localhost", True),
+    ("[::1]:8123", True),
+    ("::1", True),
+    ("[::1]", True),
+    ("LOCALHOST:8123", True),
+    ("evil.com", False),
+    ("127.0.0.1.evil.com", False),
+    ("", False),
+    ("localhost.evil.com:8123", False),
+    ("localhost:evil.com", False),
+    ("127.0.0.1:8123@evil", False),
+    ("[::1]evil.com", False),
+    ("[::1", False),
+])
+def test_is_loopback_host_cases(host, expected):
+    assert is_loopback_host(host) is expected
+
+
+def test_foreign_host_blocked_even_for_get():
+    r = client.get("/api/settings", headers={"host": "evil.com"})
+    assert r.status_code == 403
+    assert r.json() == {"detail": "Forbidden host."}
+
+
+def test_cross_origin_post_blocked():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "https://evil.com"})
+    assert r.status_code == 403
+    assert r.json() == {"detail": "Cross-origin request blocked."}
+    assert not settings.CONFIG_PATH.exists()
+
+
+def test_null_origin_post_blocked():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "null"})
+    assert r.status_code == 403
+    assert not settings.CONFIG_PATH.exists()
+
+
+def test_sec_fetch_site_cross_site_blocked():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "sec-fetch-site": "cross-site"})
+    assert r.status_code == 403
+    assert not settings.CONFIG_PATH.exists()
+
+
+def test_same_origin_post_allowed():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "http://127.0.0.1:8123"})
+    assert r.status_code == 200
+
+
+def test_no_origin_post_allowed():
+    assert client.post("/api/settings/import", json=BODY, headers=LOCAL).status_code == 200
+
+
+def test_cross_origin_get_allowed_with_loopback_host():
+    r = client.get("/api/settings", headers={**LOCAL, "origin": "https://evil.com"})
+    assert r.status_code == 200
+
+
+def test_static_files_not_guarded():
+    assert client.get("/", headers={"host": "evil.com"}).status_code == 200
+
+
+def test_guard_active_under_root_path():
+    rp = TestClient(server.app, root_path="/p")
+    r = rp.get("/p/api/settings", headers={"host": "evil.com"})
+    assert r.status_code == 403
+    r = rp.post("/p/api/settings/import", json=BODY,
+                headers={**LOCAL, "origin": "https://evil.com"})
+    assert r.status_code == 403
+
+
+def test_origin_other_loopback_port_rejected():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "http://127.0.0.1:9999"})
+    assert r.status_code == 403
+
+
+def test_origin_same_port_allowed():
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "http://127.0.0.1:8123"})
+    assert r.status_code == 200
+
+
+def test_vite_dev_origin_rejected_by_default():
+    # No dev origins by default: the Vite server's origin is just another port.
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={**LOCAL, "origin": "http://localhost:5173"})
+    assert r.status_code == 403
+
+
+def test_vite_proxy_passes_same_port_rule():
+    # The Vite proxy keeps Host (changeOrigin: false), so Host and Origin are both :5173.
+    r = client.post("/api/settings/import", json=BODY,
+                    headers={"host": "localhost:5173", "origin": "http://localhost:5173"})
+    assert r.status_code == 200
+
+
+async def _ok_app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok"})
+
+
+def test_dev_origins_allowlist():
+    guarded = TestClient(OriginGuard(_ok_app, dev_origins=["http://localhost:5173/"]))
+    ok = guarded.post("/api/x", headers={**LOCAL, "origin": "http://localhost:5173"})
+    assert ok.status_code == 200
+    other = guarded.post("/api/x", headers={**LOCAL, "origin": "http://localhost:5174"})
+    assert other.status_code == 403

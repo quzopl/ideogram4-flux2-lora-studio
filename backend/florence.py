@@ -16,6 +16,7 @@ import math
 import os
 import re
 import threading
+from typing import Callable
 
 from . import gpu
 
@@ -23,6 +24,8 @@ from . import gpu
 # (the original microsoft/Florence-2-* need trust_remote_code and older
 # transformers). Bigger variant: florence-community/Florence-2-large-ft.
 DEFAULT_MODEL = os.environ.get("FLORENCE_MODEL", "florence-community/Florence-2-base-ft")
+# Set by the server: returns the local folder to load DEFAULT_MODEL from.
+SOURCE_RESOLVER: Callable[[], str] | None = None
 
 _LOCK = threading.Lock()
 _RUNTIME: dict | None = None   # {"model","processor","torch","device"}
@@ -175,21 +178,30 @@ def build_v15_draft(caption: str, elements: list[dict],
 # Model (lazily loaded)
 # --------------------------------------------------------------------------- #
 def _get_runtime() -> dict:
+    """The loaded model, (re)loaded on the Florence-2 role's device: when the
+    role has moved since the last load, the old copy is released first."""
     global _RUNTIME
-    if _RUNTIME is not None:
-        return _RUNTIME
+    device = gpu.device_for("florence")
+    rt = _RUNTIME
+    if rt is not None and rt["device"] == device:
+        return rt
     with _LOCK:
-        if _RUNTIME is not None:
+        if _RUNTIME is not None and _RUNTIME["device"] == device:
             return _RUNTIME
+        if _RUNTIME is not None:
+            _RUNTIME = None
+            import gc
+            gc.collect()
+            gpu.empty_cache()
         import torch
         from transformers import AutoProcessor, Florence2ForConditionalGeneration
 
-        device = gpu.current_device()
+        source = SOURCE_RESOLVER() if SOURCE_RESOLVER else DEFAULT_MODEL
         dtype = torch.float16 if gpu.is_cuda(device) else torch.float32
         model = Florence2ForConditionalGeneration.from_pretrained(
-            DEFAULT_MODEL, dtype=dtype).to(device)
+            source, dtype=dtype).to(device)
         model.eval()
-        processor = AutoProcessor.from_pretrained(DEFAULT_MODEL)
+        processor = AutoProcessor.from_pretrained(source)
         _RUNTIME = {"model": model, "processor": processor,
                     "torch": torch, "device": device}
         return _RUNTIME
@@ -205,6 +217,12 @@ def unload() -> None:
         import gc
         gc.collect()
         gpu.empty_cache()
+
+
+def loaded_device() -> str:
+    """Device the loaded model sits on ("" when nothing is loaded)."""
+    rt = _RUNTIME
+    return rt["device"] if rt else ""
 
 
 def _run_task(image, task: str) -> dict | str:

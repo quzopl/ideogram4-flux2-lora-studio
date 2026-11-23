@@ -160,40 +160,60 @@ def resolve(model_id: str, cfg: dict) -> dict | None:
 # without a torch install, and the test suite never triggers a real load)
 # --------------------------------------------------------------------------- #
 def weights_path(entry: dict, token: str = "") -> str:
-    """Local path to the weights, downloading them from HF when needed."""
+    """Local path to the weights: the entry's ``path``, which callers resolve
+    through the model store (core._ensure_model). Never downloads, so the
+    weights never land in an HF cache folder nobody chose."""
     if entry.get("path"):
         return entry["path"]
-    from huggingface_hub import hf_hub_download
-    return hf_hub_download(
-        repo_id=entry["repo_id"], filename=entry["filename"],
-        token=token or None)
+    raise RuntimeError("Model weights are not available locally.")
 
 
-def _load(entry: dict, token: str = "") -> dict:
-    """Load (and cache) the spandrel descriptor for one registry entry."""
+def _instantiate(path: str, device: str) -> dict:
+    """Load the weights onto ``device``; the one place torch/spandrel are imported."""
+    import torch
+    from spandrel import ImageModelDescriptor, ModelLoader
+
+    model = ModelLoader().load_from_file(path)
+    if not isinstance(model, ImageModelDescriptor):
+        raise RuntimeError(f"{Path(path).name} is not an image upscaler.")
+    # fp16 halves both the weights and the activations, but only where the
+    # architecture says it is safe (spandrel knows which ones overflow).
+    half = gpu.is_cuda(device) and bool(getattr(model, "supports_half", False))
+    dtype = torch.float16 if half else torch.float32
+    model.to(device)
+    if half:
+        model.to(dtype=dtype)
+    model.eval()
+    return {"model": model, "torch": torch, "device": device,
+            "dtype": dtype, "scale": int(model.scale)}
+
+
+def _load(entry: dict, token: str = "", device: str | None = None) -> dict:
+    """Load (and cache) the runtime for one registry entry on one device.
+
+    Only one runtime is held: a different (model, device) releases the old one
+    before the new one is loaded.
+    """
     global _RUNTIME
     with _LOCK:
-        if _RUNTIME is not None and _RUNTIME["key"] == entry["id"]:
+        if device is None:
+            device = gpu.device_for("upscale")
+        cache_key = (entry["id"], device)
+        if _RUNTIME is not None and _RUNTIME["cache_key"] == cache_key:
             return _RUNTIME
-        import torch
-        from spandrel import ImageModelDescriptor, ModelLoader
-
-        path = weights_path(entry, token)
-        model = ModelLoader().load_from_file(path)
-        if not isinstance(model, ImageModelDescriptor):
-            raise RuntimeError(f"{entry['filename']} is not an image upscaler.")
-        device = gpu.current_device()
-        # fp16 halves both the weights and the activations, but only where the
-        # architecture says it is safe (spandrel knows which ones overflow).
-        half = gpu.is_cuda(device) and bool(getattr(model, "supports_half", False))
-        dtype = torch.float16 if half else torch.float32
-        model.to(device)
-        if half:
-            model.to(dtype=dtype)
-        model.eval()
-        _RUNTIME = {"model": model, "torch": torch, "device": device,
-                    "dtype": dtype, "key": entry["id"], "scale": int(model.scale)}
+        if _RUNTIME is not None:
+            _RUNTIME = None
+            import gc
+            gc.collect()
+            gpu.empty_cache()
+        rt = _instantiate(weights_path(entry, token), device)
+        _RUNTIME = {**rt, "key": entry["id"], "cache_key": cache_key}
         return _RUNTIME
+
+
+def model_scale(entry: dict, token: str = "", device: str | None = None) -> int:
+    """The loaded model's real scale factor (local entries register scale 0)."""
+    return _load(entry, token, device)["scale"]
 
 
 def unload() -> None:
@@ -298,7 +318,8 @@ def _empty_cache(rt: dict) -> None:
     gpu.empty_cache()
 
 
-def upscale(img, entry: dict, passes: int, token: str = ""):
+def upscale(img, entry: dict, passes: int, token: str = "",
+            device: str | None = None):
     """Run ``passes`` model passes over the image, shrinking tiles on OOM.
 
     Ladder: tile 512 -> 256 -> 128, and if even the smallest tile runs out of
@@ -307,7 +328,7 @@ def upscale(img, entry: dict, passes: int, token: str = ""):
     """
     if passes <= 0:
         return img
-    rt = _load(entry, token)
+    rt = _load(entry, token, device)
     for _ in range(passes):
         img = _run_pass(rt, img)
     return img
