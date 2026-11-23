@@ -80,3 +80,37 @@ export const activateMapping = (qc: QueryClient, mapping: Mapping) =>
 
 /** What to show for a failed call: the backend's `detail`, else the message. */
 export const errorText = (e: unknown) => (e instanceof ApiError ? e.detail : e instanceof Error ? e.message : String(e))
+
+// ---- Gallery (.work/comfy_gallery: <id>.png + <id>.json) ---- //
+
+/** What made a gallery image (items older than the field come from the LoRA test). */
+export type GallerySource = 'lora_test' | 'editor' | 'ideogram'
+
+/** A gallery image's sidecar meta (also a job's `images` entry). */
+export interface GalleryItem {
+  id: string
+  url: string
+  /** ComfyUI's own file name (not unique). */
+  filename: string
+  seed: number
+  prompt: string
+  /** LoRA names (an old item may hold `{lora}` objects); empty names are unused slots. */
+  loras: unknown[]
+  ts: number
+  source: GallerySource | string
+  width?: number
+  height?: number
+}
+
+export const GALLERY_KEY = ['comfy-gallery']
+
+/** Newest first (the server sorts). */
+export function useGallery() {
+  return useQuery({
+    queryKey: GALLERY_KEY,
+    queryFn: () => api<{ items: GalleryItem[] }>('/api/comfy/gallery').then((r) => r.items),
+  })
+}
+
+export const deleteGalleryItem = (id: string) =>
+  api<{ ok: boolean }>(`/api/comfy/gallery/${encodeURIComponent(id)}`, { method: 'DELETE' })

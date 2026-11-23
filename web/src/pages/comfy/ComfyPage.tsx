@@ -2,8 +2,11 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useId } from 'react'
 import { useSearchParams } from 'react-router'
 import { cn } from '@/lib/utils'
+import { ComfyJobBox } from './ComfyJobBox'
 import { ConnectionCard } from './ConnectionCard'
 import { flushComfyForm } from './formStore'
+import { GalleryTab } from './GalleryTab'
+import { JobObservers } from './JobObservers'
 import { WorkflowCard } from './WorkflowCard'
 
 const TABS = [
@@ -35,6 +38,8 @@ export function ComfyPage() {
       </div>
 
       <ConnectionCard />
+      {/* Outside the tab panel: a job is followed (and the gallery refreshed) whichever tab is shown. */}
+      <JobObservers />
 
       <div role="tablist" aria-label="ComfyUI sections" className="flex w-fit flex-wrap gap-1 rounded-xl border border-line bg-bg/60 p-1">
         {TABS.map(([t, label]) => {
@@ -80,7 +85,12 @@ export function ComfyPage() {
           className="flex flex-col gap-6"
         >
           {tab === 'lora' ? (
-            <WorkflowCard />
+            <>
+              <WorkflowCard />
+              <ComfyJobBox slot="lora" />
+            </>
+          ) : tab === 'gallery' ? (
+            <GalleryTab />
           ) : (
             <p className="text-sm text-text-dim">Not in the new studio yet — use the classic UI for now.</p>
           )}
