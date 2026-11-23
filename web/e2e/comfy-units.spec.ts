@@ -1,5 +1,5 @@
 // Pure functions of the ComfyUI page, run in Node (no page): Playwright transpiles the TS module.
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures.ts'
 import { downloadName, fmtEta, fmtProgress, promptPreview, sourceLabel } from '../src/pages/comfy/format.ts'
 
 test('fmtEta formats like classic', () => {

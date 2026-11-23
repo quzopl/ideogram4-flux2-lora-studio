@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Copy, Download, Trash2 } from 'lucide-react'
-import { useState, type KeyboardEvent } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
@@ -51,17 +51,20 @@ interface GalleryDialogProps {
 export function GalleryDialog({ item, open, onClose, onPrev, onNext, onDelete }: GalleryDialogProps) {
   const [asking, setAsking] = useState(false)
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    // Not while the prompt field takes the arrows, nor behind the delete question.
-    if (asking || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return
-    if (e.key === 'ArrowLeft' && onPrev) {
+  // On the document, not the dialog: at either end the focused arrow button is disabled, and focus leaves the dialog.
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Not while the prompt field takes the arrows, nor behind the delete question.
+      if (asking || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return
+      const step = e.key === 'ArrowLeft' ? onPrev : e.key === 'ArrowRight' ? onNext : null
+      if (!step) return
       e.preventDefault()
-      onPrev()
-    } else if (e.key === 'ArrowRight' && onNext) {
-      e.preventDefault()
-      onNext()
+      step()
     }
-  }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [open, asking, onPrev, onNext])
 
   const copy = () =>
     item && copyText(item.prompt).then(
@@ -76,7 +79,6 @@ export function GalleryDialog({ item, open, onClose, onPrev, onNext, onDelete }:
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
         aria-describedby={undefined}
-        onKeyDown={onKeyDown}
         className="max-h-[calc(100dvh-2rem)] overflow-y-auto border border-line bg-surface p-0 sm:max-w-6xl"
       >
         <DialogTitle className="sr-only">Gallery image</DialogTitle>

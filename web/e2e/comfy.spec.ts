@@ -445,6 +445,21 @@ test('gallery dialog copy, arrows, delete asks', async ({ page, context }) => {
   await dialog.getByRole('button', { name: 'Next image' }).click()
   await expect(dialog).toContainText('seed: 22')
 
+  // The arrows keep working at either end, whatever has focus (here: the button that just became disabled).
+  await page.keyboard.press('Escape')
+  await galleryCards(page).nth(0).getByRole('button', { name: /^Open/ }).click()
+  await expect(dialog).toContainText('seed: 11')
+  await page.keyboard.press('ArrowRight')
+  await expect(dialog).toContainText('seed: 22')
+  await page.keyboard.press('ArrowLeft')
+  await expect(dialog).toContainText('seed: 11')
+  await dialog.getByRole('button', { name: 'Next image' }).click()
+  await expect(dialog).toContainText('seed: 22')
+  await dialog.getByRole('button', { name: 'Previous image' }).click()
+  await expect(dialog.getByRole('button', { name: 'Previous image' })).toBeDisabled()
+  await page.keyboard.press('ArrowRight')
+  await expect(dialog).toContainText('seed: 22')
+
   // Esc closes (and the URL forgets the image).
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
