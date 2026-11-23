@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { NumberInput } from '@/components/NumberInput'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { setInvalid } from './editorStore'
+import { setInvalid, type WriteOptions } from './editorStore'
 import { controlSchema, fixEnumValue, numberSpec, parseJson, type FieldSchema } from './schema'
 
 const box =
@@ -19,7 +19,7 @@ interface FieldControlProps {
   /** From /object_info, else guessed from the name; null: the control follows the value. */
   schema: FieldSchema | null
   /** Only valid values come here; an invalid text is marked in the store instead. */
-  onChange: (value: unknown) => void
+  onChange: (value: unknown, opts?: WriteOptions) => void
   /** A nested object or list: edited as JSON. */
   json?: boolean
 }
@@ -93,12 +93,12 @@ function EnumField({ id, choices, value, onChange }: {
   id: string
   choices: unknown[]
   value: unknown
-  onChange: (value: unknown) => void
+  onChange: (value: unknown, opts?: WriteOptions) => void
 }) {
   const shown = fixEnumValue(choices, value)
-  // A Windows path the list has with "/" is saved as listed (ComfyUI would not find it).
+  // A Windows path the list has with "/" is saved as listed (ComfyUI would not find it); not an edit.
   useEffect(() => {
-    if (typeof value === 'string' && shown !== value) onChange(shown)
+    if (typeof value === 'string' && shown !== value) onChange(shown, { normalize: true })
   }, [value, shown, onChange])
   const listed = choices.map(String)
   const extra = shown !== '' && !listed.includes(shown)

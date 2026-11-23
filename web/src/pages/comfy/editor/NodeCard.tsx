@@ -3,7 +3,7 @@ import { createContext, memo, useContext, useState, type ReactNode } from 'react
 import { cn } from '@/lib/utils'
 import { setInput, setSubInput } from './editorStore'
 import { FieldControl } from './FieldControl'
-import { getSchema, getSchemaForName, isDictValue, isLinkValue, type KnownEnums, type ObjectInfo, type WorkflowNode } from './schema'
+import { fieldSchema, isDictValue, isLinkValue, type KnownEnums, type ObjectInfo, type WorkflowNode } from './schema'
 
 /** What every card reads besides its own node: the schemas and the class of every node (for link labels). */
 export interface CardContext {
@@ -100,9 +100,9 @@ export const NodeCard = memo(function NodeCard({ id, node, collapsed, dimmed, fl
                 fieldKey={key}
                 name={field}
                 value={value}
-                schema={getSchema(info, node.class_type, field) ?? getSchemaForName(enums, field)}
+                schema={fieldSchema(info, enums, node.class_type, field, value)}
                 json={kind === 'json'}
-                onChange={(v) => setInput(id, field, v)}
+                onChange={(v, opts) => setInput(id, field, v, opts)}
               />
             </Row>
           )
@@ -161,9 +161,9 @@ function DictRows({ id, field, dict, fid, enums }: {
               fieldKey={`${id}.${field}.${k}`}
               name={k}
               value={v}
-              schema={getSchemaForName(enums, k)}
+              schema={fieldSchema(null, enums, undefined, k, v)}
               json={kindOf(k) !== 'scalar'}
-              onChange={(nv) => setSubInput(id, field, k, nv)}
+              onChange={(nv, opts) => setSubInput(id, field, k, nv, opts)}
             />
           </Row>
         )

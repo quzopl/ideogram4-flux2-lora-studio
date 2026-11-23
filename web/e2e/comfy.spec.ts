@@ -1454,6 +1454,12 @@ test('schema dropdowns from object_info', async ({ page }) => {
   })
   await expect(editorCard(page).getByText('ComfyUI schemas: 2 node types, 3 fields with dropdowns.')).toBeVisible()
 
+  // A Windows path the list has with "/" is shown and saved as listed, without counting as an edit.
+  await expect(nodeField(page, '10', 'lora_name')).toHaveValue('dir/second.safetensors')
+  await expect(nodeField(page, '10', 'lora_name').locator('option', { hasText: 'from workflow' })).toHaveCount(0)
+  await expect.poll(async () => savedInput(page, '10', 'lora_name')).toBe('dir/second.safetensors')
+  expect((await savedEditor(page)).dirty).toBe(false)
+
   // sampler_name is a select; the workflow's value not on the list stays, marked.
   const sampler = nodeField(page, '3', 'sampler_name')
   await expect(sampler).toHaveJSProperty('tagName', 'SELECT')
@@ -1464,10 +1470,6 @@ test('schema dropdowns from object_info', async ({ page }) => {
   expect((await savedEditor(page)).dirty).toBe(true)
   await expect(nodeField(page, '3', 'scheduler')).toHaveValue('karras')
 
-  // A Windows path the list has with "/" is shown and saved as listed.
-  await expect(nodeField(page, '10', 'lora_name')).toHaveValue('dir/second.safetensors')
-  await expect(nodeField(page, '10', 'lora_name').locator('option', { hasText: 'from workflow' })).toHaveCount(0)
-  await expect.poll(async () => savedInput(page, '10', 'lora_name')).toBe('dir/second.safetensors')
 
   // A node type ComfyUI has no schema for: the list guessed from the field name.
   await expect(nodeField(page, '20', 'lora')).toHaveJSProperty('tagName', 'SELECT')
@@ -1626,7 +1628,7 @@ test('editor state over the storage quota shows a toast', async ({ page }) => {
 })
 
 test('a field that becomes another control drops its error', async ({ page }) => {
-  // The schemas arrive only when released: until then `sampler` (a number) is a number field.
+  // The schemas arrive only when released: until then `sampler_name` (a number here) is a number field.
   let release!: () => void
   const arrived = new Promise<void>((r) => (release = r))
   await page.route((url) => url.pathname === '/api/comfy/object_info', async (route) => {
@@ -1634,12 +1636,54 @@ test('a field that becomes another control drops its error', async ({ page }) =>
     return route.fulfill({ json: OBJECT_INFO })
   })
   await page.goto('/comfy?tab=editor')
-  await loadEditorJson(page, { '20': { class_type: 'MyNode', inputs: { sampler: 3 } } })
-  await nodeField(page, '20', 'sampler').fill('')
-  await expect.poll(async () => Object.keys((await savedEditor(page))?.invalid ?? {})).toEqual(['20.sampler'])
+  await loadEditorJson(page, { '3': { class_type: 'KSampler', inputs: { sampler_name: 3 } } })
+  await nodeField(page, '3', 'sampler_name').fill('')
+  await expect.poll(async () => Object.keys((await savedEditor(page))?.invalid ?? {})).toEqual(['3.sampler_name'])
 
-  // Now a list guessed from the name: the number field and its error are gone, so nothing blocks.
+  // Now KSampler's list: the number field and its error are gone, so nothing blocks.
   release()
-  await expect(nodeField(page, '20', 'sampler')).toHaveJSProperty('tagName', 'SELECT')
+  await expect(nodeField(page, '3', 'sampler_name')).toHaveJSProperty('tagName', 'SELECT')
   await expect.poll(async () => (await savedEditor(page)).invalid).toEqual({})
+})
+
+test('V3 COMBO schemas give dropdowns', async ({ page }) => {
+  await mockObjectInfo(page, {
+    KSamplerSelect: { input: { required: { sampler_name: ['COMBO', { options: ['euler', 'res_multistep'] }] } } },
+    // A remote combo (no options in the schema): the list guessed from the name.
+    BasicScheduler: { input: { required: { scheduler: ['COMBO', { remote: { route: '/x' } }], steps: ['INT', { min: 1, max: 10000 }] } } },
+    KSampler: { input: { required: { scheduler: [['simple', 'karras'], {}] } } },
+  })
+  await page.goto('/comfy?tab=editor')
+  await loadEditorJson(page, {
+    '16': { class_type: 'KSamplerSelect', inputs: { sampler_name: 'res_multistep' } },
+    '17': { class_type: 'BasicScheduler', inputs: { scheduler: 'karras', steps: 20 } },
+    '20': { class_type: 'MyNode', inputs: { sampler: 'euler', lora_strength: 0.8 } },
+  })
+  await expect(editorCard(page).getByText('ComfyUI schemas: 3 node types, 2 fields with dropdowns.')).toBeVisible()
+  const sampler = nodeField(page, '16', 'sampler_name')
+  await expect(sampler).toHaveJSProperty('tagName', 'SELECT')
+  await expect(sampler.locator('option')).toHaveText(['euler', 'res_multistep'])
+  await expect(sampler).toHaveValue('res_multistep')
+  await expect(nodeField(page, '17', 'scheduler')).toHaveJSProperty('tagName', 'SELECT')
+  await expect(nodeField(page, '17', 'scheduler').locator('option')).toHaveText(['karras', 'simple'])
+  // COMBO lists join the name guesses; a number is never given a list.
+  await expect(nodeField(page, '20', 'sampler').locator('option')).toHaveText(['euler', 'res_multistep'])
+  await expect(nodeField(page, '20', 'lora_strength')).toHaveJSProperty('tagName', 'INPUT')
+  await expect(nodeField(page, '20', 'lora_strength')).toHaveValue('0.8')
+})
+
+test('restored field errors do not block after a reload', async ({ page }) => {
+  // A stored error for a text field: no control would ever report on it again.
+  await page.addInitScript((value) => {
+    if (sessionStorage.getItem('flux.comfy.editor') === null) sessionStorage.setItem('flux.comfy.editor', value)
+  }, JSON.stringify({
+    workflow: { '6': { class_type: 'CLIPTextEncode', inputs: { text: 'kept' } } },
+    name: '', dirty: true, invalid: { '6.text': 'Stale error' },
+  }))
+  await page.goto('/comfy?tab=editor')
+  await expect(nodeField(page, '6', 'text')).toHaveValue('kept')
+  // Any write shows the state in memory: nothing invalid.
+  await nodeField(page, '6', 'text').fill('kept, edited')
+  await expect.poll(async () => savedInput(page, '6', 'text')).toBe('kept, edited')
+  expect((await savedEditor(page)).invalid).toEqual({})
 })

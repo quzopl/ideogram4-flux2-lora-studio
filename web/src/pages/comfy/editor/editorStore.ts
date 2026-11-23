@@ -31,14 +31,12 @@ function load(): EditorState | null {
     if (raw === null) return null
     const r = JSON.parse(raw)
     if (!isDictValue(r)) return null
-    const invalid = isDictValue(r.invalid)
-      ? Object.fromEntries(Object.entries(r.invalid).filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== ''))
-      : {}
     return {
       workflow: isWorkflow(r.workflow) ? r.workflow : null,
       name: typeof r.name === 'string' ? r.name : '',
       dirty: r.dirty === true,
-      invalid,
+      // Not restored: the rejected texts are gone, and every mounted control reports its own validity.
+      invalid: {},
       loads: 0,
     }
   } catch {
@@ -88,22 +86,31 @@ export function loadWorkflow(workflow: Workflow, name?: string) {
   update({ workflow, name: name ?? state.name, dirty: false, invalid: {}, loads: state.loads + 1 })
 }
 
+/** `normalize`: the app rewrote the value into the form ComfyUI expects (not the user's edit, so not dirty). */
+export interface WriteOptions {
+  normalize?: boolean
+}
+
 /** Sets node `id`'s input `field` (a copy: the old workflow object is never changed). */
-export function setInput(id: string, field: string, value: unknown) {
+export function setInput(id: string, field: string, value: unknown, { normalize = false }: WriteOptions = {}) {
   const wf = state.workflow
   const node = wf?.[id]
   if (!wf || !node) return
   const inputs = node.inputs ?? {}
   if (Object.is(inputs[field], value)) return
-  update({ ...state, dirty: true, workflow: { ...wf, [id]: { ...node, inputs: { ...inputs, [field]: value } } } })
+  update({
+    ...state,
+    dirty: normalize ? state.dirty : true,
+    workflow: { ...wf, [id]: { ...node, inputs: { ...inputs, [field]: value } } },
+  })
 }
 
 /** Sets `key` inside node `id`'s dict input `field` (e.g. a Power Lora Loader's `lora_1.strength`). */
-export function setSubInput(id: string, field: string, key: string, value: unknown) {
+export function setSubInput(id: string, field: string, key: string, value: unknown, opts?: WriteOptions) {
   const old = state.workflow?.[id]?.inputs?.[field]
   const dict = isDictValue(old) ? old : {}
   if (Object.is(dict[key], value) && isDictValue(old)) return
-  setInput(id, field, { ...dict, [key]: value })
+  setInput(id, field, { ...dict, [key]: value }, opts)
 }
 
 /** Marks field `key` invalid with `msg`, or valid again with null or ''. */

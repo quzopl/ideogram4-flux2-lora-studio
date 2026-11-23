@@ -33,6 +33,24 @@ export const isDictValue = (v: unknown): v is Record<string, unknown> =>
 const sections = (node: NodeInfo | undefined) => [node?.input?.required ?? {}, node?.input?.optional ?? {}]
 
 /**
+ * A list input's choices in either format: `[[...choices], meta]`, or ComfyUI
+ * V3's `["COMBO", {options: [...]}]`. Null when the spec is not a list, or is
+ * a COMBO without options (a remote one, fetched by ComfyUI's frontend).
+ */
+export function choicesOf(spec: unknown): unknown[] | null {
+  if (!Array.isArray(spec)) return null
+  if (Array.isArray(spec[0])) return spec[0]
+  const options = (spec[1] as { options?: unknown } | undefined)?.options
+  return spec[0] === 'COMBO' && Array.isArray(options) ? options : null
+}
+
+/** A COMBO with options as `[choices, meta]`, the form the controls read; any other spec as it is. */
+function normalise(spec: unknown[]): FieldSchema {
+  const choices = choicesOf(spec)
+  return spec[0] === 'COMBO' && choices ? [choices, (spec[1] ?? {}) as Record<string, unknown>] : (spec as FieldSchema)
+}
+
+/**
  * Every enum field of every node type, by field name: a field of the same name
  * usually shares its choices across nodes (e.g. `lora_name`).
  */
@@ -41,9 +59,10 @@ export function buildKnownEnums(info: ObjectInfo | null | undefined): KnownEnums
   for (const node of Object.values(info ?? {})) {
     for (const fields of sections(node)) {
       for (const [name, spec] of Object.entries(fields)) {
-        if (Array.isArray(spec) && Array.isArray(spec[0])) {
+        const choices = choicesOf(spec)
+        if (choices) {
           const set = (map[name] ??= new Set())
-          for (const c of spec[0]) set.add(String(c))
+          for (const c of choices) set.add(String(c))
         }
       }
     }
@@ -51,12 +70,12 @@ export function buildKnownEnums(info: ObjectInfo | null | undefined): KnownEnums
   return Object.fromEntries(Object.entries(map).map(([k, v]) => [k, [...v].sort()]))
 }
 
-/** The field's spec from the node type's schema (required, then optional). */
+/** The field's spec from the node type's schema (required, then optional); a COMBO with options as `[choices, meta]`. */
 export function getSchema(info: ObjectInfo | null | undefined, classType: string | undefined, field: string): FieldSchema | null {
   if (!info || !classType) return null
   for (const fields of sections(info[classType])) {
     const spec = fields[field]
-    if (Array.isArray(spec)) return spec as FieldSchema
+    if (Array.isArray(spec)) return normalise(spec)
   }
   return null
 }
@@ -90,8 +109,26 @@ export function getSchemaForName(enums: KnownEnums | null | undefined, field: st
  */
 export function controlSchema(schema: FieldSchema | null): FieldSchema | null {
   if (!schema) return null
+  schema = normalise(schema)
   const t = schema[0]
   return Array.isArray(t) || t === 'BOOLEAN' || t === 'INT' || t === 'FLOAT' || t === 'STRING' ? schema : null
+}
+
+/**
+ * The spec a field's control follows: its node type's (when that picks a
+ * control), else a list guessed from the field name, only for a string or
+ * null value (a number, e.g. `lora_strength`, is never a list entry).
+ */
+export function fieldSchema(
+  info: ObjectInfo | null | undefined,
+  enums: KnownEnums | null | undefined,
+  classType: string | undefined,
+  field: string,
+  value: unknown,
+): FieldSchema | null {
+  const own = controlSchema(getSchema(info, classType, field))
+  if (own) return own
+  return typeof value === 'string' || value == null ? getSchemaForName(enums, field) : null
 }
 
 /** How a number field is read: fractions or whole numbers, within optional bounds. */

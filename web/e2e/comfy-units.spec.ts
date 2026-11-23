@@ -3,8 +3,8 @@ import { expect, test } from './fixtures.ts'
 import { downloadName, fmtEta, fmtProgress, loraName, promptPreview, sourceLabel } from '../src/pages/comfy/format.ts'
 import { pollJobCore } from '../src/pages/comfy/pollJobCore.ts'
 import {
-  buildKnownEnums, controlSchema, fixEnumValue, getSchema, getSchemaForName, isDictValue, isLinkValue, numberSpec, parseJson,
-  sortNodeIds, type ObjectInfo,
+  buildKnownEnums, choicesOf, controlSchema, fieldSchema, fixEnumValue, getSchema, getSchemaForName, isDictValue, isLinkValue,
+  numberSpec, parseJson, sortNodeIds, type ObjectInfo,
 } from '../src/pages/comfy/editor/schema.ts'
 
 test('fmtEta formats like classic', () => {
@@ -280,4 +280,49 @@ test('fixEnumValue turns a listed Windows path into the listed one', () => {
   expect(fixEnumValue(choices, 'other\\c.safetensors')).toBe('other\\c.safetensors')
   expect(fixEnumValue(choices, null)).toBe('')
   expect(fixEnumValue([1, 2], 2)).toBe('2')
+})
+
+// ---- ComfyUI's V3 list inputs: ["COMBO", {options}] ----
+
+const V3: ObjectInfo = {
+  KSamplerSelect: { input: { required: { sampler_name: ['COMBO', { options: ['euler', 'res_multistep'], tooltip: 't' }] } } },
+  // A remote combo: its options are fetched by the frontend, not in the schema.
+  BasicScheduler: { input: { required: { scheduler: ['COMBO', { remote: { route: '/x' } }], steps: ['INT', { min: 1 }] } } },
+  KSampler: { input: { required: { scheduler: [['simple', 'karras'], {}], sampler_name: [['euler', 'dpmpp_2m'], {}] } } },
+}
+
+test('choicesOf reads both list formats', () => {
+  expect(choicesOf([['a', 'b'], {}])).toEqual(['a', 'b'])
+  expect(choicesOf(['COMBO', { options: ['x', 'y'] }])).toEqual(['x', 'y'])
+  expect(choicesOf(['COMBO', {}])).toBeNull()
+  expect(choicesOf(['COMBO'])).toBeNull()
+  expect(choicesOf(['INT', { options: ['no'] }])).toBeNull()
+  expect(choicesOf(null)).toBeNull()
+})
+
+test('COMBO specs give lists: known enums, getSchema and controlSchema', () => {
+  const enums = buildKnownEnums(V3)
+  expect(enums.sampler_name).toEqual(['dpmpp_2m', 'euler', 'res_multistep'])
+  expect(enums.scheduler).toEqual(['karras', 'simple'])
+  // Normalised to [choices, meta].
+  expect(getSchema(V3, 'KSamplerSelect', 'sampler_name')).toEqual([['euler', 'res_multistep'], { options: ['euler', 'res_multistep'], tooltip: 't' }])
+  expect(controlSchema(['COMBO', { options: ['x'] }])).toEqual([['x'], { options: ['x'] }])
+  // Without options: no control from it.
+  expect(controlSchema(getSchema(V3, 'BasicScheduler', 'scheduler'))).toBeNull()
+})
+
+test('fieldSchema: the class schema, else a list guessed for a string or null', () => {
+  const enums = buildKnownEnums(V3)
+  expect(fieldSchema(V3, enums, 'KSamplerSelect', 'sampler_name', 'euler')).toEqual(getSchema(V3, 'KSamplerSelect', 'sampler_name'))
+  expect(fieldSchema(V3, enums, 'BasicScheduler', 'steps', 20)).toEqual(['INT', { min: 1 }])
+  // A remote combo falls back to the list guessed from the name.
+  expect(fieldSchema(V3, enums, 'BasicScheduler', 'scheduler', 'karras')).toEqual([enums.scheduler, {}])
+  // An unknown node type: guessed for a string or null…
+  expect(fieldSchema(V3, enums, 'MyNode', 'sampler', 'euler')).toEqual([enums.sampler_name, {}])
+  expect(fieldSchema(V3, enums, 'MyNode', 'sampler', null)).toEqual([enums.sampler_name, {}])
+  // …never for another value (a strength is a number, not a list entry).
+  expect(fieldSchema(V3, enums, 'MyNode', 'sampler_strength', 0.8)).toBeNull()
+  expect(fieldSchema(V3, enums, 'MyNode', 'sampler', true)).toBeNull()
+  // A dict key (no class): the guess alone.
+  expect(fieldSchema(null, enums, undefined, 'sampler', 'euler')).toEqual([enums.sampler_name, {}])
 })
