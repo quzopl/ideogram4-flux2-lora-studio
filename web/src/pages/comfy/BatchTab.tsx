@@ -103,9 +103,9 @@ export function BatchTab() {
           Generate batch
         </Button>
         {b.running && (
-          <Button variant="outline" disabled={b.cancelled} onClick={() => void cancelBatch()}>
+          <Button variant="outline" disabled={b.cancelled && !b.cancelFailed} onClick={() => void cancelBatch()}>
             <X />
-            {b.cancelled ? 'Cancelling…' : 'Cancel'}
+            {b.cancelled && !b.cancelFailed ? 'Cancelling…' : 'Cancel'}
           </Button>
         )}
         {hint && <p className="text-sm text-text-dim">{hint}</p>}

@@ -1,6 +1,8 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion, useIsPresent } from 'motion/react'
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { useLocation } from 'react-router'
+import { ensureRunning } from '@/pages/comfy/batchRunner'
 import { GpuBar } from './GpuBar'
 import { Onboarding } from './Onboarding'
 import { AppRoutes } from './routes'
@@ -26,6 +28,9 @@ function View({ children }: { children: ReactNode }) {
 
 export function Shell() {
   const location = useLocation()
+  // A ComfyUI batch left running before a reload goes on, whichever view the app opens on.
+  const qc = useQueryClient()
+  useEffect(() => ensureRunning(qc), [qc])
   return (
     <div className="flex h-dvh overflow-hidden bg-bg text-text">
       <Sidebar />

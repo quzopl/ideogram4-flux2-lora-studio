@@ -61,6 +61,8 @@ export interface BatchState {
   posting: boolean
   results: BatchLine[]
   cancelled: boolean
+  /** The last cancel request for the running job failed: Cancel may be pressed again. */
+  cancelFailed: boolean
   running: boolean
 }
 
@@ -75,7 +77,7 @@ const KEY = 'flux.comfy.jobs'
 const ENDED = JOB_ENDS as readonly JobOutcome['state'][]
 const EMPTY_BATCH: BatchState = {
   lines: [], params: { width: 1024, height: 1024, steps: 20, cfg: 3.5 },
-  index: 0, jobId: null, posting: false, results: [], cancelled: false, running: false,
+  index: 0, jobId: null, posting: false, results: [], cancelled: false, cancelFailed: false, running: false,
 }
 const EMPTY: ComfyJobs = { lora: { jobId: null }, editor: { jobId: null }, batch: EMPTY_BATCH }
 
@@ -131,6 +133,7 @@ function loadBatch(v: unknown): BatchState {
     posting: b.posting === true,
     results,
     cancelled: b.cancelled === true,
+    cancelFailed: b.cancelFailed === true,
     running: b.running === true,
   }
 }

@@ -1275,3 +1275,67 @@ test('batch start error stops', async ({ page }) => {
   await expect(lineState(page, 1)).toHaveText('skipped')
   await expect(batchButton(page)).toBeEnabled()
 })
+
+test('batch resumes at app start on another page', async ({ page }) => {
+  const line = (l: string, state: string) => ({ line: l, state, images: [], error: '' })
+  await seedJobs(page, {
+    batch: {
+      lines: ['first', 'second'], index: 1, jobId: null, posting: false, cancelled: false, running: true,
+      params: { width: 1024, height: 1024, steps: 20, cfg: 3.5 },
+      results: [line('first', 'done'), line('second', 'queued')],
+    },
+  })
+  const bodies = await mockBatchGenerate(page, 'app')
+  await mockBatchJobs(page, 'app', ['done'])
+  // Reloaded on another view: the batch goes on without the ComfyUI page.
+  await page.goto('/models')
+  await expect.poll(() => bodies.length).toBe(1)
+  expect(bodies[0].prompt).toBe('second')
+  await expect.poll(async () => (await savedJobs(page)).batch.running).toBe(false)
+  expect((await savedJobs(page)).batch.results.map((r: { state: string }) => r.state)).toEqual(['done', 'done'])
+})
+
+test('batch cancel that fails can be pressed again', async ({ page }) => {
+  await mockConfig(page, 1)
+  await mockBatchGenerate(page, 'cxf')
+  const states = ['running', 'running']
+  await mockBatchJobs(page, 'cxf', states)
+  const cancels: number[] = []
+  await page.route('**/api/comfy/job/*/cancel', (route) => {
+    cancels.push(cancels.length)
+    return cancels.length === 1
+      ? route.fulfill({ status: 500, json: { detail: 'cancel broke' } })
+      : route.fulfill({ json: { ok: true } })
+  })
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('one\ntwo')
+  await batchButton(page).click()
+  await expect(lineState(page, 0)).toHaveText('running')
+
+  const cancel = batchCard(page).getByRole('button', { name: 'Cancel', exact: true })
+  await cancel.click()
+  await expect(page.getByText('Could not cancel the batch job: cancel broke')).toBeVisible()
+  // The request failed: Cancel can be pressed again, and that sends it again.
+  await expect(cancel).toBeEnabled()
+  await cancel.click()
+  await expect(batchCard(page).getByRole('button', { name: 'Cancelling…' })).toBeDisabled()
+  expect(cancels).toHaveLength(2)
+
+  states[0] = 'cancelled'
+  await expect(batchCard(page).getByText('Cancelled.', { exact: true })).toBeVisible()
+  await expect(lineState(page, 1)).toHaveText('skipped')
+})
+
+test('batch loop throwing marks the line as error', async ({ page }) => {
+  await mockConfig(page, 1)
+  await mockBatchGenerate(page, 'thr')
+  // Not a job: reading its state throws inside the loop.
+  await page.route('**/api/comfy/job/job-thr-1', (route) => route.fulfill({ json: null }))
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('one\ntwo')
+  await batchButton(page).click()
+  await expect(batchCard(page).getByRole('alert')).toContainText('Stopped at line 1: Cannot read properties of null')
+  await expect(lineState(page, 0)).toHaveText('error')
+  await expect(lineState(page, 1)).toHaveText('skipped')
+  await expect(batchCard(page).getByText(/^Done/)).toHaveCount(0)
+})
