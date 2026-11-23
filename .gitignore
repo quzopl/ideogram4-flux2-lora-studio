@@ -10,3 +10,6 @@ web/node_modules/
 web/dist/
 web/test-results/
 web/playwright-report/
+
+# Personal training photos stay local
+bart-dataset/
