@@ -1813,7 +1813,8 @@ test('save json downloads the edited workflow', async ({ page }) => {
 })
 
 test('library save, load asks when dirty, delete asks', async ({ page }) => {
-  const name = `e2e-wf-${Date.now()}`
+  // Needs encoding in the URL.
+  const name = `e2e wf & co ${Date.now()}`
   const card = editorCard(page)
   await loadFixtureInEditor(page)
   await expect(savedWorkflows(page)).toHaveText('— saved workflows —')
@@ -1856,9 +1857,13 @@ test('library save, load asks when dirty, delete asks', async ({ page }) => {
   await expect(card.getByText('Reloaded the workflow from disk: 9 nodes.')).toBeVisible()
   await expect(nodeField(page, '6', 'text')).toHaveValue(WORKFLOW_PROMPT)
   await expect(ask).toHaveCount(0)
+  // Not the library's workflow any more: a later save does not overwrite it.
+  await expect(workflowName(page)).toHaveValue('')
 
   await editorButton(page, 'Delete').click()
-  await page.getByRole('dialog', { name: 'Delete workflow?' }).getByRole('button', { name: 'Delete' }).click()
+  const del = page.getByRole('dialog', { name: 'Delete workflow?' })
+  await expect(del).toContainText(`Delete workflow “${name}” from the library?`)
+  await del.getByRole('button', { name: 'Delete' }).click()
   await expect(card.getByText(`Deleted "${name}".`)).toBeVisible()
   await expect(savedWorkflows(page)).toHaveText('— saved workflows —')
   expect((await page.request.get(`/api/comfy/workflows/${encodeURIComponent(name)}`)).status()).toBe(404)
@@ -1884,5 +1889,97 @@ test('library import saves and loads the file', async ({ page }) => {
     expect((await page.request.get(`/api/comfy/workflows/${encodeURIComponent(stem)}`)).status()).toBe(200)
   } finally {
     await page.request.delete(`/api/comfy/workflows/${encodeURIComponent(stem)}`)
+  }
+})
+
+/** POSTs to these paths, as they are sent. */
+function collectPosts(page: Page, paths: string[]) {
+  const posts: { path: string; body: string }[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && paths.includes(pathOf(r.url()))) posts.push({ path: pathOf(r.url()), body: r.postData() ?? '' })
+  })
+  return posts
+}
+
+test('import and file drop ask before replacing edits', async ({ page }) => {
+  await loadFixtureInEditor(page)
+  const posts = collectPosts(page, ['/api/comfy/workflows/import', '/api/comfy/editor/load'])
+  let choosers = 0
+  page.on('filechooser', () => choosers++)
+  await nodeField(page, '6', 'text').fill('kept edit')
+  await expect.poll(async () => (await savedEditor(page))?.dirty).toBe(true)
+  const ask = page.getByRole('dialog', { name: 'Discard your edits?' })
+
+  // Import asks before the file picker opens.
+  await editorButton(page, 'Import from JSON').click()
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(ask).toHaveCount(0)
+  expect(choosers).toBe(0)
+
+  // A dropped or picked file asks before it is uploaded.
+  await editorCard(page).getByLabel('Workflow file').setInputFiles(WORKFLOW)
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(ask).toHaveCount(0)
+  await expect(nodeField(page, '6', 'text')).toHaveValue('kept edit')
+  expect(posts).toEqual([])
+
+  await editorCard(page).getByLabel('Workflow file').setInputFiles({
+    name: 'small.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ '5': { class_type: 'EmptyLatentImage', inputs: { width: 640 } } })),
+  })
+  await ask.getByRole('button', { name: 'Load' }).click()
+  await expect(editorCard(page).getByText('Loaded workflow from JSON file: 1 nodes.')).toBeVisible()
+  expect(posts.map((p) => p.path)).toEqual(['/api/comfy/editor/load'])
+
+  // Confirmed, Import opens the picker.
+  await nodeField(page, '5', 'width').fill('700')
+  await expect.poll(async () => (await savedEditor(page))?.dirty).toBe(true)
+  const chooser = page.waitForEvent('filechooser')
+  await editorButton(page, 'Import from JSON').click()
+  await ask.getByRole('button', { name: 'Import' }).click()
+  await chooser
+})
+
+test('import under the typed name asks before overwriting', async ({ page }) => {
+  const stamp = Date.now()
+  const taken = `e2e taken & co ${stamp}`
+  const fresh = `e2e fresh ${stamp}`
+  const stem = `e2e-stem-${stamp}`
+  await page.request.post('/api/comfy/workflows', { data: { name: taken, value: { '1': { class_type: 'Old', inputs: {} } } } })
+  const file = {
+    name: `${stem}.json`, mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ '5': { class_type: 'EmptyLatentImage', inputs: { width: 640 } } })),
+  }
+  try {
+    await loadFixtureInEditor(page)
+    const imports = collectPosts(page, ['/api/comfy/workflows/import'])
+    await workflowName(page).fill(taken)
+    const ask = page.getByRole('dialog', { name: `Overwrite workflow “${taken}”?` })
+
+    // Cancel: nothing sent, no picker.
+    await editorButton(page, 'Import from JSON').click()
+    await ask.getByRole('button', { name: 'Cancel' }).click()
+    await expect(ask).toHaveCount(0)
+    expect(imports).toEqual([])
+
+    let chooser = page.waitForEvent('filechooser')
+    await editorButton(page, 'Import from JSON').click()
+    await ask.getByRole('button', { name: 'Overwrite' }).click()
+    await (await chooser).setFiles(file)
+    await expect(editorCard(page).getByText(`Imported "${taken}" (1 nodes) and saved to the library.`)).toBeVisible()
+    const stored = await (await page.request.get(`/api/comfy/workflows/${encodeURIComponent(taken)}`)).json()
+    expect(Object.keys(stored.workflow)).toEqual(['5'])
+
+    // A name not in the library: imported under it, without a question.
+    await workflowName(page).fill(fresh)
+    chooser = page.waitForEvent('filechooser')
+    await editorButton(page, 'Import from JSON').click()
+    await (await chooser).setFiles(file)
+    await expect(editorCard(page).getByText(`Imported "${fresh}" (1 nodes) and saved to the library.`)).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    expect(imports).toHaveLength(2)
+    expect((await page.request.get(`/api/comfy/workflows/${encodeURIComponent(stem)}`)).status()).toBe(404)
+  } finally {
+    for (const n of [taken, fresh, stem]) await page.request.delete(`/api/comfy/workflows/${encodeURIComponent(n)}`)
   }
 })

@@ -86,7 +86,7 @@ export function loadWorkflow(workflow: Workflow, name?: string) {
   update({ workflow, name: name ?? state.name, dirty: false, invalid: {}, loads: state.loads + 1 })
 }
 
-/** The workflow's library name (Save to library saves under it, Save .json names the file after it; Load and Import set it). */
+/** The workflow's library name (Save to library and Import save under it, Save .json names the file after it; Load and Import set it, Reload clears it). */
 export function setName(name: string) {
   if (name !== state.name) update({ ...state, name })
 }
@@ -160,13 +160,14 @@ export function loadServerWorkflow(): Promise<number | null> {
 
 /**
  * "Reload from disk": the server's last editor workflow, asked now (edits are
- * replaced). Resolves with its node count; null, the draft kept, when the
+ * replaced, the name cleared). Resolves with its node count; null, the draft kept, when the
  * server has none.
  */
 export async function reloadServerWorkflow(): Promise<number | null> {
   const r = await api<{ workflow: Workflow | null; node_count: number }>('/api/comfy/editor/workflow')
   if (!isWorkflow(r.workflow) || Object.keys(r.workflow).length === 0) return null
-  loadWorkflow(r.workflow)
+  // Not the library's workflow any more: its name goes, so a later save does not overwrite that entry.
+  loadWorkflow(r.workflow, '')
   return Object.keys(r.workflow).length
 }
 

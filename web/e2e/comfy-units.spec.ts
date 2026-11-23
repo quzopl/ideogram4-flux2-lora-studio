@@ -6,7 +6,7 @@ import {
   buildKnownEnums, choicesOf, controlSchema, fieldSchema, fixEnumValue, getSchema, getSchemaForName, isDictValue, isLinkValue,
   numberSpec, parseJson, sortNodeIds, type ObjectInfo,
 } from '../src/pages/comfy/editor/schema.ts'
-import { layoutGraph } from '../src/pages/comfy/editor/layout.ts'
+import { layoutGraph, linkSignature } from '../src/pages/comfy/editor/layout.ts'
 
 test('fmtEta formats like classic', () => {
   expect(fmtEta(0)).toBe('0s')
@@ -367,4 +367,14 @@ test('layoutGraph: cycles, missing sources and dense graphs end', () => {
   const t = Date.now()
   expect(layersOf(layoutGraph(dense))['299']).toBe(299)
   expect(Date.now() - t).toBeLessThan(2000)
+})
+
+test('linkSignature changes with the links only', () => {
+  const wf = graphOf({ '1': [], '2': ['1'] })
+  const sig = linkSignature(wf)
+  // A literal edited: the same layout.
+  expect(linkSignature({ ...wf, '2': { ...wf['2'], inputs: { ...wf['2'].inputs, seed: 2, text: 'x' } } })).toBe(sig)
+  // A link moved, or a node added: laid out again.
+  expect(linkSignature({ ...wf, '2': { ...wf['2'], inputs: { ...wf['2'].inputs, in0: ['3', 0] } } })).not.toBe(sig)
+  expect(linkSignature({ ...wf, '3': { inputs: {} } })).not.toBe(sig)
 })

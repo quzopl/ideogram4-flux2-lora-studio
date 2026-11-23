@@ -1,5 +1,6 @@
 import { ChevronsDownUp, ChevronsUpDown, List, Network, Search } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
@@ -9,7 +10,7 @@ import { errorText, useObjectInfo } from '../queries'
 import { StatusLine, type Status } from '../StatusLine'
 import { WorkflowDrop } from '../WorkflowDrop'
 import { EditorActions } from './EditorActions'
-import { flushEditor, loadServerWorkflow, loadWorkflow, useEditor } from './editorStore'
+import { flushEditor, getEditor, loadServerWorkflow, loadWorkflow, useEditor } from './editorStore'
 import { EditorCardContext, NodeCard, nodeCardId, type CardContext } from './NodeCard'
 import { buildKnownEnums, sortNodeIds, type Workflow } from './schema'
 import { WorkflowGraph } from './WorkflowGraph'
@@ -39,6 +40,9 @@ export function EditorTab() {
   const [flash, setFlash] = useState<{ id: string; n: number } | null>(null)
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState<Status | null>(null)
+  // A file dropped over edits, waiting for "Discard your edits?" (kept while the dialog closes).
+  const [pending, setPending] = useState<File | null>(null)
+  const [asking, setAsking] = useState(false)
 
   useEffect(() => flushEditor, [])
   // First entry without a draft: the workflow the server last had in the editor.
@@ -145,7 +149,14 @@ export function EditorTab() {
         </div>
       </div>
 
-      <WorkflowDrop onFile={(f) => void upload(f)} busy={loading} />
+      <WorkflowDrop
+        onFile={(f) => {
+          if (!getEditor().dirty) return void upload(f)
+          setPending(f)
+          setAsking(true)
+        }}
+        busy={loading}
+      />
       <StatusLine status={status} />
 
       {workflow && (
@@ -194,6 +205,15 @@ export function EditorTab() {
         </>
       )}
       <ComfyJobBox slot="editor" />
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title="Discard your edits?"
+        action="Load"
+        onConfirm={() => pending && void upload(pending)}
+      >
+        The edits you made to this workflow will be lost.
+      </ConfirmDialog>
     </section>
   )
 }

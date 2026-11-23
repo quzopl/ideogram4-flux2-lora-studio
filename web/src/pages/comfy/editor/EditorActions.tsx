@@ -1,6 +1,6 @@
 import { useIsMutating, useQueryClient } from '@tanstack/react-query'
 import { FileDown, FolderOpen, Play, RefreshCw, RotateCcw, Save, Trash2, Upload } from 'lucide-react'
-import { useRef, useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,9 +18,12 @@ import type { Workflow } from './schema'
 
 const START_KEY = ['comfy-editor-start']
 
-/** A replacing action waiting for "Discard your edits?". */
-interface Discard {
-  action: 'Load' | 'Reload'
+/** A question before an action: Discard your edits?, Overwrite …?, Delete workflow?. */
+interface Ask {
+  title: string
+  text: ReactNode
+  action: string
+  destructive?: boolean
   run: () => void
 }
 
@@ -39,10 +42,9 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
   const selected = items.some((i) => i.name === picked) ? picked : ''
   const [status, setStatus] = useState<Status | null>(null)
   const [busy, setBusy] = useState(false)
-  // Kept after closing, so the closing dialog keeps its text.
-  const [discard, setDiscard] = useState<Discard | null>(null)
+  // Kept after closing, so the closing dialog keeps its text; a confirmed question may ask the next one.
+  const [ask, setAsk] = useState<Ask | null>(null)
   const [asking, setAsking] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const importInput = useRef<HTMLInputElement>(null)
 
   // At mutation level: the job is kept even if the view was left before the answer.
@@ -72,13 +74,31 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
     }
   }
   const refreshList = () => qc.invalidateQueries({ queryKey: WORKFLOWS_KEY })
+  const confirm = (a: Ask) => {
+    setAsk(a)
+    setAsking(true)
+  }
   /** Replacing the workflow asks first over edits. */
-  const replace = (action: Discard['action'], run: () => void) => {
+  const replace = (action: string, run: () => void) => {
     if (getEditor().dirty) {
-      setDiscard({ action, run })
-      setAsking(true)
+      confirm({ title: 'Discard your edits?', text: 'The edits you made to this workflow will be lost.', action, run })
     } else run()
   }
+  /** Import (after the edits question): one under the typed name of a saved workflow asks, then the file picker opens. */
+  const startImport = () =>
+    replace('Import', () => {
+      const n = getEditor().name.trim()
+      const pick = () => importInput.current?.click()
+      if (n && items.some((i) => i.name === n)) {
+        confirm({
+          title: `Overwrite workflow “${n}”?`,
+          text: 'The saved workflow will be replaced by the imported file.',
+          action: 'Overwrite',
+          destructive: true,
+          run: pick,
+        })
+      } else pick()
+    })
 
   const saveFile = () => {
     const wf = getEditor().workflow
@@ -128,12 +148,14 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
     })
   }
 
-  // Saved under the file's name (the name field holds the open workflow's, which it would overwrite).
+  // Saved under the typed name, else the file's.
   const importFile = (file: File) =>
     act('Import error: ', async () => {
       setStatus({ tone: 'info', text: 'Importing workflow…' })
       const body = new FormData()
       body.append('file', file)
+      const n = getEditor().name.trim()
+      if (n) body.append('name', n)
       const r = await api<WorkflowImport>('/api/comfy/workflows/import', { method: 'POST', body })
       loadWorkflow(r.workflow, r.name)
       onLoaded()
@@ -205,7 +227,7 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
           variant="outline"
           disabled={busy}
           title="Load a .json / .png file and save it to the library"
-          onClick={() => importInput.current?.click()}
+          onClick={startImport}
         >
           <Upload />
           Import from JSON
@@ -247,7 +269,16 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
           size="sm"
           variant="ghost"
           disabled={!selected || busy}
-          onClick={() => setDeleting(true)}
+          onClick={() => {
+            const n = selected
+            confirm({
+              title: 'Delete workflow?',
+              text: `Delete workflow “${n}” from the library? This cannot be undone.`,
+              action: 'Delete',
+              destructive: true,
+              run: () => void remove(n),
+            })
+          }}
           className="text-text-dim hover:text-danger"
         >
           <Trash2 />
@@ -259,21 +290,12 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
       <ConfirmDialog
         open={asking}
         onOpenChange={setAsking}
-        title="Discard your edits?"
-        action={discard?.action ?? 'Load'}
-        onConfirm={() => discard?.run()}
+        title={ask?.title ?? ''}
+        action={ask?.action ?? ''}
+        destructive={ask?.destructive}
+        onConfirm={() => ask?.run()}
       >
-        The edits you made to this workflow will be lost.
-      </ConfirmDialog>
-      <ConfirmDialog
-        open={deleting}
-        onOpenChange={setDeleting}
-        title="Delete workflow?"
-        action="Delete"
-        destructive
-        onConfirm={() => void remove(selected)}
-      >
-        Delete workflow “{selected}” from the library? This cannot be undone.
+        {ask?.text}
       </ConfirmDialog>
     </div>
   )
