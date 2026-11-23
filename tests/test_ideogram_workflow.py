@@ -113,19 +113,19 @@ def test_build_workflow_fallback_ratio_when_missing():
 def test_render_endpoint_rejects_bad_prompt():
     import pytest
     from fastapi import HTTPException
-    from backend import server
+    from backend import api_ideogram
     with pytest.raises(HTTPException):
-        server.api_ideogram_render(server.IdeogramRenderRequest(prompt="not json"))
+        api_ideogram.api_ideogram_render(api_ideogram.IdeogramRenderRequest(prompt="not json"))
 
 
 def test_render_endpoint_starts_job(tmp_path, monkeypatch):
-    from backend import core, server
+    from backend import api_comfy, api_ideogram, core
     monkeypatch.setattr(core, "IDEOGRAM_RENDER_CFG_PATH", tmp_path / "r.json")
     captured = {}
-    monkeypatch.setattr(server, "_run_comfy_raw_job",
+    monkeypatch.setattr(api_comfy, "_run_comfy_raw_job",
                         lambda job_id, wf, source="editor": captured.update(
                             job=job_id, wf=wf, source=source))
-    out = server.api_ideogram_render(server.IdeogramRenderRequest(
+    out = api_ideogram.api_ideogram_render(api_ideogram.IdeogramRenderRequest(
         prompt=V15, params={"preset": "Default", "seed": 7}))
     assert out["job_id"]
     assert isinstance(out["warnings"], list)
@@ -133,7 +133,7 @@ def test_render_endpoint_starts_job(tmp_path, monkeypatch):
     job = core.COMFY_JOBS.pop(out["job_id"])
     assert job["state"] in ("pending", "running", "done")
     # the parameters persist for the next render
-    saved = server.api_ideogram_render_config()["params"]
+    saved = api_ideogram.api_ideogram_render_config()["params"]
     assert saved["preset"] == "Default" and saved["seed"] == 7
     # the workflow handed to the runner contains the prompt
     import time

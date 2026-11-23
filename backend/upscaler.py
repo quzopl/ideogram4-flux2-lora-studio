@@ -161,7 +161,7 @@ def resolve(model_id: str, cfg: dict) -> dict | None:
 # --------------------------------------------------------------------------- #
 def weights_path(entry: dict, token: str = "") -> str:
     """Local path to the weights: the entry's ``path``, which callers resolve
-    through the model store (server._ensure_model). Never downloads, so the
+    through the model store (core._ensure_model). Never downloads, so the
     weights never land in an HF cache folder nobody chose."""
     if entry.get("path"):
         return entry["path"]

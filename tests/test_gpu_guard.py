@@ -5,12 +5,12 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend import api_dataset, api_upscale, core, server, upscaler
+from backend import api_dataset, api_ideogram, api_prompts, api_upscale, core, server, upscaler
 
 LOCAL_BUSY = {"state": "processing", "local_model": True}
 RUNNERS = {"_run_job": api_dataset, "_run_crop_auto": api_dataset,
-           "_run_upscale_job": api_upscale, "_run_analyze_job": server,
-           "_run_prompt_job": server}
+           "_run_upscale_job": api_upscale, "_run_analyze_job": api_ideogram,
+           "_run_prompt_job": api_prompts}
 
 
 @pytest.fixture

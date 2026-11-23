@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend import comfy_client, core, server
+from backend import api_comfy, comfy_client, core, server
 
 client = TestClient(server.app)
 
@@ -143,7 +143,7 @@ def test_gallery_source_defaults():
 
 def test_raw_runner_source_param():
     job = _job()
-    server._run_comfy_raw_job("j", dict(API_WF), source="ideogram")
+    api_comfy._run_comfy_raw_job("j", dict(API_WF), source="ideogram")
     assert job["state"] == "done", job["error"]
     [meta] = _sidecars()
     assert meta["source"] == "ideogram"
@@ -153,7 +153,7 @@ def test_raw_runner_source_param():
 
 def test_raw_runner_defaults_to_editor():
     job = _job()
-    server._run_comfy_raw_job("j", dict(API_WF))
+    api_comfy._run_comfy_raw_job("j", dict(API_WF))
     assert job["state"] == "done", job["error"]
     [meta] = _sidecars()
     assert meta["source"] == "editor"
@@ -162,7 +162,7 @@ def test_raw_runner_defaults_to_editor():
 def test_lora_runner_labels_source_and_size():
     _upload_workflow()
     job = _job()
-    server._run_comfy_job("j", server.ComfyGenerateRequest(prompt="p", steps=4))
+    api_comfy._run_comfy_job("j", api_comfy.ComfyGenerateRequest(prompt="p", steps=4))
     assert job["state"] == "done", job["error"]
     [meta] = _sidecars()
     assert meta["source"] == "lora_test"
@@ -172,7 +172,7 @@ def test_lora_runner_labels_source_and_size():
 def test_runner_tolerates_undecodable_image(monkeypatch):
     monkeypatch.setattr(comfy_client, "fetch_image", lambda *a, **k: b"not an image")
     job = _job()
-    server._run_comfy_raw_job("j", dict(API_WF))
+    api_comfy._run_comfy_raw_job("j", dict(API_WF))
     assert job["state"] == "done", job["error"]
     [meta] = _sidecars()
     assert "width" not in meta and "height" not in meta
@@ -194,13 +194,13 @@ def test_ideogram_render_labels_source(monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_comfy_config_concurrent_updates_keep_all(monkeypatch):
     _upload_workflow()
-    real_load = server._load_comfy_config
+    real_load = api_comfy._load_comfy_config
 
     def slow_load():  # widens the read-modify-write window
         cfg = real_load()
         time.sleep(0.03)
         return cfg
-    monkeypatch.setattr(server, "_load_comfy_config", slow_load)
+    monkeypatch.setattr(api_comfy, "_load_comfy_config", slow_load)
 
     urls = [f"http://h{i}:8188" for i in range(10)]
     mappings = [{"prompt_node": "6", "prompt_field": "text", "tag": i} for i in range(10)]
@@ -237,7 +237,7 @@ def test_update_comfy_config_aborts_without_writing():
         cfg["url"] = "http://changed"
         raise RuntimeError("no")
     with pytest.raises(RuntimeError):
-        server._update_comfy_config(boom)
+        api_comfy._update_comfy_config(boom)
     assert core.COMFY_CONFIG_PATH.read_text(encoding="utf-8") == before
 
 
@@ -304,7 +304,7 @@ def test_workflow_import_checks_a_typed_name():
     r = post("a/b")
     assert r.status_code == 400
     assert r.json()["detail"] == 'Name must not contain "/".'
-    assert server._wf_names() == []
+    assert api_comfy._wf_names() == []
 
     r = post(" ok ")
     assert r.status_code == 200, r.text
@@ -314,7 +314,7 @@ def test_workflow_import_checks_a_typed_name():
     r = post("   ")
     assert r.status_code == 200, r.text
     assert r.json()["name"] == "from file"
-    assert server._wf_names() == ["from file", "ok"]
+    assert api_comfy._wf_names() == ["from file", "ok"]
 
 
 def test_legacy_slash_names_still_deletable():
@@ -330,7 +330,7 @@ def test_legacy_slash_names_still_deletable():
     assert r.status_code == 200, r.text
     assert r.json()["items"] == {"keep": "q"}
 
-    server._wf_upsert("a/b", API_WF)
+    api_comfy._wf_upsert("a/b", API_WF)
     r = client.get("/api/comfy/workflows/a%2Fb")
     assert r.status_code == 200, r.text
     assert r.json() == {"name": "a/b", "workflow": API_WF}

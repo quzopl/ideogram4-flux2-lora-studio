@@ -412,8 +412,8 @@ def api_process(req: ProcessRequest):
         "results": [],
     }
     core._start_job(job, _run_job, (job_id, req, files),
-               local_model=(req.do_caption and core._lmstudio_model_id(req.model) is None)
-               or bool(req.upscale_model))
+                    local_model=(req.do_caption and core._lmstudio_model_id(req.model) is None)
+                    or bool(req.upscale_model))
     return {"job_id": job_id, "total": len(files)}
 
 
@@ -463,7 +463,7 @@ def api_crop_auto(req: CropAutoRequest):
         "crops": {}, "skipped": [],
     }
     core._start_job(job, _run_crop_auto, (job_id, req, files),
-               local_model=req.mode not in crop_auto.NO_AUTO_MODES)
+                    local_model=req.mode not in crop_auto.NO_AUTO_MODES)
     return {"job_id": job_id, "total": len(files)}
 
 

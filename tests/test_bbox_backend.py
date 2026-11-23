@@ -8,8 +8,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend import (captioner, comfy_client, comfy_workflows, core, florence, lmstudio, prompts,
-                     server)
+from backend import (api_comfy, captioner, comfy_client, comfy_workflows, core, florence, lmstudio,
+                     prompts, server)
 
 client = TestClient(server.app)
 
@@ -482,7 +482,7 @@ def test_stream_events_should_stop_returns_while_queued(monkeypatch):
 def comfy(monkeypatch, tmp_path):
     calls = {"interrupt": [], "delete": [], "history": 0,
              "queue": {"queue_running": [], "queue_pending": [[0, "P1", {}, {}, []]]}}
-    monkeypatch.setattr(server, "_load_comfy_config", lambda: {"url": "http://c"})
+    monkeypatch.setattr(api_comfy, "_load_comfy_config", lambda: {"url": "http://c"})
     monkeypatch.setattr(core, "COMFY_GALLERY_DIR", tmp_path)
     monkeypatch.setattr(comfy_client, "interrupt",
                         lambda url, prompt_id=None: calls["interrupt"].append((url, prompt_id)))
@@ -617,7 +617,7 @@ def test_runner_records_prompt_id_and_executing(comfy, monkeypatch):
         on_event("interrupted", {})
     monkeypatch.setattr(comfy_client, "stream_events", fake_stream)
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert seen == {"queued": ("P1", False), "running": True}
     assert job["executing"] is False  # cleared once the stream ended
     assert job["state"] == "cancelled"
@@ -630,7 +630,7 @@ def test_interrupted_run_ends_cancelled(comfy, monkeypatch):
         on_event("interrupted", {"prompt_id": pid})
     monkeypatch.setattr(comfy_client, "stream_events", fake_stream)
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert job["state"] == "cancelled"
     assert job["error"] == ""
     assert comfy["history"] == 0
@@ -641,7 +641,7 @@ def test_interrupted_elsewhere_ends_cancelled(comfy, monkeypatch):
     monkeypatch.setattr(comfy_client, "stream_events",
                         lambda url, cid, pid, on_event, **kw: on_event("interrupted", {}))
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert job["state"] == "cancelled"
 
 
@@ -653,7 +653,7 @@ def test_cancel_arriving_before_prompt_id_deletes_after_queueing(comfy, monkeypa
     monkeypatch.setattr(comfy_client, "stream_events",
                         lambda *a, **k: pytest.fail("must not stream a cancelled job"))
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert comfy["delete"] == [("http://c", "P1")]
     assert comfy["interrupt"] == []
     assert job["state"] == "cancelled"
@@ -666,7 +666,7 @@ def test_early_cancel_of_already_running_prompt_interrupts(comfy, monkeypatch):
     monkeypatch.setattr(comfy_client, "queue_prompt", queue)
     comfy["queue"] = _running()
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert comfy["interrupt"] == [("http://c", "P1")]
     assert comfy["delete"] == []
     assert job["state"] == "cancelled"
@@ -680,20 +680,20 @@ def _error_stream(url, cid, pid, on_event, **kw):
 def test_raw_runner_execution_error_ends_error(comfy, monkeypatch):
     monkeypatch.setattr(comfy_client, "stream_events", _error_stream)
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert job["state"] == "error"
     assert job["error"].split("\n", 1)[0] == "KSampler (node 3): RuntimeError: CUDA out of memory."
     assert comfy["history"] == 0
 
 
 def test_mapped_runner_execution_error_ends_error(comfy, monkeypatch):
-    monkeypatch.setattr(server, "_load_comfy_config",
+    monkeypatch.setattr(api_comfy, "_load_comfy_config",
                         lambda: {"url": "http://c", "workflow": {}, "mapping": {}})
     monkeypatch.setattr(comfy_workflows, "apply_overrides_multi_lora",
                         lambda *a, **k: {})
     monkeypatch.setattr(comfy_client, "stream_events", _error_stream)
     job = _comfy_job(state="pending")
-    server._run_comfy_job("j", server.ComfyGenerateRequest(prompt="p", batch=2))
+    api_comfy._run_comfy_job("j", api_comfy.ComfyGenerateRequest(prompt="p", batch=2))
     assert job["state"] == "error"
     assert job["error"].startswith("KSampler (node 3): RuntimeError")
     assert comfy["history"] == 0
@@ -708,14 +708,14 @@ def test_runner_passes_should_stop(comfy, monkeypatch):
         seen["after"] = should_stop()
     monkeypatch.setattr(comfy_client, "stream_events", fake_stream)
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert seen == {"before": False, "after": True}
     assert job["state"] == "cancelled"
 
 
 def test_mapped_runner_records_prompt_id(comfy, monkeypatch):
     """The classic ComfyUI view's batch runner shares the cancel endpoint."""
-    monkeypatch.setattr(server, "_load_comfy_config",
+    monkeypatch.setattr(api_comfy, "_load_comfy_config",
                         lambda: {"url": "http://c", "workflow": {}, "mapping": {}})
     monkeypatch.setattr(comfy_workflows, "apply_overrides_multi_lora",
                         lambda *a, **k: {})
@@ -729,7 +729,7 @@ def test_mapped_runner_records_prompt_id(comfy, monkeypatch):
         on_event("interrupted", {})
     monkeypatch.setattr(comfy_client, "stream_events", fake_stream)
     job = _comfy_job(state="pending")
-    server._run_comfy_job("j", server.ComfyGenerateRequest(prompt="p", batch=2))
+    api_comfy._run_comfy_job("j", api_comfy.ComfyGenerateRequest(prompt="p", batch=2))
     assert seen == {"queued": ("P1", False), "running": True}
     assert job["state"] == "cancelled"
     assert job["done_count"] == 0
@@ -747,7 +747,7 @@ def test_raw_runner_step_text(comfy, monkeypatch):
         "P1": {"outputs": {"9": {"images": [{"filename": "a.png"}]}}}})
     monkeypatch.setattr(comfy_client, "fetch_image", lambda *a, **k: _png())
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert seen["current"] == "Step 3/10"
     assert job["state"] == "done"
     assert len(job["images"]) == 1
@@ -786,17 +786,17 @@ def history_entry(comfy, monkeypatch):
     monkeypatch.setattr(comfy_client, "stream_events", _ws_down)
     monkeypatch.setattr(comfy_client, "fetch_image",
                         lambda *a, **k: pytest.fail("a failed prompt's outputs are not fetched"))
-    monkeypatch.setattr(server.time, "sleep", lambda s: None)
+    monkeypatch.setattr(api_comfy.time, "sleep", lambda s: None)
     return entry
 
 
 def _run_mapped():
-    server._run_comfy_job("j", server.ComfyGenerateRequest(prompt="p", batch=2))
+    api_comfy._run_comfy_job("j", api_comfy.ComfyGenerateRequest(prompt="p", batch=2))
 
 
 @pytest.fixture
 def mapped_config(monkeypatch):
-    monkeypatch.setattr(server, "_load_comfy_config",
+    monkeypatch.setattr(api_comfy, "_load_comfy_config",
                         lambda: {"url": "http://c", "workflow": {}, "mapping": {}})
     monkeypatch.setattr(comfy_workflows, "apply_overrides_multi_lora",
                         lambda *a, **k: {})
@@ -804,7 +804,7 @@ def mapped_config(monkeypatch):
 
 def test_raw_runner_history_error_ends_error(comfy, history_entry):
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert job["state"] == "error"
     assert job["error"].split("\n", 1)[0] == "KSampler (node 3): RuntimeError: CUDA out of memory."
     assert comfy["history"] == 1
@@ -824,7 +824,7 @@ def test_history_error_without_message_has_text(comfy, history_entry):
     history_entry["value"] = {"P1": {"outputs": {}, "status": {
         "status_str": "error", "completed": False, "messages": []}}}
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert job["state"] == "error"
     assert job["error"] == "ComfyUI execution error."
     assert comfy["history"] == 1
@@ -837,7 +837,7 @@ def test_history_interrupted_ends_cancelled(comfy, history_entry, mapped_config)
             ["execution_start", {"prompt_id": "P1"}],
             ["execution_interrupted", {"prompt_id": "P1", "node_id": "3"}]]}}}
     job = _comfy_job(state="pending")
-    server._run_comfy_raw_job("j", {})
+    api_comfy._run_comfy_raw_job("j", {})
     assert job["state"] == "cancelled"
     assert job["error"] == ""
     job = _comfy_job(state="pending")

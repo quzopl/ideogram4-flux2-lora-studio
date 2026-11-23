@@ -194,7 +194,7 @@ def api_upscale_run(req: UpscaleRunRequest):
         "config": req.model_dump(), "results": [],
     }
     core._start_job(job, _run_upscale_job, (job_id, req, files, resolved),
-               local_model=True)
+                    local_model=True)
     return {"job_id": job_id, "total": len(files)}
 
 

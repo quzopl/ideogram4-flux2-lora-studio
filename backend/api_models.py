@@ -4,8 +4,8 @@ The UI lists models, downloads one into a chosen folder, points a model at an
 existing folder/file ("locate") or forgets that pointer. Locate and forget only
 edit ``model_locations`` in the settings; they never touch files on disk.
 
-``server.py`` owns the config paths, so it hands in the context and token
-getters through ``configure`` instead of this module importing ``server``.
+``core`` owns the config paths; ``server.py`` hands in the context and token
+getters through ``configure`` instead of this module importing ``core``.
 """
 from __future__ import annotations
 

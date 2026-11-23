@@ -59,7 +59,7 @@ def comfy_store(tmp_path, monkeypatch):
     """Every ComfyUI store under ``tmp_path`` (not autouse): config, mapping and
     prompt libraries, the gallery, the SQLite DB (workflow library) and the
     Ideogram render params; the object_info cache and the job table start empty."""
-    from backend import core, server
+    from backend import api_comfy, core
     gallery = tmp_path / "comfy_gallery"
     gallery.mkdir()
     monkeypatch.setattr(core, "COMFY_CONFIG_PATH", tmp_path / "comfy_config.json")
@@ -70,7 +70,7 @@ def comfy_store(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "COMFY_GALLERY_DIR", gallery)
     monkeypatch.setattr(core, "DB_PATH", tmp_path / "flux_prep.db")
     core._init_db()
-    monkeypatch.setattr(server, "_OBJECT_INFO_CACHE", {"url": None, "data": None, "ts": 0.0})
+    monkeypatch.setattr(api_comfy, "_OBJECT_INFO_CACHE", {"url": None, "data": None, "ts": 0.0})
     core.COMFY_JOBS.clear()
     yield tmp_path
     core.COMFY_JOBS.clear()

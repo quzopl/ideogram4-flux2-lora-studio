@@ -18,8 +18,8 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from backend import (api_dataset, api_upscale, captioner, core, crop_auto, florence, gpu, server,
-                     settings, upscaler)
+from backend import (api_dataset, api_prompts, api_upscale, captioner, core, crop_auto, florence,
+                     gpu, server, settings, upscaler)
 from backend import model_store as ms
 from tests.conftest import ML_MODULES
 
@@ -452,7 +452,7 @@ def test_prompt_job_maps_model_errors_to_the_job_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(captioner, "ensure_loaded", lambda m, q, source=None: None)
     monkeypatch.setattr(captioner, "generate_text", lambda *a, **kw: "a prompt")
-    monkeypatch.setattr(server, "_save_prompt_to_library", lambda *a: 1)
+    monkeypatch.setattr(api_prompts, "_save_prompt_to_library", lambda *a: 1)
 
     with TestClient(server.app) as client:
         def error_of(model: str) -> str:
