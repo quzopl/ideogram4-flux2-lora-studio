@@ -1084,6 +1084,25 @@ test('batch runs lines sequentially', async ({ page }) => {
   await expect(galleryDialog(page)).toContainText('seed: 31')
 })
 
+test('batch line ending on the gallery tab refreshes the gallery', async ({ page }) => {
+  const g = { id: galleryId('g'), ts: FUTURE + 40, prompt: 'batch gallery image', seed: 41, source: 'lora_test' }
+  await mockConfig(page, 1)
+  await mockBatchGenerate(page, 'gal')
+  const states = ['running']
+  await mockBatchJobs(page, 'gal', states, () => (states[0] === 'done' ? { images: [metaOf(g)] } : {}))
+  await page.goto('/comfy?tab=batch')
+  await batchPrompts(page).fill('one line')
+  await batchButton(page).click()
+  await expect(lineState(page, 0)).toHaveText('running')
+
+  await page.getByRole('tab', { name: 'Gallery' }).click()
+  await expect(batchCard(page)).toHaveCount(0)
+  await expect(page.getByText('batch gallery image')).toHaveCount(0)
+  addImage(g)
+  states[0] = 'done'
+  await expect(page.getByText('batch gallery image')).toBeVisible()
+})
+
 test('batch generate disabled without a workflow', async ({ page }) => {
   await mockConfig(page, 0, false)
   await page.goto('/comfy?tab=batch')
@@ -1190,7 +1209,7 @@ test('batch cancel stops the rest', async ({ page }) => {
 
   await batchCard(page).getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(batchCard(page).getByRole('button', { name: 'Cancelling…' })).toBeDisabled()
-  expect(cancels).toEqual(['/api/comfy/job/job-cxb-1/cancel'])
+  await expect.poll(() => cancels).toEqual(['/api/comfy/job/job-cxb-1/cancel'])
   // It waits for the job to report `cancelled`; nothing more is sent meanwhile.
   await page.waitForTimeout(900)
   await expect(lineState(page, 0)).toHaveText('running')
