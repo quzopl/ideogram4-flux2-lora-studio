@@ -144,7 +144,44 @@ preview; export to a folder or `.zip`; autosaved form and named presets),
 **Models** (Download… / Use existing… / Forget / Cancel) and **Settings**
 (Models folder, GPU per role — CPU is not offered for the VLM — Hugging Face
 token, LM Studio and ComfyUI URLs, settings export/import), plus a first-run
-onboarding. Only ComfyUI still opens the classic UI.
+onboarding. ComfyUI is in v2 as well (below), so every view now lives in v2; the classic UI stays at `/legacy/` until Phase 9 removes it.
+
+**ComfyUI** is in v2 too (`/comfy`). A connection card holds the server URL
+(the same value as in Settings; **Test connection** saves it first). Below it
+four tabs, kept in the URL as `?tab=`: **LoRA test**, **Reference batch**,
+**Workflow editor** and **Gallery**. Jobs survive tab switches and navigation.
+
+**LoRA test** takes a workflow (`.json` in API format, or a ComfyUI `.png`
+with the workflow embedded) and a mapping JSON that says which node input is
+the prompt, seed, size and so on; mapped and unmapped fields get badges, and
+mappings can be saved in a library. There is one LoRA row per LoRA slot in
+the workflow, matched by position: a blank row leaves its slot as it is in the
+workflow. The LoRA list is loaded from the server automatically, prompts have
+a library, and **Generate samples** shows progress and a preview and can be
+cancelled. There is no LoRA strength control, same as in the classic UI.
+
+**Reference batch** makes one image per prompt line, one after another. It
+survives navigation and a page reload: each line is sent once, and a line
+interrupted while it was being queued is marked unknown and skipped. It stops
+on the first error, and Cancel skips the remaining lines.
+
+**Workflow editor** shows every node as a card with its inputs; dropdowns come
+from ComfyUI's node schemas (including V3 COMBO specs), number fields keep
+their type, and an invalid field blocks Generate. A graph view highlights the
+node that is executing. The library saves, imports, loads and deletes
+workflows; actions that would replace the workflow ask first when there are
+unsaved edits, and an import that would overwrite a name asks too. **Save
+.json** downloads the workflow and **Reload from disk** re-reads the file.
+
+**Gallery** lists images newest first with a source badge (LoRA test, Editor
+or Ideogram); the dialog has copy, arrows, download and delete. A single image
+has a deep link: `?tab=gallery&image=<id>`.
+
+Backend changes behind it: ComfyUI errors are in English; `GET
+/api/comfy/gallery` is sorted by time and each item has `source`, `width` and
+`height`; `GET /api/comfy/object_info?refresh=1` skips the node-schema cache;
+the ComfyUI config is written atomically under a lock; and library names with
+`/` are rejected (older ones stay reachable).
 
 **Dataset** is in v2 too. The source is a folder scan (folder picker, or
 drag-and-drop upload; HEIC is accepted), shown as a thumbnail grid. The crop
