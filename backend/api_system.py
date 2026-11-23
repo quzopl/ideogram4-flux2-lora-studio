@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from . import __version__
 from . import (captioner, core, florence, fsutil, gpu, hf_auth, lmstudio, model_store,
                settings, upscaler)
 
@@ -313,4 +314,4 @@ def api_gpu_assign(req: GpuAssignRequest):
 
 @router.get("/health")
 def health():
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "version": __version__})

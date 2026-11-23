@@ -130,3 +130,9 @@ def test_nul_byte_in_path_is_not_a_server_error(dist):
     r = client.get("/x%00y")
     assert r.status_code == 200 and 'id="root"' in r.text
     assert client.get("/assets/%00.js").status_code == 404
+
+
+def test_health_reports_version():
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "version": "2.0.0"}
