@@ -35,7 +35,7 @@
 - **Weryfikacja po każdym zadaniu:**
   - `.venv/bin/python -m pytest -q` jest zielone;
   - `cd web && pnpm typecheck && pnpm build`;
-  - po zadaniach 1, 2, 3 i 5 dodatkowo `pnpm exec playwright test`.
+  - po każdym zadaniu dodatkowo `pnpm exec playwright test`.
 - **Zostają migracje z v1:**
   - odczyt `.work/gpu.json` w `settings.py`;
   - import planów kropu z `localStorage` w widoku Dataset;
@@ -59,10 +59,12 @@
 
 - **R1. Adresy `/legacy`:** `/legacy` i `/legacy/{rest}` dają 307 → `/`. Hash (`#upscale`) przechodzi przez przekierowanie, ale SPA go ignoruje i ląduje na `/upscale`.
 - **R2. Brak `web/dist`:** brak buildu daje 503 z instrukcją. `pnpm` (i Node) staje się wymagany na świeżym klonie. README mówi o tym wprost.
-- **R3. Zasięg strażnika:** strażnik jest globalny dla zadań na lokalnych modelach (VLM, Florence, upscaler), na GPU i na CPU. Dwa upscale na różnych kartach dostają teraz 409, co wcześniej było świadomie dopuszczone. Zadania tylko LM Studio są zwolnione. Zadanie bez flagi `local_model` liczy się jako zajmujące.
+- **R3. Zasięg strażnika:** strażnik jest globalny dla zadań na lokalnych modelach (VLM, Florence, upscaler), na GPU i na CPU.
+  - Koszt: dziś da się captionować na jednej karcie i jednocześnie robić upscale na drugiej, bo `/api/upscale/run` nie miał żadnego strażnika. Po tej zmianie drugie zadanie dostaje 409. Dotyczy to też dwóch upscale na różnych kartach, które wcześniej świadomie dopuszczono.
+  - Zadania tylko LM Studio są zwolnione. Zadanie bez flagi `local_model` liczy się jako zajmujące.
 - **R4. Natywne okno folderu:** `POST /api/fs/pick` (zenity) znika, bo v2 ma własny `FolderPicker`.
 - **R5. Ścieżka folderu upscalerów:** w v2 nie da się wpisać ścieżki folderu upscalerów. Wybiera się plik wag, a skanowany jest jego folder, z tym samym efektem.
-- **R6. Pola starego paska GPU:** pola klasycznego paska w `/api/gpu` i `/api/gpus` (`gpu_label`, `selected`) zostają, bo `web/src/lib/types.ts` ich używa. Jest to drobiazg na później.
+- **R6. Pola starego paska GPU:** pola klasycznego paska w `/api/gpu` i `/api/gpus` (`gpu_label`, `selected`) zostają nietknięte. `selected` jest w typach v2, a `gpu_label` przypuszczalnie już nie. To drobiazg na później.
 
 ---
 
@@ -81,12 +83,12 @@
   - kliknij przycisk `Remove custom model`;
   - `ConfirmDialog` z tytułem `Remove custom model?` → potwierdź;
   - przechwycone żądanie `DELETE /api/upscale/models/custom` ma body `{repo_id: "me/x", filename: "up.pth"}`;
-  - po sukcesie wybór modelu nie jest już `hf:me/x/up.pth`;
+  - po sukcesie wybór modelu jest pusty: `ModelSelect` nie wybiera sam, więc trigger pokazuje placeholder `Choose a model`;
   - przycisk nie pojawia się dla wpisu z `source: "builtin"`.
 - [ ] **Step 2: Run** `cd web && pnpm exec playwright test e2e/upscale.spec.ts -g "remove custom"` → FAIL (brak przycisku).
 - [ ] **Step 3: Implement.** Obok `Add custom model…` dodaj przycisk ghost `Remove custom model`, widoczny tylko gdy wybrany wpis ma `source === "custom"`:
   - `ConfirmDialog` (destructive), a potem mutacja `useMutationWithToast` z `invalidate: [['store-models']]` i `success: 'Model removed'`;
-  - po sukcesie `set('model_id', '')`; pierwszy dostępny model wybiera istniejąca logika, a jeśli jej nie ma, zostaje pusty wybór z walidacją startu.
+  - po sukcesie `set('model_id', '')`, czyli pusty wybór, bo `ModelSelect` nie wybiera domyślnego modelu.
   - Pliku wag nie usuwamy, bo usunięcie dotyczy tylko wpisu (Global Constraints z Fazy 1).
 - [ ] **Step 4: Run** `pnpm typecheck && pnpm exec playwright test e2e/upscale.spec.ts` → PASS.
 - [ ] **Step 5: Commit** `feat: v2 upscale can remove a custom model`.
@@ -127,12 +129,11 @@ Usuń też to, co przez to staje się sierotą, ale tylko to:
     - bez dist `/` → 503 z oboma fragmentami tekstu;
     - `/legacy` i `/legacy/` → 307, `location == "/"`;
     - `/legacy/style.css` → 307 na `/`;
-    - `/api/fs/pick` (POST) → 404.
-    - Usuń asercje o serwowaniu `frontend/`.
-  - `test_gpu_roles`: `POST /api/gpu/select` → 404 zamiast testu legacy.
-  - Każdy usunięty endpoint ma test, że zwraca 404 albo 405 (jeden parametryzowany test w `test_web_serving`).
-- [ ] **Step 2: Run** `.venv/bin/python -m pytest tests/test_web_serving.py tests/test_gpu_roles.py -q` → FAIL.
-- [ ] **Step 3: Przenieś pokrycie, zanim skasujesz testy legacy.** Usuwasz:
+      - Usuń asercje o serwowaniu `frontend/`.
+  - Usunięte endpointy sprawdza jeden parametryzowany test `test_legacy_routes_gone`: para (metoda, ścieżka) nie występuje w `server.app.routes`. Nie badamy kodu odpowiedzi, bo POST na nieznaną ścieżkę daje 405 przez catch-all SPA (GET).
+  - `test_gpu_roles`: usuń test legacy select.
+- [ ] **Step 2: Run** `.venv/bin/python -m pytest tests/test_web_serving.py -q` → FAIL.
+- [ ] **Step 3: Przenieś pokrycie, zanim skasujesz testy legacy.** Zasada: test, którego jedynym przedmiotem jest usunięty symbol (endpoint, `_ensure_model_http`, `save_selected`), znika, a raport wymienia każdy usunięty test. Test, który przez usunięty symbol sprawdzał coś wciąż istniejącego, przenosimy. Usuwasz:
   - `test_legacy_analyze_unchanged`, `test_legacy_analyze_vlm_default_tokens`, `test_legacy_analyze_honours_exif_orientation` (odpowiednik EXIF: `test_analyze_job_honours_exif_orientation`);
   - `test_legacy_prompt_endpoint_unchanged`, `test_legacy_prompt_error_codes`, `test_legacy_select_sets_all_roles`;
   - linię z `/api/upscale/models` w `test_api_models.py`.
@@ -165,7 +166,7 @@ Usuń też to, co przez to staje się sierotą, ale tylko to:
 
 **Interfaces:**
 - Produces (Task 4 przenosi to do `core`):
-  - `BUSY_STATES = ("pending", "downloading", "loading_model", "processing", "generating", "analyzing")`. Stan `"downloading"` ustawia `model_store` (l. ~343) i dziś nie jest liczony, co trzeba naprawić.
+  - `BUSY_STATES = ("pending", "loading_model", "processing", "generating", "analyzing")`. Pobieranie modelu nie zmienia stanu zadania w `JOBS`, bo `"downloading"` ma tylko rekord pobierania w `model_store`. Zadanie zostaje wtedy w `pending` albo `loading_model`.
   - `BUSY_MSG = "Processing in progress — wait for it to finish."`.
   - `_busy() -> bool`: istnieje zadanie w `JOBS` ze stanem w `BUSY_STATES` i `job.get("local_model", True)`.
   - `_start_job(job: dict, target: Callable, args: tuple, *, local_model: bool) -> None`:
@@ -186,9 +187,11 @@ Usuń też to, co przez to staje się sierotą, ale tylko to:
   Zadania ComfyUI i render Ideogram nie przechodzą przez strażnik, bo liczą na zdalnym serwerze.
 - `/api/unload` i `/api/gpu/assign` dalej wołają `_busy()`, więc zadanie tylko LM Studio ich już nie blokuje.
 
-- [ ] **Step 1: Write failing tests** w `tests/test_gpu_guard.py`. Wątki są podmienione na atrapę, która nie startuje, przez `monkeypatch` na `server.threading.Thread`; `JOBS` jest podmienione na pusty słownik.
+- [ ] **Step 1: Write failing tests** w `tests/test_gpu_guard.py`.
+  - Runnery (`_run_job`, `_run_crop_auto`, `_run_upscale_job`, `_run_analyze_job`, `_run_prompt_job`) podmieniamy na no-op, a `JOBS` na pusty słownik.
+  - Nigdy nie patchujemy `server.threading.Thread`, bo to prawdziwy moduł `threading` i `TestClient` by zawisł. Atrapę wątku podajemy tylko w teście nieudanego startu, przez `monkeypatch.setattr(server, "threading", <atrapa z Thread>)`.
   - `test_each_local_starter_409_while_a_local_job_runs`: parametryzowany po 5 starterach, z aktywnym `{"state": "processing", "local_model": True}`. Odpowiedź to 409 z `BUSY_MSG`.
-  - `test_downloading_job_counts_as_busy`.
+  - `test_pending_and_loading_model_count_as_busy`.
   - `test_lmstudio_only_job_blocks_nothing`: aktywne `{"state":"generating","local_model":False}`. Starter upscale → 200 i `POST /api/unload` → 200.
   - `test_exempt_starts_pass_while_busy`:
     - dataset z `do_caption=False` i `upscale_model=""`;
@@ -242,7 +245,8 @@ Usuń też to, co przez to staje się sierotą, ale tylko to:
 - `server.py` nie re-eksportuje przeniesionych nazw.
 - Kolejność `include_router` jest taka sama jak kolejność sekcji w dawnym `server.py`. Routery `api_settings` i `models_api` oraz catch-all SPA zostają na końcu.
 
-- [ ] **Step 1: Snapshot przed zmianą** (z drzewa po zadaniu 3) do `<workspace>/routes-before.json`:
+- [ ] **Step 0: Linia bazowa bramki `.work`.** Na drzewie po zadaniu 3 zrób `touch <workspace>/marker0 && .venv/bin/python -m pytest -q && find .work -newer <workspace>/marker0`. Wynik zapisz w raporcie. Sam import `backend.server` uruchamia `_init_db()` na prawdziwym `.work/`, więc bez linii bazowej nie da się przypisać zmian przeniesieniu.
+- [ ] **Step 1: Snapshot przed zmianą** (z drzewa po zadaniu 3, z prefiksem `FLUX_PREP_WORK=$(mktemp -d)`) do `<workspace>/routes-before.json`:
 
 ```bash
 .venv/bin/python -I -c "import json,sys; sys.path.insert(0,'.'); from backend import server as s; from fastapi.routing import APIRoute; r=[[sorted(x.methods or []), x.path, getattr(x.endpoint,'__name__',type(x).__name__)] for x in s.app.routes]; json.dump({'routes': sorted(r), 'last': r[-1], 'openapi': json.dumps(s.app.openapi(), sort_keys=True)}, open(sys.argv[1],'w'))" <workspace>/routes-before.json
@@ -250,7 +254,7 @@ Usuń też to, co przez to staje się sierotą, ale tylko to:
 
 - [ ] **Step 2: Przenieś kod** według listy. Testy aktualizuj w tym samym commicie: `server.X` → `core.X` albo `api_<moduł>.X`, a `server.captioner` → `captioner` itd. Klient testowy dalej używa `server.app`.
 - [ ] **Step 3: Dowód czystego przeniesienia.** Ten sam skrypt zapisuje `routes-after.json`. Pola `routes`, `last` i `openapi` są identyczne.
-- [ ] **Step 4: Run** `touch <workspace>/marker && .venv/bin/python -m pytest -q && find .work -newer <workspace>/marker` → testy zielone, lista pusta. Do tego `pnpm typecheck && pnpm build`.
+- [ ] **Step 4: Run** `touch <workspace>/marker && .venv/bin/python -m pytest -q && find .work -newer <workspace>/marker` → testy zielone, a lista nie dłuższa niż linia bazowa z kroku 0. Do tego `pnpm typecheck && pnpm build` i cały Playwright, bo e2e używa przeniesionych endpointów dataset, upscale i GPU.
 - [ ] **Step 5: Commit** `refactor: backend core module and system, dataset, upscale routers`.
 
 ---
