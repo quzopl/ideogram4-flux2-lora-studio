@@ -326,3 +326,15 @@ test('an unknown job (404) stops polling and forgets the run', async ({ page }) 
   await page.waitForTimeout(1500)
   expect(i).toBe(seen)
 })
+
+test('a busy GPU (409) shows the reason and the view does not start running', async ({ page }) => {
+  await page.route('**/api/upscale/run', (route) =>
+    route.fulfill({ status: 409, json: { detail: 'Processing in progress — wait for it to finish.' } }))
+  await ready(page)
+  await upscale(page).click()
+  await expect(
+    page.locator('[data-sonner-toast]').filter({ hasText: 'Processing in progress — wait for it to finish.' }),
+  ).toBeVisible()
+  await expect(page.getByTestId('result-card')).toHaveCount(0)
+  await expect(upscale(page)).toBeEnabled()
+})

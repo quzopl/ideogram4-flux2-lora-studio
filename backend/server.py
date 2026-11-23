@@ -513,7 +513,7 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
 
         job["current"] = ""
         job["state"] = "done"
-    except Exception as e:  # noqa: BLE001
+    except BaseException as e:  # noqa: BLE001 - a dead thread must never leave the job busy
         job["state"] = "error"
         job["error"] = f"{e}\n{traceback.format_exc()}"
 
@@ -858,20 +858,20 @@ def api_process(req: ProcessRequest):
         raise HTTPException(400, "No supported images in the folder.")
 
     job_id = uuid.uuid4().hex
-    with JOBS_LOCK:
-        JOBS[job_id] = {
-            "id": job_id,
-            "kind": "dataset",
-            "state": "pending",
-            "total": len(files),
-            "processed": 0,
-            "current": "",
-            "error": "",
-            "config": req.model_dump(),
-            "results": [],
-        }
-    t = threading.Thread(target=_run_job, args=(job_id, req, files), daemon=True)
-    t.start()
+    job = {
+        "id": job_id,
+        "kind": "dataset",
+        "state": "pending",
+        "total": len(files),
+        "processed": 0,
+        "current": "",
+        "error": "",
+        "config": req.model_dump(),
+        "results": [],
+    }
+    _start_job(job, _run_job, (job_id, req, files),
+               local_model=(req.do_caption and _lmstudio_model_id(req.model) is None)
+               or bool(req.upscale_model))
     return {"job_id": job_id, "total": len(files)}
 
 
@@ -901,7 +901,7 @@ def _run_crop_auto(job_id: str, req: CropAutoRequest, files: list[Path]) -> None
             job["processed"] = i + 1
         job["current"] = ""
         job["state"] = "done"
-    except Exception as e:  # noqa: BLE001
+    except BaseException as e:  # noqa: BLE001 - a dead thread must never leave the job busy
         job["state"] = "error"
         job["error"] = f"{e}\n{traceback.format_exc()}"
 
@@ -915,14 +915,13 @@ def api_crop_auto(req: CropAutoRequest):
     if not files:
         raise HTTPException(400, "No supported images in the folder.")
     job_id = uuid.uuid4().hex
-    with JOBS_LOCK:
-        JOBS[job_id] = {
-            "id": job_id, "kind": "crop_auto", "state": "pending",
-            "total": len(files), "processed": 0, "current": "", "error": "",
-            "crops": {}, "skipped": [],
-        }
-    threading.Thread(target=_run_crop_auto, args=(job_id, req, files),
-                     daemon=True).start()
+    job = {
+        "id": job_id, "kind": "crop_auto", "state": "pending",
+        "total": len(files), "processed": 0, "current": "", "error": "",
+        "crops": {}, "skipped": [],
+    }
+    _start_job(job, _run_crop_auto, (job_id, req, files),
+               local_model=req.mode not in crop_auto.NO_AUTO_MODES)
     return {"job_id": job_id, "total": len(files)}
 
 
@@ -975,12 +974,42 @@ def api_export(req: ExportRequest):
     return {"output_folder": str(out_dir), "written": written}
 
 
+# A model download keeps the job in pending/loading_model ("downloading" lives
+# only on the model_store record), so it needs no state of its own here.
+BUSY_STATES = ("pending", "loading_model", "processing", "generating", "analyzing")
+BUSY_MSG = "Processing in progress — wait for it to finish."
+
+
 def _busy() -> bool:
-    """True while any job is still loading the model or processing images."""
+    """True while a job that uses a model loaded in this process is still active.
+
+    Jobs without the ``local_model`` flag count as local (the safe default).
+    """
     return any(
-        j["state"] in ("pending", "loading_model", "processing", "generating", "analyzing")
+        j["state"] in BUSY_STATES and j.get("local_model", True)
         for j in JOBS.values()
     )
+
+
+def _start_job(job: dict, target: Callable, args: tuple, *, local_model: bool) -> None:
+    """Register ``job`` and start its thread; 409 if the GPU is taken.
+
+    The check and the registration share one lock, so two simultaneous starts
+    cannot both pass. ``local_model`` is False for jobs that never touch a model
+    loaded in this process (LM Studio only, or no model at all).
+    """
+    with JOBS_LOCK:
+        if local_model and _busy():
+            raise HTTPException(409, BUSY_MSG)
+        job["local_model"] = local_model
+        JOBS[job["id"]] = job
+    try:
+        threading.Thread(target=target, args=args, daemon=True).start()
+    except BaseException as e:  # noqa: BLE001 - a job without a thread must not stay busy
+        msg = f"Could not start the job: {e}"
+        job["state"] = "error"
+        job["error"] = msg
+        raise HTTPException(500, msg)
 
 
 def _gpu_status() -> dict:
@@ -1249,7 +1278,7 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path],
             job["processed"] = i + 1
         job["current"] = ""
         job["state"] = "done"
-    except Exception as e:  # noqa: BLE001
+    except BaseException as e:  # noqa: BLE001 - a dead thread must never leave the job busy
         job["state"] = "error"
         job["error"] = f"{e}\n{traceback.format_exc()}"
 
@@ -1264,14 +1293,13 @@ def api_upscale_run(req: UpscaleRunRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     job_id = uuid.uuid4().hex
-    with JOBS_LOCK:
-        JOBS[job_id] = {
-            "id": job_id, "kind": "upscale", "state": "pending",
-            "total": len(files), "processed": 0, "current": "", "error": "",
-            "config": req.model_dump(), "results": [],
-        }
-    threading.Thread(target=_run_upscale_job, args=(job_id, req, files, resolved),
-                     daemon=True).start()
+    job = {
+        "id": job_id, "kind": "upscale", "state": "pending",
+        "total": len(files), "processed": 0, "current": "", "error": "",
+        "config": req.model_dump(), "results": [],
+    }
+    _start_job(job, _run_upscale_job, (job_id, req, files, resolved),
+               local_model=True)
     return {"job_id": job_id, "total": len(files)}
 
 
@@ -2544,14 +2572,10 @@ async def api_ideogram_analyze_job_start(
     job_id = uuid.uuid4().hex
     job = {"id": job_id, "kind": "analyze", "state": "pending",
            "current": "", "error": "", "result": None}
-    with JOBS_LOCK:
-        # Florence (florence, hybrid) and local VLMs use our GPU; only LM Studio does not.
-        lm_only = engine == "vlm" and _lmstudio_model_id(model) is not None
-        if _busy() and not lm_only:
-            raise HTTPException(409, "Processing in progress — wait for it to finish.")
-        JOBS[job_id] = job
-    threading.Thread(target=_run_analyze_job,
-                     args=(job, image, engine, model, quant, max_tokens), daemon=True).start()
+    # Florence (florence, hybrid) and local VLMs use our GPU; only LM Studio does not.
+    lm_only = engine == "vlm" and _lmstudio_model_id(model) is not None
+    _start_job(job, _run_analyze_job, (job, image, engine, model, quant, max_tokens),
+               local_model=not lm_only)
     return {"job_id": job_id}
 
 
@@ -2627,12 +2651,9 @@ def api_prompt_job_start(req: PromptJobRequest):
     job_id = uuid.uuid4().hex
     job = {"id": job_id, "kind": "prompt", "state": "pending",
            "current": "", "error": "", "result": None}
-    with JOBS_LOCK:
-        # ensure_loaded swaps the shared model; LM Studio never touches our GPU.
-        if _busy() and _lmstudio_model_id(req.model) is None:
-            raise HTTPException(409, "Processing in progress — wait for it to finish.")
-        JOBS[job_id] = job
-    threading.Thread(target=_run_prompt_job, args=(job, req), daemon=True).start()
+    # ensure_loaded swaps the shared model; LM Studio never touches our GPU.
+    _start_job(job, _run_prompt_job, (job, req),
+               local_model=_lmstudio_model_id(req.model) is None)
     return {"job_id": job_id}
 
 

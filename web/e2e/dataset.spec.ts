@@ -677,3 +677,14 @@ test('clear crops ignores crops of files no longer in the folder', async ({ page
   await expect(page.getByText('0 of 2 images have a crop.')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Clear crops', exact: true })).toBeDisabled()
 })
+
+test('a busy GPU (409) shows the reason and the view does not start running', async ({ page }) => {
+  await page.route('**/api/process', (route) =>
+    route.fulfill({ status: 409, json: { detail: 'Processing in progress — wait for it to finish.' } }))
+  await processA(page)
+  await expect(
+    toasts(page).filter({ hasText: 'Processing in progress — wait for it to finish.' }),
+  ).toBeVisible()
+  await expect(page.getByTestId('job-progress')).toHaveCount(0)
+  await expect(processBtn(page)).toBeEnabled()
+})
