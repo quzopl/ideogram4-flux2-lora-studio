@@ -1956,16 +1956,18 @@ test('import under the typed name asks before overwriting', async ({ page }) => 
     await workflowName(page).fill(taken)
     const ask = page.getByRole('dialog', { name: `Overwrite workflow “${taken}”?` })
 
-    // Cancel: nothing sent, no picker.
+    // Asked once the file is picked; Cancel: nothing sent.
+    let chooser = page.waitForEvent('filechooser')
     await editorButton(page, 'Import from JSON').click()
+    await (await chooser).setFiles(file)
     await ask.getByRole('button', { name: 'Cancel' }).click()
     await expect(ask).toHaveCount(0)
     expect(imports).toEqual([])
 
-    let chooser = page.waitForEvent('filechooser')
+    chooser = page.waitForEvent('filechooser')
     await editorButton(page, 'Import from JSON').click()
-    await ask.getByRole('button', { name: 'Overwrite' }).click()
     await (await chooser).setFiles(file)
+    await ask.getByRole('button', { name: 'Overwrite' }).click()
     await expect(editorCard(page).getByText(`Imported "${taken}" (1 nodes) and saved to the library.`)).toBeVisible()
     const stored = await (await page.request.get(`/api/comfy/workflows/${encodeURIComponent(taken)}`)).json()
     expect(Object.keys(stored.workflow)).toEqual(['5'])
@@ -1979,7 +1981,110 @@ test('import under the typed name asks before overwriting', async ({ page }) => 
     await expect(page.getByRole('dialog')).toHaveCount(0)
     expect(imports).toHaveLength(2)
     expect((await page.request.get(`/api/comfy/workflows/${encodeURIComponent(stem)}`)).status()).toBe(404)
+
+    // No name typed: the file's name, saved meanwhile elsewhere (the list is asked again), asks too.
+    await page.request.post('/api/comfy/workflows', { data: { name: stem, value: { '1': { class_type: 'Old', inputs: {} } } } })
+    await workflowName(page).fill('')
+    const askStem = page.getByRole('dialog', { name: `Overwrite workflow “${stem}”?` })
+    chooser = page.waitForEvent('filechooser')
+    await editorButton(page, 'Import from JSON').click()
+    await (await chooser).setFiles(file)
+    await askStem.getByRole('button', { name: 'Cancel' }).click()
+    await expect(askStem).toHaveCount(0)
+    expect(imports).toHaveLength(2)
+    let kept = await (await page.request.get(`/api/comfy/workflows/${encodeURIComponent(stem)}`)).json()
+    expect(Object.keys(kept.workflow)).toEqual(['1'])
+
+    chooser = page.waitForEvent('filechooser')
+    await editorButton(page, 'Import from JSON').click()
+    await (await chooser).setFiles(file)
+    await askStem.getByRole('button', { name: 'Overwrite' }).click()
+    await expect(editorCard(page).getByText(`Imported "${stem}" (1 nodes) and saved to the library.`)).toBeVisible()
+    kept = await (await page.request.get(`/api/comfy/workflows/${encodeURIComponent(stem)}`)).json()
+    expect(Object.keys(kept.workflow)).toEqual(['5'])
+    expect(imports).toHaveLength(3)
   } finally {
     for (const n of [taken, fresh, stem]) await page.request.delete(`/api/comfy/workflows/${encodeURIComponent(n)}`)
   }
+})
+
+test('import over edits under a taken name asks both questions', async ({ page }) => {
+  const taken = `e2e chain ${Date.now()}`
+  await page.request.post('/api/comfy/workflows', { data: { name: taken, value: { '1': { class_type: 'Old', inputs: {} } } } })
+  const file = {
+    name: 'other.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ '5': { class_type: 'EmptyLatentImage', inputs: { width: 640 } } })),
+  }
+  try {
+    await loadFixtureInEditor(page)
+    const imports = collectPosts(page, ['/api/comfy/workflows/import'])
+    await workflowName(page).fill(taken)
+    await nodeField(page, '6', 'text').fill('kept edit')
+    await expect.poll(async () => (await savedEditor(page))?.dirty).toBe(true)
+    const discard = page.getByRole('dialog', { name: 'Discard your edits?' })
+    const overwrite = page.getByRole('dialog', { name: `Overwrite workflow “${taken}”?` })
+
+    // Cancel at the second question: nothing sent, the edits stay.
+    let chooser = page.waitForEvent('filechooser')
+    await editorButton(page, 'Import from JSON').click()
+    await discard.getByRole('button', { name: 'Import' }).click()
+    await (await chooser).setFiles(file)
+    await overwrite.getByRole('button', { name: 'Cancel' }).click()
+    await expect(overwrite).toHaveCount(0)
+    expect(imports).toEqual([])
+    await expect(nodeField(page, '6', 'text')).toHaveValue('kept edit')
+
+    chooser = page.waitForEvent('filechooser')
+    await editorButton(page, 'Import from JSON').click()
+    await discard.getByRole('button', { name: 'Import' }).click()
+    await (await chooser).setFiles(file)
+    await overwrite.getByRole('button', { name: 'Overwrite' }).click()
+    await expect(editorCard(page).getByText(`Imported "${taken}" (1 nodes) and saved to the library.`)).toBeVisible()
+    await expect(nodeField(page, '5', 'width')).toHaveValue('640')
+    const stored = await (await page.request.get(`/api/comfy/workflows/${encodeURIComponent(taken)}`)).json()
+    expect(Object.keys(stored.workflow)).toEqual(['5'])
+    expect(imports).toHaveLength(1)
+  } finally {
+    await page.request.delete(`/api/comfy/workflows/${encodeURIComponent(taken)}`)
+  }
+})
+
+test('a changed server URL asks for the LoRA list and node schemas again', async ({ page }) => {
+  let loras = 0
+  await page.route('**/api/comfy/loras', (route) => {
+    loras++
+    return route.fulfill({ json: { loras: ['one.safetensors'] } })
+  })
+  const schemas = await mockObjectInfo(page, OBJECT_INFO)
+  const tab = (name: string) => page.getByRole('tab', { name, exact: true })
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await loadFixtureInEditor(page)
+  await expect.poll(() => schemas.length).toBe(1)
+  await tab('LoRA test').click()
+  await expect.poll(() => loras).toBe(1)
+
+  // Saved in Settings: both asked again on return.
+  await nav.getByRole('link', { name: 'Settings', exact: true }).click()
+  await expect(urlField(page)).toHaveCount(0)
+  const settingsUrl = page.getByRole('textbox', { name: 'ComfyUI URL' })
+  await expect(settingsUrl).not.toHaveValue('')
+  await settingsUrl.fill(`http://127.0.0.1:9/s${Date.now()}`)
+  await settingsUrl.press('Enter')
+  await expect(page.getByText('ComfyUI URL saved')).toBeVisible()
+  await nav.getByRole('link', { name: 'ComfyUI', exact: true }).click()
+  await tab('LoRA test').click()
+  await expect.poll(() => loras).toBe(2)
+  await tab('Workflow editor').click()
+  await expect.poll(() => schemas.length).toBe(2)
+
+  // Saved on the Connection card: the same.
+  await urlField(page).fill(`http://127.0.0.1:9/c${Date.now()}`)
+  await page.getByRole('region', { name: 'Connection' }).getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText(/^Saved: /)).toBeVisible()
+  await expect.poll(() => schemas.length).toBe(3)
+  await tab('LoRA test').click()
+  await expect.poll(() => loras).toBe(3)
+  await page.waitForTimeout(500)
+  expect(loras).toBe(3)
+  expect(schemas).toEqual(['', '', ''])
 })

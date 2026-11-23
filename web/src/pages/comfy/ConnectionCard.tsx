@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 import { setUrlDraft, useComfyForm } from './formStore'
-import { errorText, patchConfig, useComfyConfig, type ConnectionTest } from './queries'
+import { comfyUrlChanged, errorText, patchConfig, useComfyConfig, type ConnectionTest } from './queries'
 import { StatusLine, type Status } from './StatusLine'
 
 /**
@@ -28,8 +28,7 @@ export function ConnectionCard() {
     try {
       const r = await api<{ url: string }>('/api/comfy/url', { method: 'POST', json: { url: value.trim() } })
       void patchConfig(qc, { url: r.url })
-      // Another server has other LoRAs.
-      void qc.invalidateQueries({ queryKey: ['comfy-loras'] })
+      void comfyUrlChanged(qc)
       setUrlDraft(undefined)
       return r.url
     } catch (e) {

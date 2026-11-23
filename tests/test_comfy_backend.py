@@ -296,6 +296,27 @@ def test_library_names_reject_slash(path, value):
     assert r.status_code == 200, r.text
 
 
+def test_workflow_import_checks_a_typed_name():
+    def post(name):
+        files = {"file": ("from file.json", json.dumps(API_WF).encode(), "application/json")}
+        return client.post("/api/comfy/workflows/import", files=files, data={"name": name})
+
+    r = post("a/b")
+    assert r.status_code == 400
+    assert r.json()["detail"] == 'Name must not contain "/".'
+    assert server._wf_names() == []
+
+    r = post(" ok ")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "ok"
+
+    # No name typed: the file's name.
+    r = post("   ")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "from file"
+    assert server._wf_names() == ["from file", "ok"]
+
+
 def test_legacy_slash_names_still_deletable():
     server.COMFY_MAPPINGS_PATH.write_text(
         json.dumps({"a/b": {"prompt_node": "6"}, "keep": {}}), encoding="utf-8")

@@ -171,7 +171,8 @@ their type, and an invalid field blocks Generate. A graph view highlights the
 node that is executing. The library saves, imports, loads and deletes
 workflows; actions that would replace the workflow ask first when there are
 unsaved edits, and an import that would overwrite a name asks too. **Save
-.json** downloads the workflow and **Reload from disk** re-reads the file.
+.json** downloads the workflow and **Reload from disk** loads the server's
+last editor workflow (the last one uploaded or generated).
 
 **Gallery** lists images newest first with a source badge (LoRA test, Editor
 or Ideogram); the dialog has copy, arrows, download and delete. A single image

@@ -10,13 +10,19 @@ import { useMutationWithToast } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { startJob, useComfyJobs } from '../comfyJobStore'
 import {
-  errorText, refreshObjectInfo, useObjectInfo, useWorkflows, workflowUrl, WORKFLOWS_KEY, type WorkflowImport,
+  errorText, freshWorkflows, refreshObjectInfo, useObjectInfo, useWorkflows, workflowUrl, WORKFLOWS_KEY, type WorkflowImport,
 } from '../queries'
 import { StatusLine, type Status } from '../StatusLine'
 import { getEditor, loadWorkflow, markSaved, reloadServerWorkflow, setName, useEditor } from './editorStore'
 import type { Workflow } from './schema'
 
 const START_KEY = ['comfy-editor-start']
+
+/** A file's name without its extension (as the server's `Path.stem`). */
+function fileStem(file: string) {
+  const dot = file.lastIndexOf('.')
+  return (dot > 0 ? file.slice(0, dot) : file).trim() || 'workflow'
+}
 
 /** A question before an action: Discard your edits?, Overwrite …?, Delete workflow?. */
 interface Ask {
@@ -84,21 +90,8 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
       confirm({ title: 'Discard your edits?', text: 'The edits you made to this workflow will be lost.', action, run })
     } else run()
   }
-  /** Import (after the edits question): one under the typed name of a saved workflow asks, then the file picker opens. */
-  const startImport = () =>
-    replace('Import', () => {
-      const n = getEditor().name.trim()
-      const pick = () => importInput.current?.click()
-      if (n && items.some((i) => i.name === n)) {
-        confirm({
-          title: `Overwrite workflow “${n}”?`,
-          text: 'The saved workflow will be replaced by the imported file.',
-          action: 'Overwrite',
-          destructive: true,
-          run: pick,
-        })
-      } else pick()
-    })
+  /** Import (after the edits question) opens the file picker; the name is decided once a file is picked. */
+  const startImport = () => replace('Import', () => importInput.current?.click())
 
   const saveFile = () => {
     const wf = getEditor().workflow
@@ -148,20 +141,36 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
     })
   }
 
-  // Saved under the typed name, else the file's.
-  const importFile = (file: File) =>
+  const importFile = (file: File, n: string) =>
     act('Import error: ', async () => {
       setStatus({ tone: 'info', text: 'Importing workflow…' })
       const body = new FormData()
       body.append('file', file)
-      const n = getEditor().name.trim()
-      if (n) body.append('name', n)
+      body.append('name', n)
       const r = await api<WorkflowImport>('/api/comfy/workflows/import', { method: 'POST', body })
       loadWorkflow(r.workflow, r.name)
       onLoaded()
       setPicked(r.name)
       setStatus({ tone: 'ok', text: `Imported "${r.name}" (${r.node_count} nodes) and saved to the library.` })
       await refreshList()
+    })
+
+  /**
+   * Under the typed name, else the file's; one the library has (asked again
+   * now: another tab may have saved it) asks before it is overwritten.
+   */
+  const pickedImport = (file: File) =>
+    act('Import error: ', async () => {
+      const n = getEditor().name.trim() || fileStem(file.name)
+      if ((await freshWorkflows(qc)).some((i) => i.name === n)) {
+        confirm({
+          title: `Overwrite workflow “${n}”?`,
+          text: 'The saved workflow will be replaced by the imported file.',
+          action: 'Overwrite',
+          destructive: true,
+          run: () => void importFile(file, n),
+        })
+      } else await importFile(file, n)
     })
 
   const load = (n: string) =>
@@ -242,7 +251,7 @@ export function EditorActions({ onLoaded }: { onLoaded: () => void }) {
             const f = e.target.files?.[0]
             // Reset, so the same file can be imported again.
             e.target.value = ''
-            if (f) void importFile(f)
+            if (f) void pickedImport(f)
           }}
         />
         <Select value={selected} onValueChange={setPicked}>

@@ -2096,7 +2096,9 @@ def api_comfy_workflows_save(req: NamedSave):
 
 @app.post("/api/comfy/workflows/import")
 async def api_comfy_workflows_import(file: UploadFile, name: str = Form("")):
-    """Import a workflow from an uploaded .json or ComfyUI .png into the library."""
+    """Import a workflow from an uploaded .json or ComfyUI .png into the library,
+    under the typed name (checked as any library name), else the file's."""
+    typed = _library_name(name) if name.strip() else ""
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "Empty file.")
@@ -2104,7 +2106,7 @@ async def api_comfy_workflows_import(file: UploadFile, name: str = Form("")):
         wf = comfy_workflows.extract_auto(file.filename or "", raw)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Failed to read the workflow: {e}")
-    nm = (name or "").strip() or Path(file.filename or "workflow").stem or "workflow"
+    nm = typed or Path(file.filename or "workflow").stem or "workflow"
     _wf_upsert(nm, wf)
     return {
         "ok": True,

@@ -180,6 +180,17 @@ export function useObjectInfo(enabled: boolean) {
 export const refreshObjectInfo = (qc: QueryClient) =>
   qc.fetchQuery({ queryKey: OBJECT_INFO_KEY, queryFn: () => fetchObjectInfo(true), staleTime: 0, retry: false })
 
+/**
+ * After a saved server URL (Connection card, Settings): another server has
+ * other LoRAs and nodes, asked again when next shown (the backend dropped its
+ * schema cache).
+ */
+export const comfyUrlChanged = (qc: QueryClient) =>
+  Promise.all([
+    qc.invalidateQueries({ queryKey: ['comfy-loras'] }),
+    qc.invalidateQueries({ queryKey: OBJECT_INFO_KEY }),
+  ])
+
 // ---- Workflow library (SQLite `workflows`) ---- //
 
 /** A saved workflow, without the workflow itself (it can be large). */
@@ -198,12 +209,15 @@ export interface WorkflowImport {
 
 export const WORKFLOWS_KEY = ['comfy-workflows']
 
+const fetchWorkflows = () => api<{ items: SavedWorkflow[] }>('/api/comfy/workflows').then((r) => r.items)
+
 /** By name (case-insensitive, as the server sorts). */
 export function useWorkflows() {
-  return useQuery({
-    queryKey: WORKFLOWS_KEY,
-    queryFn: () => api<{ items: SavedWorkflow[] }>('/api/comfy/workflows').then((r) => r.items),
-  })
+  return useQuery({ queryKey: WORKFLOWS_KEY, queryFn: fetchWorkflows })
 }
+
+/** The library as the server has it now (another tab may have saved meanwhile). */
+export const freshWorkflows = (qc: QueryClient) =>
+  qc.fetchQuery({ queryKey: WORKFLOWS_KEY, queryFn: fetchWorkflows, staleTime: 0 })
 
 export const workflowUrl = (name: string) => `/api/comfy/workflows/${encodeURIComponent(name)}`

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, FolderOpen, Upload } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -13,7 +13,7 @@ import { ROLE_LABEL } from '@/lib/format'
 import { useMutationWithToast, useSetModelsDir, useSettings } from '@/lib/queries'
 import type { Role, Settings } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { fetchComfyConfig } from '@/pages/comfy/queries'
+import { comfyUrlChanged, fetchComfyConfig } from '@/pages/comfy/queries'
 
 /** A settings card; a labelled region so tests and screen readers can find it by title. */
 function Section({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
@@ -192,12 +192,14 @@ interface UrlFieldProps<T> {
   urlOf: (data: T) => string
   save: (url: string) => Promise<unknown>
   success: string
+  /** After a successful save. */
+  onSaved?: () => void
 }
 
-function UrlField<T>({ label, queryKey, load, urlOf, save, success }: UrlFieldProps<T>) {
+function UrlField<T>({ label, queryKey, load, urlOf, save, success, onSaved }: UrlFieldProps<T>) {
   const query = useQuery({ queryKey: [queryKey], queryFn: load, select: urlOf })
   const [url, setUrl] = useState('')
-  const mutation = useMutationWithToast(save, { success, invalidate: [[queryKey]] })
+  const mutation = useMutationWithToast(save, { success, invalidate: [[queryKey]], onSuccess: onSaved })
 
   useEffect(() => {
     if (query.data !== undefined) setUrl(query.data)
@@ -226,6 +228,7 @@ function UrlField<T>({ label, queryKey, load, urlOf, save, success }: UrlFieldPr
 }
 
 function ServicesSection() {
+  const qc = useQueryClient()
   return (
     <Section title="Services" description="Local servers the app talks to.">
       <UrlField
@@ -243,6 +246,7 @@ function ServicesSection() {
         urlOf={(c) => c.url}
         save={(url) => api('/api/comfy/url', { method: 'POST', json: { url } })}
         success="ComfyUI URL saved"
+        onSaved={() => void comfyUrlChanged(qc)}
       />
     </Section>
   )
