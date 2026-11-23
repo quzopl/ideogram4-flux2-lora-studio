@@ -1434,7 +1434,7 @@ test('load workflow shows node cards and links', async ({ page }) => {
   await editorCard(page).getByRole('button', { name: 'Expand all' }).click()
   for (const id of ['3', '10']) await expect(nodeHeader(page, id)).toHaveAttribute('aria-expanded', 'true')
 
-  // The view switch: the graph comes later; the cards stay below it.
+  // The view switch: the graph above, the cards stay below it.
   await editorCard(page).getByRole('button', { name: 'Graph + parameters' }).click()
   await expect(editorCard(page).getByRole('button', { name: 'Graph + parameters' })).toHaveAttribute('aria-pressed', 'true')
   await expect(nodeCard(page, '3')).toBeVisible()
@@ -1686,4 +1686,203 @@ test('restored field errors do not block after a reload', async ({ page }) => {
   await nodeField(page, '6', 'text').fill('kept, edited')
   await expect.poll(async () => savedInput(page, '6', 'text')).toBe('kept, edited')
   expect((await savedEditor(page)).invalid).toEqual({})
+})
+
+// ---- Editor graph, actions and library (workflows* are real; generate and jobs are mocked) ----
+
+const editorButton = (page: Page, name: string) => editorCard(page).getByRole('button', { name, exact: true })
+const sendButton = (page: Page) => editorButton(page, 'Send to ComfyUI (generate)')
+const workflowGraph = (page: Page) => editorCard(page).getByRole('group', { name: 'Workflow graph' })
+const graphNode = (page: Page, id: string) => workflowGraph(page).locator(`[data-node-id="${id}"]`)
+const workflowName = (page: Page) => editorCard(page).getByRole('textbox', { name: 'Workflow name' })
+const savedWorkflows = (page: Page) => editorCard(page).getByRole('combobox', { name: 'Saved workflows' })
+
+async function loadFixtureInEditor(page: Page) {
+  await page.goto('/comfy?tab=editor')
+  await editorCard(page).getByLabel('Workflow file').setInputFiles(WORKFLOW)
+  await expect(editorCard(page).getByText('Loaded workflow from JSON file: 9 nodes.')).toBeVisible()
+}
+
+/** POST /api/comfy/editor/generate answers `jobId`; the bodies sent are collected. */
+async function mockEditorGenerate(page: Page, jobId: string) {
+  const bodies: Record<string, unknown>[] = []
+  await page.route('**/api/comfy/editor/generate', (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { job_id: jobId } })
+  })
+  return bodies
+}
+
+test('graph renders nodes and highlights executing node', async ({ page }) => {
+  await mockEditorGenerate(page, 'job-graph')
+  let state = 'running'
+  await mockJob(page, 'job-graph', () => state === 'running'
+    ? { state, current: 'Executing KSampler', current_node: '3' }
+    : { state, current: 'Finished (1/1)' })
+  await loadFixtureInEditor(page)
+  await expect(workflowGraph(page)).toHaveCount(0)
+  await editorButton(page, 'Graph + parameters').click()
+
+  await expect(workflowGraph(page).locator('[data-node-id]')).toHaveCount(9)
+  // One curve per link input.
+  await expect(workflowGraph(page).locator('path')).toHaveCount(13)
+  await expect(graphNode(page, '4').locator('title')).toHaveText('CheckpointLoaderSimple')
+  await expect(graphNode(page, '4')).toHaveAttribute('role', 'button')
+  // Layers: the checkpoint first, the sampler after the LoRAs and the prompts.
+  await expect(graphNode(page, '4')).toHaveAttribute('transform', 'translate(12, 12)')
+  await expect(graphNode(page, '3')).toHaveAttribute('transform', 'translate(932, 12)')
+  for (const id of ['3', '6']) await expect(graphNode(page, id)).not.toHaveClass(/\bactive\b/)
+
+  // A node opens its card: click, or Enter on the focused node.
+  await nodeHeader(page, '6').click()
+  await expect(nodeField(page, '6', 'text')).toBeHidden()
+  await graphNode(page, '6').click()
+  await expect(nodeField(page, '6', 'text')).toBeInViewport()
+  await nodeHeader(page, '7').click()
+  await graphNode(page, '7').focus()
+  await page.keyboard.press('Enter')
+  await expect(nodeField(page, '7', 'text')).toBeInViewport()
+
+  // The editor job's executing node is highlighted, until the job ends.
+  await sendButton(page).click()
+  await expect(graphNode(page, '3')).toHaveClass(/\bactive\b/)
+  await expect(workflowGraph(page).locator('.active')).toHaveCount(1)
+  state = 'done'
+  await expect(editorCard(page).getByText('Done: 0 image(s).')).toBeVisible()
+  await expect(workflowGraph(page).locator('.active')).toHaveCount(0)
+})
+
+test('send to comfy runs a job and shows images', async ({ page }) => {
+  const img = addImage({ id: galleryId('e'), ts: FUTURE + 30, prompt: 'editor image', seed: 77, source: 'editor' })
+  const bodies = await mockEditorGenerate(page, 'job-ed')
+  let state = 'running'
+  await mockJob(page, 'job-ed', () => state === 'running'
+    ? { state, current: 'Executing KSampler', current_node: '3', progress: { value: 3, max: 20 } }
+    : { state, current: 'Finished (1/1)', done_count: 1, images: [img] })
+  await loadFixtureInEditor(page)
+  await nodeField(page, '6', 'text').fill('sent prompt')
+  await expect.poll(async () => savedInput(page, '6', 'text')).toBe('sent prompt')
+
+  await sendButton(page).click()
+  await expect(editorCard(page).getByText('Executing KSampler  ·  3/20')).toBeVisible()
+  // One job at a time.
+  await expect(sendButton(page)).toBeDisabled()
+  expect(bodies).toEqual([{ workflow: (await savedEditor(page)).workflow }])
+  expect((bodies[0].workflow as Record<string, { inputs: Record<string, unknown> }>)['6'].inputs.text).toBe('sent prompt')
+
+  state = 'done'
+  await expect(editorCard(page).getByText('Done: 1 image(s).')).toBeVisible()
+  await expect(editorCard(page).getByRole('img', { name: 'Seed 77' })).toBeVisible()
+  await expect(sendButton(page)).toBeEnabled()
+  await expect.poll(async () => (await savedJobs(page)).editor.last?.state).toBe('done')
+  // The lora slot is untouched.
+  expect((await savedJobs(page)).lora).toEqual({ jobId: null })
+})
+
+test('generate blocked while a field is invalid', async ({ page }) => {
+  await loadFixtureInEditor(page)
+  await expect(sendButton(page)).toBeEnabled()
+  await nodeField(page, '3', 'steps').fill('')
+  await expect(sendButton(page)).toBeDisabled()
+  await expect(editorCard(page).getByText('Fix the fields marked above.')).toBeVisible()
+  await nodeField(page, '3', 'steps').fill('25')
+  await expect(sendButton(page)).toBeEnabled()
+  await expect(editorCard(page).getByText('Fix the fields marked above.')).toHaveCount(0)
+})
+
+test('save json downloads the edited workflow', async ({ page }) => {
+  await loadFixtureInEditor(page)
+  await nodeField(page, '6', 'text').fill('downloaded prompt')
+  await expect.poll(async () => savedInput(page, '6', 'text')).toBe('downloaded prompt')
+  const download = async () => {
+    const event = page.waitForEvent('download')
+    await editorButton(page, 'Save .json').click()
+    const d = await event
+    return { name: d.suggestedFilename(), text: fs.readFileSync(await d.path(), 'utf8') }
+  }
+  const first = await download()
+  expect(first.name).toBe('workflow_api.json')
+  expect(JSON.parse(first.text)['6'].inputs.text).toBe('downloaded prompt')
+  expect(JSON.parse(first.text)).toEqual((await savedEditor(page)).workflow)
+  // Pretty: two spaces.
+  expect(first.text).toContain('\n  "3": {\n    "class_type": "KSampler",\n')
+  await expect(editorCard(page).getByText('Downloaded workflow_api.json (ComfyUI API format).')).toBeVisible()
+
+  await workflowName(page).fill('my flow')
+  expect((await download()).name).toBe('my flow.json')
+})
+
+test('library save, load asks when dirty, delete asks', async ({ page }) => {
+  const name = `e2e-wf-${Date.now()}`
+  const card = editorCard(page)
+  await loadFixtureInEditor(page)
+  await expect(savedWorkflows(page)).toHaveText('— saved workflows —')
+
+  // A name is required.
+  await editorButton(page, 'Save to library').click()
+  await expect(card.getByText('Enter a workflow name.')).toBeVisible()
+
+  await nodeField(page, '6', 'text').fill('library version')
+  await expect.poll(async () => (await savedEditor(page))?.dirty).toBe(true)
+  await workflowName(page).fill(name)
+  await editorButton(page, 'Save to library').click()
+  await expect(card.getByText(`Saved workflow "${name}" to the library.`)).toBeVisible()
+  await expect(savedWorkflows(page)).toHaveText(`${name} (9 nodes)`)
+  await expect.poll(async () => (await savedEditor(page)).dirty).toBe(false)
+  const stored = await (await page.request.get(`/api/comfy/workflows/${encodeURIComponent(name)}`)).json()
+  expect(stored.workflow['6'].inputs.text).toBe('library version')
+
+  // Load over edits asks; Cancel keeps them.
+  await nodeField(page, '6', 'text').fill('edited after save')
+  await editorButton(page, 'Load').click()
+  const ask = page.getByRole('dialog', { name: 'Discard your edits?' })
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(nodeField(page, '6', 'text')).toHaveValue('edited after save')
+  await editorButton(page, 'Load').click()
+  await ask.getByRole('button', { name: 'Load' }).click()
+  await expect(card.getByText(`Loaded "${name}" (9 nodes).`)).toBeVisible()
+  await expect(nodeField(page, '6', 'text')).toHaveValue('library version')
+  await expect.poll(async () => (await savedEditor(page)).dirty).toBe(false)
+  // Nothing edited: no question.
+  await page.evaluate(() => sessionStorage.removeItem('flux.comfy.editor'))
+  await editorButton(page, 'Load').click()
+  await expect.poll(async () => (await savedEditor(page))?.workflow?.['6']?.inputs?.text).toBe('library version')
+  await expect(ask).toHaveCount(0)
+
+  // Reload from disk: the server's editor workflow (the file loaded above), asking over edits.
+  await nodeField(page, '6', 'text').fill('edited again')
+  await editorButton(page, 'Reload from disk').click()
+  await page.getByRole('dialog', { name: 'Discard your edits?' }).getByRole('button', { name: 'Reload' }).click()
+  await expect(card.getByText('Reloaded the workflow from disk: 9 nodes.')).toBeVisible()
+  await expect(nodeField(page, '6', 'text')).toHaveValue(WORKFLOW_PROMPT)
+  await expect(ask).toHaveCount(0)
+
+  await editorButton(page, 'Delete').click()
+  await page.getByRole('dialog', { name: 'Delete workflow?' }).getByRole('button', { name: 'Delete' }).click()
+  await expect(card.getByText(`Deleted "${name}".`)).toBeVisible()
+  await expect(savedWorkflows(page)).toHaveText('— saved workflows —')
+  expect((await page.request.get(`/api/comfy/workflows/${encodeURIComponent(name)}`)).status()).toBe(404)
+})
+
+test('library import saves and loads the file', async ({ page }) => {
+  const stem = `e2e-import-${Date.now()}`
+  await loadFixtureInEditor(page)
+  await editorCard(page).getByLabel('JSON or PNG to import').setInputFiles({
+    name: `${stem}.json`,
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      '5': { class_type: 'EmptyLatentImage', inputs: { width: 640 } },
+      '9': { class_type: 'SaveImage', inputs: { images: ['5', 0] } },
+    })),
+  })
+  try {
+    await expect(editorCard(page).getByText(`Imported "${stem}" (2 nodes) and saved to the library.`)).toBeVisible()
+    await expect(nodeField(page, '5', 'width')).toHaveValue('640')
+    await expect(nodeCard(page, '3')).toHaveCount(0)
+    await expect(savedWorkflows(page)).toHaveText(`${stem} (2 nodes)`)
+    await expect(workflowName(page)).toHaveValue(stem)
+    expect((await page.request.get(`/api/comfy/workflows/${encodeURIComponent(stem)}`)).status()).toBe(200)
+  } finally {
+    await page.request.delete(`/api/comfy/workflows/${encodeURIComponent(stem)}`)
+  }
 })

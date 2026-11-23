@@ -86,6 +86,19 @@ export function loadWorkflow(workflow: Workflow, name?: string) {
   update({ workflow, name: name ?? state.name, dirty: false, invalid: {}, loads: state.loads + 1 })
 }
 
+/** The library name typed for the workflow (Save to library, Import and the .json file name use it). */
+export function setName(name: string) {
+  if (name !== state.name) update({ ...state, name })
+}
+
+/**
+ * `workflow` was saved to the library as `name`: unchanged since, unless it
+ * was edited while the save was on its way.
+ */
+export function markSaved(name: string, workflow: Workflow) {
+  update({ ...state, name, dirty: state.workflow === workflow ? false : state.dirty })
+}
+
 /** `normalize`: the app rewrote the value into the form ComfyUI expects (not the user's edit, so not dirty). */
 export interface WriteOptions {
   normalize?: boolean
@@ -143,6 +156,18 @@ export function loadServerWorkflow(): Promise<number | null> {
     () => null,
   )
   return serverLoad
+}
+
+/**
+ * "Reload from disk": the server's last editor workflow, asked now (edits are
+ * replaced). Resolves with its node count; null, the draft kept, when the
+ * server has none.
+ */
+export async function reloadServerWorkflow(): Promise<number | null> {
+  const r = await api<{ workflow: Workflow | null; node_count: number }>('/api/comfy/editor/workflow')
+  if (!isWorkflow(r.workflow) || Object.keys(r.workflow).length === 0) return null
+  loadWorkflow(r.workflow)
+  return Object.keys(r.workflow).length
 }
 
 function subscribe(l: () => void) {

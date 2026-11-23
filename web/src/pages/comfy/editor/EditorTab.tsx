@@ -1,16 +1,18 @@
-import { useQueryClient } from '@tanstack/react-query'
-import { ChevronsDownUp, ChevronsUpDown, List, Network, RefreshCw, Search } from 'lucide-react'
+import { ChevronsDownUp, ChevronsUpDown, List, Network, Search } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { errorText, refreshObjectInfo, useObjectInfo } from '../queries'
+import { ComfyJobBox } from '../ComfyJobBox'
+import { errorText, useObjectInfo } from '../queries'
 import { StatusLine, type Status } from '../StatusLine'
 import { WorkflowDrop } from '../WorkflowDrop'
+import { EditorActions } from './EditorActions'
 import { flushEditor, loadServerWorkflow, loadWorkflow, useEditor } from './editorStore'
 import { EditorCardContext, NodeCard, nodeCardId, type CardContext } from './NodeCard'
 import { buildKnownEnums, sortNodeIds, type Workflow } from './schema'
+import { WorkflowGraph } from './WorkflowGraph'
 
 type Mode = 'list' | 'hybrid'
 
@@ -29,7 +31,6 @@ const FLASH_MS = 1500
  */
 export function EditorTab() {
   const uid = useId()
-  const qc = useQueryClient()
   const { workflow, loads } = useEditor()
   const info = useObjectInfo(!!workflow)
   const [mode, setMode] = useState<Mode>('list')
@@ -51,6 +52,8 @@ export function EditorTab() {
     }
   }, [])
 
+  const resetView = useCallback(() => setCollapsed(new Set()), [])
+
   const upload = async (file: File) => {
     setLoading(true)
     setStatus({ tone: 'info', text: `Loading ${file.name}…` })
@@ -59,7 +62,7 @@ export function EditorTab() {
     try {
       const r = await api<EditorLoad>('/api/comfy/editor/load', { method: 'POST', body })
       loadWorkflow(r.workflow)
-      setCollapsed(new Set())
+      resetView()
       const from = r.source === 'png' ? 'from PNG metadata' : 'from JSON file'
       setStatus({ tone: 'ok', text: `Loaded workflow ${from}: ${r.node_count} nodes.` })
     } catch (e) {
@@ -149,9 +152,7 @@ export function EditorTab() {
         <>
           <SchemaStatus info={info} enumCount={enums ? Object.keys(enums).length : 0} />
           {mode === 'hybrid' && (
-            <p className="rounded-lg border border-dashed border-line px-3 py-6 text-center text-sm text-text-dim">
-              The graph is not in the new studio yet — the node list is below.
-            </p>
+            <WorkflowGraph workflow={workflow} classTypes={classTypes} onFocus={focusNode} selected={flash?.id ?? null} />
           )}
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-48 flex-1">
@@ -172,16 +173,6 @@ export function EditorTab() {
               <ChevronsDownUp />
               Collapse all
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              title="Fetch /object_info from ComfyUI — enables dropdowns for lora/ckpt/sampler"
-              disabled={info.isFetching}
-              onClick={() => void refreshObjectInfo(qc).catch(() => {})}
-            >
-              <RefreshCw className={cn(info.isFetching && 'animate-spin')} />
-              ComfyUI schemas
-            </Button>
           </div>
           <EditorCardContext value={ctx}>
             {/* Keyed by the load: a new workflow gets new controls (their kind follows the value they start with). */}
@@ -199,8 +190,10 @@ export function EditorTab() {
               ))}
             </div>
           </EditorCardContext>
+          <EditorActions onLoaded={resetView} />
         </>
       )}
+      <ComfyJobBox slot="editor" />
     </section>
   )
 }

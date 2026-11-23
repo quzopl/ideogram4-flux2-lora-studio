@@ -6,6 +6,7 @@ import {
   buildKnownEnums, choicesOf, controlSchema, fieldSchema, fixEnumValue, getSchema, getSchemaForName, isDictValue, isLinkValue,
   numberSpec, parseJson, sortNodeIds, type ObjectInfo,
 } from '../src/pages/comfy/editor/schema.ts'
+import { layoutGraph } from '../src/pages/comfy/editor/layout.ts'
 
 test('fmtEta formats like classic', () => {
   expect(fmtEta(0)).toBe('0s')
@@ -325,4 +326,45 @@ test('fieldSchema: the class schema, else a list guessed for a string or null', 
   expect(fieldSchema(V3, enums, 'MyNode', 'sampler', true)).toBeNull()
   // A dict key (no class): the guess alone.
   expect(fieldSchema(null, enums, undefined, 'sampler', 'euler')).toEqual([enums.sampler_name, {}])
+})
+
+/** A workflow from `id: [source ids]` (each source one link input). */
+const graphOf = (edges: Record<string, string[]>) =>
+  Object.fromEntries(Object.entries(edges).map(([id, ups]) => [
+    id, { class_type: 'N', inputs: { seed: 1, ...Object.fromEntries(ups.map((u, i) => [`in${i}`, [u, 0]])) } },
+  ]))
+/** The layer of every node, read back from its x (12 + layer * (170 + 60)). */
+const layersOf = (g: ReturnType<typeof layoutGraph>) => Object.fromEntries(g.nodes.map((n) => [n.id, (n.x - 12) / 230]))
+
+test('layoutGraph: a chain gives one layer per step', () => {
+  const g = layoutGraph(graphOf({ '1': [], '2': ['1'], '3': ['2'] }))
+  expect(layersOf(g)).toEqual({ '1': 0, '2': 1, '3': 2 })
+  expect(g.nodes.map((n) => n.y)).toEqual([12, 12, 12])
+  expect(g.links).toEqual([{ from: '1', to: '2' }, { from: '2', to: '3' }])
+  // max(x + 170, 200) + 16 by max(y + 36, 100) + 16.
+  expect([g.width, g.height]).toEqual([12 + 2 * 230 + 170 + 16, 100 + 16])
+})
+
+test('layoutGraph: the longest path decides the layer', () => {
+  const g = layoutGraph(graphOf({ '4': ['2', '3'], '3': ['1'], '2': ['1'], '1': [], '5': ['1', '4'] }))
+  expect(layersOf(g)).toEqual({ '1': 0, '2': 1, '3': 1, '4': 2, '5': 3 })
+  // Within a layer by numeric id.
+  const at = (id: string) => g.nodes.find((n) => n.id === id)!
+  expect([at('2').y, at('3').y]).toEqual([12, 72])
+})
+
+test('layoutGraph: cycles, missing sources and dense graphs end', () => {
+  const cycle = layoutGraph(graphOf({ '1': ['2'], '2': ['1'] }))
+  expect(cycle.nodes.map((n) => n.id).sort()).toEqual(['1', '2'])
+  expect(cycle.links).toHaveLength(2)
+  // A link to a node that is not in the workflow is no link.
+  const missing = layoutGraph(graphOf({ '1': ['99'] }))
+  expect(layersOf(missing)).toEqual({ '1': 0 })
+  expect(missing.links).toEqual([])
+  expect(layoutGraph({})).toEqual({ nodes: [], links: [], width: 216, height: 116 })
+  // Every node fed by all before it: quick, not exponential.
+  const dense = graphOf(Object.fromEntries(Array.from({ length: 300 }, (_, i) => [String(i), Array.from({ length: i }, (_, j) => String(j))])))
+  const t = Date.now()
+  expect(layersOf(layoutGraph(dense))['299']).toBe(299)
+  expect(Date.now() - t).toBeLessThan(2000)
 })

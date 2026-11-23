@@ -1,6 +1,6 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
-import type { ObjectInfo } from './editor/schema'
+import type { ObjectInfo, Workflow } from './editor/schema'
 
 /**
  * The active node mapping (comfy_workflows.autodetect_mapping), edited by the
@@ -179,3 +179,31 @@ export function useObjectInfo(enabled: boolean) {
 /** Asks ComfyUI again, past the backend's cache ("↻ ComfyUI schemas"). */
 export const refreshObjectInfo = (qc: QueryClient) =>
   qc.fetchQuery({ queryKey: OBJECT_INFO_KEY, queryFn: () => fetchObjectInfo(true), staleTime: 0, retry: false })
+
+// ---- Workflow library (SQLite `workflows`) ---- //
+
+/** A saved workflow, without the workflow itself (it can be large). */
+export interface SavedWorkflow {
+  name: string
+  node_count: number
+  updated: number
+}
+
+/** POST /api/comfy/workflows/import. */
+export interface WorkflowImport {
+  name: string
+  node_count: number
+  workflow: Workflow
+}
+
+export const WORKFLOWS_KEY = ['comfy-workflows']
+
+/** By name (case-insensitive, as the server sorts). */
+export function useWorkflows() {
+  return useQuery({
+    queryKey: WORKFLOWS_KEY,
+    queryFn: () => api<{ items: SavedWorkflow[] }>('/api/comfy/workflows').then((r) => r.items),
+  })
+}
+
+export const workflowUrl = (name: string) => `/api/comfy/workflows/${encodeURIComponent(name)}`
