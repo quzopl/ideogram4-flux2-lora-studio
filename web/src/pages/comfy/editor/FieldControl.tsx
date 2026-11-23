@@ -33,10 +33,15 @@ export function FieldControl({ id, fieldKey, name, value, schema, onChange, json
   const [initial] = useState(value)
   const spec = controlSchema(schema)
   const type = spec?.[0]
+  const num = numberSpec(spec, initial, name)
+  const kind = json ? 'json' : Array.isArray(type) ? 'enum' : type === 'BOOLEAN' || (!spec && typeof initial === 'boolean') ? 'bool' : num ? 'number' : 'text'
+  // A control that goes away (unmounted, or another kind once the schemas arrive) takes its error with it:
+  // nothing could clear it later. The new control reports its own validity.
+  useEffect(() => () => setInvalid(fieldKey, null), [fieldKey, kind])
 
   if (json) return <JsonField id={id} fieldKey={fieldKey} value={value} onChange={onChange} />
   if (Array.isArray(type)) return <EnumField id={id} choices={type} value={value} onChange={onChange} />
-  if (type === 'BOOLEAN' || (!spec && typeof initial === 'boolean')) {
+  if (kind === 'bool') {
     return (
       <input
         id={id}
@@ -47,7 +52,6 @@ export function FieldControl({ id, fieldKey, name, value, schema, onChange, json
       />
     )
   }
-  const num = numberSpec(spec, initial, name)
   if (num) {
     return (
       <NumberInput

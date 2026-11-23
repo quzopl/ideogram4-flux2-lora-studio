@@ -1,5 +1,5 @@
 import { ChevronDown } from 'lucide-react'
-import { createContext, memo, useContext, type ReactNode } from 'react'
+import { createContext, memo, useContext, useState, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { setInput, setSubInput } from './editorStore'
 import { FieldControl } from './FieldControl'
@@ -28,6 +28,21 @@ interface NodeCardProps {
 
 const domId = (s: string) => s.replace(/[^\w-]/g, '_')
 
+/** How an input is shown: a read-only link, dict sub-rows, JSON (a list that is not a link), or one control. */
+type RowKind = 'link' | 'dict' | 'json' | 'scalar'
+
+const rowKind = (v: unknown): RowKind =>
+  isLinkValue(v) ? 'link' : isDictValue(v) ? 'dict' : Array.isArray(v) ? 'json' : 'scalar'
+
+/**
+ * Each input's row kind as the node had it when the card mounted: a JSON edit
+ * that changes the shape (e.g. to `[1, 2]`, a link's shape) keeps its control.
+ */
+function useRowKinds(values: Record<string, unknown>) {
+  const [kinds] = useState(() => Object.fromEntries(Object.entries(values).map(([k, v]) => [k, rowKind(v)])))
+  return (k: string) => kinds[k] ?? rowKind(values[k])
+}
+
 /** The card's element id (a link or the graph scrolls to it). */
 export const nodeCardId = (id: string) => `edn-${domId(id)}`
 
@@ -35,9 +50,11 @@ export const nodeCardId = (id: string) => `edn-${domId(id)}`
 export const NodeCard = memo(function NodeCard({ id, node, collapsed, dimmed, flash, onToggle }: NodeCardProps) {
   const { info, enums, classTypes, focusNode } = useContext(EditorCardContext)
   const cardId = nodeCardId(id)
-  const fields = Object.entries(node.inputs ?? {})
-  const literals = fields.filter(([, v]) => !isLinkValue(v))
-  const links = fields.filter(([, v]) => isLinkValue(v)) as [string, [string | number, number]][]
+  const inputs = node.inputs ?? {}
+  const kindOf = useRowKinds(inputs)
+  const fields = Object.entries(inputs)
+  const literals = fields.filter(([k]) => kindOf(k) !== 'link')
+  const links = fields.filter(([k, v]) => kindOf(k) === 'link' && isLinkValue(v)) as [string, [string | number, number]][]
 
   return (
     <section
@@ -68,10 +85,11 @@ export const NodeCard = memo(function NodeCard({ id, node, collapsed, dimmed, fl
         {literals.map(([field, value]) => {
           const fid = `${cardId}-f-${domId(field)}`
           const key = `${id}.${field}`
-          if (isDictValue(value)) {
+          const kind = kindOf(field)
+          if (kind === 'dict') {
             return (
               <Row key={field} label={field}>
-                <DictRows id={id} field={field} dict={value} fid={fid} enums={enums} />
+                <DictRows id={id} field={field} dict={isDictValue(value) ? value : {}} fid={fid} enums={enums} />
               </Row>
             )
           }
@@ -83,7 +101,7 @@ export const NodeCard = memo(function NodeCard({ id, node, collapsed, dimmed, fl
                 name={field}
                 value={value}
                 schema={getSchema(info, node.class_type, field) ?? getSchemaForName(enums, field)}
-                json={Array.isArray(value)}
+                json={kind === 'json'}
                 onChange={(v) => setInput(id, field, v)}
               />
             </Row>
@@ -128,6 +146,7 @@ function DictRows({ id, field, dict, fid, enums }: {
   fid: string
   enums: KnownEnums | null
 }) {
+  const kindOf = useRowKinds(dict)
   const keys = Object.keys(dict)
   if (keys.length === 0) return <p className="text-xs text-text-dim">(empty object)</p>
   return (
@@ -143,7 +162,7 @@ function DictRows({ id, field, dict, fid, enums }: {
               name={k}
               value={v}
               schema={getSchemaForName(enums, k)}
-              json={isDictValue(v) || Array.isArray(v)}
+              json={kindOf(k) !== 'scalar'}
               onChange={(nv) => setSubInput(id, field, k, nv)}
             />
           </Row>

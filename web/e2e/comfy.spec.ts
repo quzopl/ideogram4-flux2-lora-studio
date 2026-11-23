@@ -1552,9 +1552,21 @@ test('dict inputs and nested values', async ({ page }) => {
   await expect(card.getByText(/^Invalid JSON: /)).toBeVisible()
   await expect.poll(async () => Object.keys((await savedEditor(page))?.invalid ?? {})).toEqual(['1.pairs'])
   expect(await savedInput(page, '1', 'pairs')).toEqual([{ a: 2 }, 3])
+  // An edit that changes the shape keeps the JSON field (a link's shape, a plain number).
+  await pairs.fill('[1, 2]')
+  await expect.poll(async () => savedInput(page, '1', 'pairs')).toEqual([1, 2])
+  await expect(card.getByLabel('pairs', { exact: true })).toHaveJSProperty('tagName', 'TEXTAREA')
+  await expect(card.getByRole('button', { name: /^→ #1 / })).toHaveCount(0)
+  await pairs.fill('5')
+  await expect.poll(async () => savedInput(page, '1', 'pairs')).toBe(5)
+  await expect(card.getByLabel('pairs', { exact: true })).toHaveJSProperty('tagName', 'TEXTAREA')
+  expect((await savedEditor(page)).invalid).toEqual({})
   const extra = card.getByLabel('extra', { exact: true })
   await extra.fill('{"deep": 2}')
   await expect.poll(async () => (await savedInput(page, '1', 'lora_1'))?.extra).toEqual({ deep: 2 })
+  await extra.fill('5')
+  await expect.poll(async () => (await savedInput(page, '1', 'lora_1'))?.extra).toBe(5)
+  await expect(card.getByLabel('extra', { exact: true })).toHaveJSProperty('tagName', 'TEXTAREA')
 
   // A null value: empty text, typed text is a string.
   const dtype = nodeField(page, '2', 'weight_dtype')
@@ -1611,4 +1623,23 @@ test('editor state over the storage quota shows a toast', async ({ page }) => {
   await expect(page.getByText('Could not keep the edited workflow in this tab.')).toBeVisible()
   // The editor carries on with the draft in memory.
   await expect(nodeField(page, '6', 'text')).toHaveValue(WORKFLOW_PROMPT)
+})
+
+test('a field that becomes another control drops its error', async ({ page }) => {
+  // The schemas arrive only when released: until then `sampler` (a number) is a number field.
+  let release!: () => void
+  const arrived = new Promise<void>((r) => (release = r))
+  await page.route((url) => url.pathname === '/api/comfy/object_info', async (route) => {
+    await arrived
+    return route.fulfill({ json: OBJECT_INFO })
+  })
+  await page.goto('/comfy?tab=editor')
+  await loadEditorJson(page, { '20': { class_type: 'MyNode', inputs: { sampler: 3 } } })
+  await nodeField(page, '20', 'sampler').fill('')
+  await expect.poll(async () => Object.keys((await savedEditor(page))?.invalid ?? {})).toEqual(['20.sampler'])
+
+  // Now a list guessed from the name: the number field and its error are gone, so nothing blocks.
+  release()
+  await expect(nodeField(page, '20', 'sampler')).toHaveJSProperty('tagName', 'SELECT')
+  await expect.poll(async () => (await savedEditor(page)).invalid).toEqual({})
 })
