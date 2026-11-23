@@ -37,7 +37,7 @@ def _request(url: str, *, data: bytes | None = None, timeout: float = 30.0) -> b
             return resp.read()
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")[:600]
-        raise ComfyError(f"HTTP {e.code} z {url}: {body}") from None
+        raise ComfyError(f"HTTP {e.code} from {url}: {body}") from None
     except urllib.error.URLError as e:
         raise ComfyError(f"No connection to {url}: {e.reason}") from None
 

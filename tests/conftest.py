@@ -52,3 +52,25 @@ def prompt_db(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "DB_PATH", tmp_path / "flux_prep.db")
     server._init_db()
     return tmp_path / "flux_prep.db"
+
+
+@pytest.fixture
+def comfy_store(tmp_path, monkeypatch):
+    """Every ComfyUI store under ``tmp_path`` (not autouse): config, mapping and
+    prompt libraries, the gallery, the SQLite DB (workflow library) and the
+    Ideogram render params; the object_info cache and the job table start empty."""
+    from backend import server
+    gallery = tmp_path / "comfy_gallery"
+    gallery.mkdir()
+    monkeypatch.setattr(server, "COMFY_CONFIG_PATH", tmp_path / "comfy_config.json")
+    monkeypatch.setattr(server, "COMFY_MAPPINGS_PATH", tmp_path / "comfy_mappings.json")
+    monkeypatch.setattr(server, "COMFY_PROMPTS_PATH", tmp_path / "comfy_prompts.json")
+    monkeypatch.setattr(server, "COMFY_WORKFLOWS_PATH", tmp_path / "comfy_workflows.json")
+    monkeypatch.setattr(server, "IDEOGRAM_RENDER_CFG_PATH", tmp_path / "ideogram_render.json")
+    monkeypatch.setattr(server, "COMFY_GALLERY_DIR", gallery)
+    monkeypatch.setattr(server, "DB_PATH", tmp_path / "flux_prep.db")
+    server._init_db()
+    monkeypatch.setattr(server, "_OBJECT_INFO_CACHE", {"url": None, "data": None, "ts": 0.0})
+    server.COMFY_JOBS.clear()
+    yield tmp_path
+    server.COMFY_JOBS.clear()

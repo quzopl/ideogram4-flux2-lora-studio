@@ -123,7 +123,8 @@ def test_render_endpoint_starts_job(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "IDEOGRAM_RENDER_CFG_PATH", tmp_path / "r.json")
     captured = {}
     monkeypatch.setattr(server, "_run_comfy_raw_job",
-                        lambda job_id, wf: captured.update(job=job_id, wf=wf))
+                        lambda job_id, wf, source="editor": captured.update(
+                            job=job_id, wf=wf, source=source))
     out = server.api_ideogram_render(server.IdeogramRenderRequest(
         prompt=V15, params={"preset": "Default", "seed": 7}))
     assert out["job_id"]

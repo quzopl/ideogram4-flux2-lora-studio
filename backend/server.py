@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 import traceback
@@ -1444,8 +1445,33 @@ def _load_comfy_config() -> dict:
         return {"url": comfy_client.DEFAULT_URL, "workflow": None, "mapping": None}
 
 
+_COMFY_CONFIG_LOCK = threading.Lock()
+
+
 def _save_comfy_config(cfg: dict) -> None:
-    COMFY_CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    """Atomic write: temp file in the same folder, fsync, then os.replace."""
+    tmp = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=COMFY_CONFIG_PATH.parent,
+                                      delete=False, suffix=".tmp")
+    try:
+        with tmp:
+            json.dump(cfg, tmp, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp.name, COMFY_CONFIG_PATH)
+    except BaseException:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
+
+
+def _update_comfy_config(fn: Callable[[dict], None]) -> dict:
+    """The only write path for comfy_config.json: load, apply ``fn``, save, all
+    under one lock so concurrent requests never lose each other's changes. An
+    exception from ``fn`` aborts without writing."""
+    with _COMFY_CONFIG_LOCK:
+        cfg = _load_comfy_config()
+        fn(cfg)
+        _save_comfy_config(cfg)
+        return cfg
 
 
 class ComfyUrlRequest(BaseModel):
@@ -1470,10 +1496,11 @@ def api_comfy_config():
 
 @app.post("/api/comfy/url")
 def api_comfy_set_url(req: ComfyUrlRequest):
-    cfg = _load_comfy_config()
-    cfg["url"] = req.url.strip().rstrip("/")
-    _save_comfy_config(cfg)
-    return {"url": cfg["url"]}
+    url = req.url.strip().rstrip("/")
+    _update_comfy_config(lambda cfg: cfg.update(url=url))
+    # A new (or the same, restarted) ComfyUI may have other nodes: refetch schemas.
+    _OBJECT_INFO_CACHE.update({"url": None, "data": None, "ts": 0.0})
+    return {"url": url}
 
 
 @app.post("/api/comfy/test")
@@ -1499,10 +1526,8 @@ async def api_comfy_workflow(file: UploadFile):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Failed to read the workflow: {e}")
 
-    cfg = _load_comfy_config()
-    cfg["workflow"] = workflow
-    cfg["mapping"] = mapping
-    _save_comfy_config(cfg)
+    await run_in_threadpool(_update_comfy_config,
+                            lambda cfg: cfg.update(workflow=workflow, mapping=mapping))
     return {
         "node_count": len(workflow),
         "mapping": mapping,
@@ -1514,12 +1539,12 @@ async def api_comfy_workflow(file: UploadFile):
 @app.post("/api/comfy/mapping")
 def api_comfy_mapping(req: ComfyMappingRequest):
     """User can manually fix the auto-detected mapping if anything was wrong."""
-    cfg = _load_comfy_config()
-    if not cfg.get("workflow"):
-        raise HTTPException(400, "Najpierw wgraj workflow.")
-    cfg["mapping"] = req.mapping
-    _save_comfy_config(cfg)
-    return {"mapping": cfg["mapping"]}
+    def apply(cfg: dict) -> None:
+        if not cfg.get("workflow"):
+            raise HTTPException(400, "Upload a workflow first.")
+        cfg["mapping"] = req.mapping
+
+    return {"mapping": _update_comfy_config(apply)["mapping"]}
 
 
 @app.get("/api/comfy/loras")
@@ -1787,6 +1812,8 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
                             "loras": req.loras,
                             "ts": time.time(),
                             "url": f"/api/comfy/gallery/{item_id}",
+                            "source": "lora_test",
+                            **_image_size(data),
                         }
                         # Sidecar JSON with metadata (so gallery survives restart).
                         (COMFY_GALLERY_DIR / f"{item_id}.json").write_text(
@@ -1810,7 +1837,7 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
 def api_comfy_generate(req: ComfyGenerateRequest):
     cfg = _load_comfy_config()
     if not cfg.get("workflow") or not cfg.get("mapping"):
-        raise HTTPException(400, "Najpierw wgraj workflow w sekcji Konfiguracja.")
+        raise HTTPException(400, "Upload a workflow first (LoRA test → Workflow).")
 
     job_id = uuid.uuid4().hex[:12]
     with COMFY_JOBS_LOCK:
@@ -1897,14 +1924,37 @@ def api_comfy_gallery_item(item_id: str):
     return FileResponse(str(p), media_type="image/png")
 
 
+def _image_size(data: bytes) -> dict:
+    """{"width", "height"} of an encoded image; {} when PIL cannot read it."""
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            return {"width": im.width, "height": im.height}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _gallery_order(meta: dict) -> tuple:
+    """Newest first, items without a numeric ts last, ties by id."""
+    ts = meta.get("ts")
+    has_ts = isinstance(ts, (int, float)) and not isinstance(ts, bool)
+    return (not has_ts, -ts if has_ts else 0, str(meta.get("id", "")))
+
+
 @app.get("/api/comfy/gallery")
 def api_comfy_gallery_list():
+    """Sidecar metadata, newest first. Items written before ``source`` existed
+    come from the LoRA test; ``width``/``height`` may be missing on old items."""
     items: list[dict] = []
-    for meta_path in sorted(COMFY_GALLERY_DIR.glob("*.json"), reverse=True):
+    for meta_path in COMFY_GALLERY_DIR.glob("*.json"):
         try:
-            items.append(json.loads(meta_path.read_text(encoding="utf-8")))
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             continue
+        if not isinstance(meta, dict):
+            continue
+        meta.setdefault("source", "lora_test")
+        items.append(meta)
+    items.sort(key=_gallery_order)
     return {"items": items}
 
 
@@ -1936,6 +1986,16 @@ class NamedSave(BaseModel):
     value: dict | str
 
 
+def _library_name(raw: str) -> str:
+    """A stripped library name; 400 when empty or when it contains "/"."""
+    name = raw.strip()
+    if not name:
+        raise HTTPException(400, "Enter a name.")
+    if "/" in name:
+        raise HTTPException(400, 'Name must not contain "/".')
+    return name
+
+
 @app.get("/api/comfy/mappings")
 def api_comfy_mappings_list():
     return {"items": _load_named(COMFY_MAPPINGS_PATH)}
@@ -1943,9 +2003,7 @@ def api_comfy_mappings_list():
 
 @app.post("/api/comfy/mappings")
 def api_comfy_mappings_save(req: NamedSave):
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(400, "Enter a name.")
+    name = _library_name(req.name)
     if not isinstance(req.value, dict):
         raise HTTPException(400, "The mapping must be a JSON object.")
     data = _load_named(COMFY_MAPPINGS_PATH)
@@ -1954,7 +2012,7 @@ def api_comfy_mappings_save(req: NamedSave):
     return {"ok": True, "items": data}
 
 
-@app.delete("/api/comfy/mappings/{name}")
+@app.delete("/api/comfy/mappings/{name:path}")
 def api_comfy_mappings_delete(name: str):
     data = _load_named(COMFY_MAPPINGS_PATH)
     data.pop(name, None)
@@ -1970,16 +2028,14 @@ def api_comfy_prompts_list():
 
 @app.post("/api/comfy/prompts")
 def api_comfy_prompts_save(req: NamedSave):
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(400, "Enter a name.")
+    name = _library_name(req.name)
     data = _load_named(COMFY_PROMPTS_PATH)
     data[name] = req.value if isinstance(req.value, str) else json.dumps(req.value)
     _save_named(COMFY_PROMPTS_PATH, data)
     return {"ok": True, "items": data}
 
 
-@app.delete("/api/comfy/prompts/{name}")
+@app.delete("/api/comfy/prompts/{name:path}")
 def api_comfy_prompts_delete(name: str):
     data = _load_named(COMFY_PROMPTS_PATH)
     data.pop(name, None)
@@ -2021,19 +2077,17 @@ def api_comfy_workflows_list():
     return {"items": items, "names": [r["name"] for r in rows]}
 
 
-@app.get("/api/comfy/workflows/{name}")
+@app.get("/api/comfy/workflows/{name:path}")
 def api_comfy_workflows_get(name: str):
     r = _db_query("SELECT workflow FROM workflows WHERE name=?", (name,))
     if not r:
-        raise HTTPException(404, "Nieznany workflow.")
+        raise HTTPException(404, "Unknown workflow.")
     return {"name": name, "workflow": json.loads(r["workflow"])}
 
 
 @app.post("/api/comfy/workflows")
 def api_comfy_workflows_save(req: NamedSave):
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(400, "Enter a name.")
+    name = _library_name(req.name)
     if not isinstance(req.value, dict) or not req.value:
         raise HTTPException(400, "The workflow must be a non-empty JSON object.")
     _wf_upsert(name, req.value)
@@ -2061,7 +2115,7 @@ async def api_comfy_workflows_import(file: UploadFile, name: str = Form("")):
     }
 
 
-@app.delete("/api/comfy/workflows/{name}")
+@app.delete("/api/comfy/workflows/{name:path}")
 def api_comfy_workflows_delete(name: str):
     _db_query("DELETE FROM workflows WHERE name=?", (name,), write=True)
     return {"ok": True, "names": _wf_names()}
@@ -2069,14 +2123,16 @@ def api_comfy_workflows_delete(name: str):
 
 # ---- Editor workflow: surowy workflow + parametry per node ---- #
 @app.get("/api/comfy/object_info")
-def api_comfy_object_info():
-    """Cached passthrough of ComfyUI's /object_info (node schemas)."""
+def api_comfy_object_info(refresh: bool = False):
+    """Cached passthrough of ComfyUI's /object_info (node schemas);
+    ``refresh=1`` skips the cache and stores the fresh copy."""
     import time as _t
     cfg = _load_comfy_config()
     url = cfg.get("url") or comfy_client.DEFAULT_URL
     now = _t.time()
     if (
-        _OBJECT_INFO_CACHE["url"] == url
+        not refresh
+        and _OBJECT_INFO_CACHE["url"] == url
         and _OBJECT_INFO_CACHE["data"] is not None
         and now - _OBJECT_INFO_CACHE["ts"] < _OBJECT_INFO_TTL
     ):
@@ -2098,9 +2154,8 @@ async def api_comfy_editor_load(file: UploadFile):
         workflow = comfy_workflows.extract_auto(file.filename or "", raw)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Failed to read the workflow: {e}")
-    cfg = _load_comfy_config()
-    cfg["editor_workflow"] = workflow
-    _save_comfy_config(cfg)
+    await run_in_threadpool(_update_comfy_config,
+                            lambda cfg: cfg.update(editor_workflow=workflow))
     return {
         "node_count": len(workflow),
         "workflow": workflow,
@@ -2119,8 +2174,9 @@ class ComfyEditorGenerate(BaseModel):
     workflow: dict
 
 
-def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
-    """Submit a raw workflow as-is (no mapping/overrides). Used by the editor."""
+def _run_comfy_raw_job(job_id: str, workflow: dict, source: str = "editor") -> None:
+    """Submit a raw workflow as-is (no mapping/overrides). Used by the editor and
+    the Ideogram render; ``source`` labels the gallery items."""
     import time
     import uuid as _uuid
 
@@ -2213,7 +2269,8 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
                         "loras": [],
                         "ts": time.time(),
                         "url": f"/api/comfy/gallery/{item_id}",
-                        "source": "editor",
+                        "source": source,
+                        **_image_size(data),
                     }
                     (COMFY_GALLERY_DIR / f"{item_id}.json").write_text(
                         json.dumps(meta), encoding="utf-8"
@@ -2236,9 +2293,7 @@ def api_comfy_editor_generate(req: ComfyEditorGenerate):
     if not req.workflow:
         raise HTTPException(400, "Empty workflow.")
     # Persist edits as the editor's current workflow.
-    cfg = _load_comfy_config()
-    cfg["editor_workflow"] = req.workflow
-    _save_comfy_config(cfg)
+    _update_comfy_config(lambda cfg: cfg.update(editor_workflow=req.workflow))
 
     job_id = uuid.uuid4().hex[:12]
     with COMFY_JOBS_LOCK:
@@ -2421,7 +2476,8 @@ def api_ideogram_render(req: IdeogramRenderRequest):
             "error": "",
             "cancel": False,
         }
-    t = threading.Thread(target=_run_comfy_raw_job, args=(job_id, workflow), daemon=True)
+    t = threading.Thread(target=_run_comfy_raw_job, args=(job_id, workflow),
+                         kwargs={"source": "ideogram"}, daemon=True)
     t.start()
     return {"job_id": job_id, "warnings": v15_lint.lint_v15(req.prompt)}
 
