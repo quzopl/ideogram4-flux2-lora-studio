@@ -221,6 +221,24 @@ def _execution_error_text(data: dict) -> str:
     return text
 
 
+def history_failure(hist: dict, prompt_id: str) -> tuple[str, str] | None:
+    """A failed history entry -> ("cancelled", "") when it was interrupted,
+    ("error", text) after an execution error; None while it runs or once it
+    succeeded. For when the WS is down and only /history tells how it ended.
+    """
+    entry = hist.get(prompt_id) or next(iter(hist.values()), {})
+    status = (entry or {}).get("status") or {}
+    events = {m[0]: m[1] for m in status.get("messages") or []
+              if isinstance(m, (list, tuple)) and len(m) == 2}
+    if "execution_interrupted" in events:
+        return "cancelled", ""
+    if isinstance(events.get("execution_error"), dict):
+        return "error", _execution_error_text(events["execution_error"])
+    if status.get("status_str") == "error":
+        return "error", "ComfyUI execution error."
+    return None
+
+
 def collect_output_images(hist: dict, prompt_id: str) -> list[dict]:
     """Extract the list of saved images from a history entry.
 

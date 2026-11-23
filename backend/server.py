@@ -28,7 +28,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.routing import Match
-from PIL import Image
+from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 
 from . import api_models as models_api, api_settings
@@ -1759,6 +1759,11 @@ def _run_comfy_job(job_id: str, req: ComfyGenerateRequest) -> None:
                     job["state"] = "error"
                     job["error"] = f"/history error: {e}"
                     return
+                failed = comfy_client.history_failure(hist, pid)
+                if failed:  # ("error", text) | ("cancelled", "")
+                    job["error"] = failed[1] or job["error"]
+                    job["state"] = failed[0]
+                    return
                 outs = comfy_client.collect_output_images(hist, pid)
                 if outs:
                     for o in outs:
@@ -2182,6 +2187,11 @@ def _run_comfy_raw_job(job_id: str, workflow: dict) -> None:
                 job["state"] = "error"
                 job["error"] = f"/history error: {e}"
                 return
+            failed = comfy_client.history_failure(hist, pid)
+            if failed:  # ("error", text) | ("cancelled", "")
+                job["error"] = failed[1] or job["error"]
+                job["state"] = failed[0]
+                return
             outs = comfy_client.collect_output_images(hist, pid)
             if outs:
                 for o in outs:
@@ -2534,8 +2544,7 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
         raise HTTPException(400, "Upload an image file.")
     data = await file.read()
     try:
-        from PIL import Image
-        image = Image.open(io.BytesIO(data)).convert("RGB")
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
     except Exception:
         raise HTTPException(400, "Failed to read the image.")
 
@@ -2552,9 +2561,10 @@ async def api_ideogram_analyze(file: UploadFile, engine: str = Form("florence"),
 
 
 def _decode_image(data: bytes):
-    """Decode an upload by content, not MIME (HEIC arrives with an empty type)."""
+    """Decode an upload by content, not MIME (HEIC arrives with an empty type),
+    upright as shown (the EXIF orientation applied)."""
     try:
-        return Image.open(io.BytesIO(data)).convert("RGB")
+        return ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
     except Exception:  # noqa: BLE001
         return None
 

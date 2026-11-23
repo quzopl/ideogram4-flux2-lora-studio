@@ -347,6 +347,45 @@ def test_legacy_analyze_vlm_default_tokens(monkeypatch):
     assert seen["tokens"] == 768
 
 
+def _rotated_jpeg() -> bytes:
+    """A 400x300 JPEG whose EXIF says "rotate 90° CW" (Orientation=6): shown 300x400."""
+    img = Image.new("RGB", (400, 300), "red")
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", exif=exif)
+    return buf.getvalue()
+
+
+def _capture_florence_size(monkeypatch):
+    seen = {}
+
+    def analyze(img):
+        seen["size"] = img.size
+        return "A fox.", [{"type": "obj", "bbox": [100, 100, 900, 500], "desc": "fox"}]
+    monkeypatch.setattr(florence, "analyze_image", analyze)
+    return seen
+
+
+def test_analyze_job_honours_exif_orientation(monkeypatch):
+    seen = _capture_florence_size(monkeypatch)
+    r = _post_analyze(content=_rotated_jpeg(), mime="image/jpeg", name="phone.jpg")
+    assert r.status_code == 200, r.text
+    j = _job(r.json()["job_id"])
+    assert j["state"] == "done", j["error"]
+    assert seen["size"] == (300, 400)
+    assert json.loads(j["result"]["json"])["aspect_ratio"] == "3:4"
+
+
+def test_legacy_analyze_honours_exif_orientation(monkeypatch):
+    seen = _capture_florence_size(monkeypatch)
+    r = client.post("/api/ideogram/analyze",
+                    files={"file": ("phone.jpg", _rotated_jpeg(), "image/jpeg")})
+    assert r.status_code == 200, r.text
+    assert seen["size"] == (300, 400)
+    assert json.loads(r.json()["json"])["aspect_ratio"] == "3:4"
+
+
 # --------------------------------------------------------------------------- #
 # ComfyUI client: interrupt / delete_queued / stream_events
 # --------------------------------------------------------------------------- #
@@ -746,3 +785,95 @@ def test_raw_runner_step_text(comfy, monkeypatch):
     assert seen["current"] == "Step 3/10"
     assert job["state"] == "done"
     assert len(job["images"]) == 1
+
+
+# --------------------------------------------------------------------------- #
+# WS down: the /history fallback stops on a failed prompt
+# --------------------------------------------------------------------------- #
+def _ws_down(*a, **k):
+    raise ConnectionRefusedError("ws refused")
+
+
+ERR_ENTRY = {"P1": {
+    "outputs": {"4": {"images": [{"filename": "partial.png"}]}},
+    "status": {"status_str": "error", "completed": False, "messages": [
+        ["execution_start", {"prompt_id": "P1"}],
+        ["execution_error", {"prompt_id": "P1", "node_id": "3", "node_type": "KSampler",
+                             "exception_type": "RuntimeError",
+                             "exception_message": "CUDA out of memory.",
+                             "traceback": ["Traceback...\n"]}],
+    ]},
+}}
+
+
+@pytest.fixture
+def history_entry(comfy, monkeypatch):
+    """The WS is down; /history answers `entry["value"]` (counted in comfy["history"])."""
+    entry = {"value": ERR_ENTRY}
+
+    def history(url, pid):
+        comfy["history"] += 1
+        if comfy["history"] > 3:
+            raise AssertionError("the runner is stuck polling /history")
+        return entry["value"]
+    monkeypatch.setattr(comfy_client, "history", history)
+    monkeypatch.setattr(comfy_client, "stream_events", _ws_down)
+    monkeypatch.setattr(comfy_client, "fetch_image",
+                        lambda *a, **k: pytest.fail("a failed prompt's outputs are not fetched"))
+    monkeypatch.setattr(server.time, "sleep", lambda s: None)
+    return entry
+
+
+def _run_mapped():
+    server._run_comfy_job("j", server.ComfyGenerateRequest(prompt="p", batch=2))
+
+
+@pytest.fixture
+def mapped_config(monkeypatch):
+    monkeypatch.setattr(server, "_load_comfy_config",
+                        lambda: {"url": "http://c", "workflow": {}, "mapping": {}})
+    monkeypatch.setattr(server.comfy_workflows, "apply_overrides_multi_lora",
+                        lambda *a, **k: {})
+
+
+def test_raw_runner_history_error_ends_error(comfy, history_entry):
+    job = _comfy_job(state="pending")
+    server._run_comfy_raw_job("j", {})
+    assert job["state"] == "error"
+    assert job["error"].split("\n", 1)[0] == "KSampler (node 3): RuntimeError: CUDA out of memory."
+    assert comfy["history"] == 1
+    assert job["images"] == []
+
+
+def test_mapped_runner_history_error_ends_error(comfy, history_entry, mapped_config):
+    job = _comfy_job(state="pending")
+    _run_mapped()
+    assert job["state"] == "error"
+    assert job["error"].startswith("KSampler (node 3): RuntimeError: CUDA out of memory.")
+    assert comfy["history"] == 1
+    assert job["done_count"] == 0
+
+
+def test_history_error_without_message_has_text(comfy, history_entry):
+    history_entry["value"] = {"P1": {"outputs": {}, "status": {
+        "status_str": "error", "completed": False, "messages": []}}}
+    job = _comfy_job(state="pending")
+    server._run_comfy_raw_job("j", {})
+    assert job["state"] == "error"
+    assert job["error"] == "ComfyUI execution error."
+    assert comfy["history"] == 1
+
+
+def test_history_interrupted_ends_cancelled(comfy, history_entry, mapped_config):
+    """Interrupted (from ComfyUI's own UI) while our WS was down: cancelled, as with the WS."""
+    history_entry["value"] = {"P1": {"outputs": {}, "status": {
+        "status_str": "error", "completed": False, "messages": [
+            ["execution_start", {"prompt_id": "P1"}],
+            ["execution_interrupted", {"prompt_id": "P1", "node_id": "3"}]]}}}
+    job = _comfy_job(state="pending")
+    server._run_comfy_raw_job("j", {})
+    assert job["state"] == "cancelled"
+    assert job["error"] == ""
+    job = _comfy_job(state="pending")
+    _run_mapped()
+    assert job["state"] == "cancelled"
