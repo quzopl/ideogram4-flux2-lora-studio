@@ -1206,6 +1206,74 @@ test('render survives navigation without duplicate results', async ({ page }) =>
   expect((await renderRun(page))?.results.map((r) => r.id)).toEqual(['n1', 'n2'])
 })
 
+test('a render start in flight survives leaving and returning (one POST)', async ({ page }) => {
+  const { bodies } = await mockRender(page, () => ({ state: 'running', current: 'Step 1/12', progress: { value: 1, max: 12 } }))
+  // The POST answers only when released (then mockRender's handler answers it).
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  let posts = 0
+  await page.route('**/api/ideogram/render', async (route) => {
+    posts++
+    await gate
+    return route.fallback()
+  })
+  await page.goto('/bbox')
+  await expect(spin(page, 'Seed')).toHaveValue('42')
+  await expect(renderBtn(page)).toBeEnabled()
+  await renderBtn(page).click()
+  const progress = renderCard(page).getByTestId('job-progress')
+  await expect(progress).toContainText('Queueing the render…')
+
+  await leaveAndReturn(page)
+  await expect(progress).toContainText('Queueing the render…')
+  await expect(renderBtn(page)).toBeDisabled()
+  // Even a click that gets through starts nothing.
+  await renderBtn(page).click({ force: true })
+  expect(posts).toBe(1)
+
+  release()
+  await expect(progress).toContainText('1 / 12')
+  await expect(renderBtn(page)).toBeDisabled()
+  expect(posts).toBe(1)
+  expect(bodies).toHaveLength(1)
+})
+
+test('render waits for the check of the current JSON', async ({ page }) => {
+  const { bodies } = await mockRender(page, () => ({ state: 'done' }))
+  await page.goto('/bbox')
+  await expect(findings(page)).toContainText('high_level_description is empty.')
+  await expect(renderBtn(page)).toBeEnabled()
+  // The next check answers only when released.
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  await page.route('**/api/prompts/lint', async (route) => {
+    await gate
+    return route.fallback()
+  })
+
+  // An edit that brings in an error; Render is clicked at once, before its check.
+  await card(page, 0).getByRole('textbox', { name: 'desc', exact: true }).fill('a cat with soft bokeh')
+  await renderBtn(page).click({ force: true })
+  await expect(renderBtn(page)).toBeDisabled()
+  await expect(renderCard(page).getByText('Checking…', { exact: true })).toBeVisible()
+  expect(bodies).toHaveLength(0)
+
+  release()
+  await expect(renderCard(page)).toContainText('The v15 check found 1 error')
+  await expect(renderCard(page).getByText('Checking…', { exact: true })).toHaveCount(0)
+  await expect(renderBtn(page)).toBeDisabled()
+  expect(bodies).toHaveLength(0)
+
+  // A failed check holds Render back too; Render anyway still goes.
+  await page.unroute('**/api/prompts/lint')
+  await page.route('**/api/prompts/lint', (route) => route.fulfill({ status: 500, json: { detail: 'Lint crashed' } }))
+  await card(page, 0).getByRole('textbox', { name: 'desc', exact: true }).fill('a cat')
+  await expect(page.getByText('Could not check the prompt: Lint crashed')).toBeVisible()
+  await expect(renderBtn(page)).toBeDisabled()
+  await renderAnyway(page).click()
+  await expect.poll(() => bodies.length).toBe(1)
+})
+
 test('cancel posts and shows cancelled', async ({ page }) => {
   let state = 'running'
   const { cancels } = await mockRender(page, () => ({ state, current: 'Step 2/12', progress: { value: 2, max: 12 } }))

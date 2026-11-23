@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useIsMutating, useQuery } from '@tanstack/react-query'
 import { Palette, RefreshCw, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useId, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { JobProgress } from '@/components/JobProgress'
 import { NumberInput } from '@/components/NumberInput'
@@ -64,6 +64,7 @@ const SENT = ['preset', 'megapixels', 'seed', 'variant', 'batch_size', 'lora_ena
   'diff_model', 'uncond_model', 'vae_name', 'clip_name'] as const
 const ENDS = ['done', 'error', 'cancelled']
 const SPRING = { type: 'spring', stiffness: 380, damping: 30 } as const
+const START_KEY = ['bbox-render-start']
 
 /** The form as the server saved it; "random" starts on (classic). */
 const formOf = (p: Params) =>
@@ -102,6 +103,8 @@ export function RenderPanel({ json }: { json: string }) {
 
   const lint = useBboxLint(json)
   const lintErrors = lint.data?.warnings.filter((f) => f.level === 'err').length ?? 0
+  // Held back until the check of this very JSON is in; a failed check holds it back too (Render anyway still goes).
+  const lintFailed = !lint.checking && lint.isError
 
   const run = useRenderRun()
   const jobId = run.jobId
@@ -123,11 +126,13 @@ export function RenderPanel({ json }: { json: string }) {
   const start = useMutationWithToast(
     (body: { prompt: string; params: Params }) =>
       api<{ job_id: string }>('/api/ideogram/render', { method: 'POST', json: body }),
-    { onSuccess: (r) => startRender(r.job_id) },
+    { onSuccess: (r) => startRender(r.job_id), mutationKey: START_KEY },
   )
   const cancel = useMutationWithToast((job: string) => api(`/api/comfy/job/${job}/cancel`, { method: 'POST' }))
 
-  const busy = start.isPending || jobId !== null
+  // By key, not start.isPending: a start sent before leaving the view and returning is still in flight.
+  const starting = useIsMutating({ mutationKey: START_KEY }) > 0
+  const busy = starting || jobId !== null
   const ready = form !== null && config.data !== undefined && !invalid && !busy
 
   const render = () => {
@@ -306,10 +311,11 @@ export function RenderPanel({ json }: { json: string }) {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="lg" disabled={!ready || lintErrors > 0} onClick={render}>
+        <Button size="lg" disabled={!ready || lint.checking || lintFailed || lintErrors > 0} onClick={render}>
           <Palette />
           Render canvas
         </Button>
+        {lint.checking && <p className="text-sm text-text-dim">Checking…</p>}
         {jobId && (
           <Button
             size="lg"
@@ -321,11 +327,12 @@ export function RenderPanel({ json }: { json: string }) {
             {cancel.isSuccess && cancel.variables === jobId ? 'Cancelling…' : 'Cancel'}
           </Button>
         )}
-        {lintErrors > 0 && (
+        {(lintErrors > 0 || lintFailed) && (
           <>
             <p className="text-sm text-danger">
-              The v15 check found {lintErrors} error{lintErrors === 1 ? '' : 's'} — fix {lintErrors === 1 ? 'it' : 'them'},
-              or render anyway.
+              {lintFailed
+                ? 'The v15 check failed — render anyway?'
+                : `The v15 check found ${lintErrors} error${lintErrors === 1 ? '' : 's'} — fix ${lintErrors === 1 ? 'it' : 'them'}, or render anyway.`}
             </p>
             <Button size="lg" variant="ghost" disabled={!ready} onClick={render}>
               Render anyway
@@ -334,7 +341,7 @@ export function RenderPanel({ json }: { json: string }) {
         )}
       </div>
 
-      <Status pending={start.isPending} jobId={jobId} job={data} outcome={run.outcome} />
+      <Status pending={starting} jobId={jobId} job={data} outcome={run.outcome} />
 
       <Results images={run.results} />
     </section>
@@ -413,8 +420,11 @@ function Status({ pending, jobId, job, outcome }: {
   )
 }
 
-/** The rendered images, newest first; each opens its full PNG from the ComfyUI gallery. */
-function Results({ images }: { images: RenderImage[] }) {
+/**
+ * The rendered images, newest first; each opens its full PNG from the ComfyUI gallery.
+ * Memoized: the store keeps `images` while it is unchanged, so a drag on the canvas does not re-render the grid.
+ */
+const Results = memo(function Results({ images }: { images: RenderImage[] }) {
   // The images shown on entering the view are there already; only later ones animate in.
   // (Not AnimatePresence's initial={false}: the grid itself mounts with the first batch.)
   const [atEntry] = useState(() => new Set(images.map((i) => i.id)))
@@ -458,4 +468,4 @@ function Results({ images }: { images: RenderImage[] }) {
       </ul>
     </div>
   )
-}
+})

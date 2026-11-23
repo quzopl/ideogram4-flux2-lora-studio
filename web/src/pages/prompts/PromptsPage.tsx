@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useIsMutating, useQueryClient } from '@tanstack/react-query'
 import { Sparkles, WandSparkles } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -33,6 +33,7 @@ interface PromptJob {
 }
 
 const STEP: Record<string, string> = { pending: 'Starting…', generating: 'Generating…' }
+const START_KEY = ['prompt-job-start']
 
 export function PromptsPage() {
   const qc = useQueryClient()
@@ -64,10 +65,11 @@ export function PromptsPage() {
   // At mutation level: the job is kept even if the view was left before the answer.
   const start = useMutationWithToast(
     (body: ReturnType<typeof toJobBody>) => api<{ job_id: string }>('/api/prompt/jobs', { method: 'POST', json: body }),
-    { onSuccess: (r, body) => startPromptJob(r.job_id, body.caption_format) },
+    { onSuccess: (r, body) => startPromptJob(r.job_id, body.caption_format), mutationKey: START_KEY },
   )
 
-  const busy = start.isPending || job.running
+  // By key, not start.isPending: a start sent before leaving the view and returning is still in flight.
+  const busy = useIsMutating({ mutationKey: START_KEY }) > 0 || job.running
   const canGenerate = loaded && !busy && !maxTokensError && form.model !== ''
 
   const generate = () => {

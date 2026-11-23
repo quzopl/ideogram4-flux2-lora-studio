@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type MutationKey, type QueryKey } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api, ApiError } from './api'
 import type { GpusResponse, GpuStatus, Settings, StoreModelsResponse } from './types'
@@ -53,10 +53,17 @@ export function useGpuStatus() {
  */
 export function useMutationWithToast<TVars = void, TData = unknown>(
   fn: (vars: TVars) => Promise<TData>,
-  opts: { success?: string; invalidate?: QueryKey[]; onSuccess?: (data: TData, vars: TVars) => void } = {},
+  opts: {
+    success?: string
+    invalidate?: QueryKey[]
+    onSuccess?: (data: TData, vars: TVars) => void
+    /** Lets another mount see this mutation in flight (`useIsMutating`), e.g. after leaving the view and returning. */
+    mutationKey?: MutationKey
+  } = {},
 ) {
   const qc = useQueryClient()
   return useMutation<TData, Error, TVars>({
+    mutationKey: opts.mutationKey,
     mutationFn: fn,
     onSuccess: (data, vars) => {
       if (opts.success) toast.success(opts.success)

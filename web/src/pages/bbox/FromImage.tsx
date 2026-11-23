@@ -1,3 +1,4 @@
+import { useIsMutating } from '@tanstack/react-query'
 import { Camera, ImageDown, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type ReactNode } from 'react'
@@ -56,6 +57,7 @@ interface AnalyzeJob {
 }
 
 const STEP: Record<string, string> = { pending: 'Starting…', analyzing: 'Analyzing…' }
+const START_KEY = ['bbox-analyze-start']
 
 /**
  * "From image": the saved engine/model form, the background analyze job and
@@ -94,10 +96,11 @@ export function useFromImage() {
       }
       return api<{ job_id: string }>('/api/ideogram/analyze/jobs', { method: 'POST', body })
     },
-    { onSuccess: (r, { file }) => startAnalyze(r.job_id, file) },
+    { onSuccess: (r, { file }) => startAnalyze(r.job_id, file), mutationKey: START_KEY },
   )
 
-  const busy = start.isPending || jobId !== null
+  // By key, not start.isPending: a start sent before leaving the view and returning is still in flight.
+  const busy = useIsMutating({ mutationKey: START_KEY }) > 0 || jobId !== null
   const ready = loaded && !busy && !(usesVlm(form.engine) && (maxTokensError !== '' || form.model === ''))
 
   /** Analyses `file` (picked or dropped); ignored while not ready, like the disabled button. */
