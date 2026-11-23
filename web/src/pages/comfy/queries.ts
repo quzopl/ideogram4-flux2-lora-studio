@@ -1,5 +1,6 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
+import type { ObjectInfo } from './editor/schema'
 
 /**
  * The active node mapping (comfy_workflows.autodetect_mapping), edited by the
@@ -151,3 +152,30 @@ export const savePrompt = (qc: QueryClient, name: string, value: string) =>
 export const deletePrompt = (qc: QueryClient, name: string) =>
   api<{ items: Prompts }>(`/api/comfy/prompts/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) =>
     storePrompts(qc, r))
+
+// ---- Node schemas (ComfyUI's /object_info, cached 300 s by the backend) ---- //
+
+const OBJECT_INFO_KEY = ['comfy-object-info']
+
+/** `refresh` skips the backend's cache. */
+const fetchObjectInfo = (refresh = false) =>
+  api<ObjectInfo>(`/api/comfy/object_info${refresh ? `?${new URLSearchParams({ refresh: '1' })}` : ''}`)
+
+/**
+ * The node schemas (megabytes), asked once a workflow is in the editor and
+ * kept 5 minutes. ComfyUI down is a 502, shown at once (no retry); the cards
+ * then go without dropdowns.
+ */
+export function useObjectInfo(enabled: boolean) {
+  return useQuery({
+    queryKey: OBJECT_INFO_KEY,
+    queryFn: () => fetchObjectInfo(),
+    staleTime: 5 * 60_000,
+    retry: false,
+    enabled,
+  })
+}
+
+/** Asks ComfyUI again, past the backend's cache ("↻ ComfyUI schemas"). */
+export const refreshObjectInfo = (qc: QueryClient) =>
+  qc.fetchQuery({ queryKey: OBJECT_INFO_KEY, queryFn: () => fetchObjectInfo(true), staleTime: 0, retry: false })

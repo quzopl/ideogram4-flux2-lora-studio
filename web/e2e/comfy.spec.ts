@@ -1339,3 +1339,276 @@ test('batch loop throwing marks the line as error', async ({ page }) => {
   await expect(lineState(page, 1)).toHaveText('skipped')
   await expect(batchCard(page).getByText(/^Done/)).toHaveCount(0)
 })
+
+// ---- Workflow editor (editor/load is real; /object_info is mocked or offline) ----
+
+const editorCard = (page: Page) => page.getByRole('region', { name: 'Workflow editor', exact: true })
+const nodeCard = (page: Page, id: string) => page.locator(`#edn-${id}`)
+const nodeHeader = (page: Page, id: string) => nodeCard(page, id).locator(`#edn-${id}-h`)
+/** A field of a node card by its name. */
+const nodeField = (page: Page, id: string, field: string) => nodeCard(page, id).getByLabel(field, { exact: true })
+
+/** This tab's `flux.comfy.editor` (written 300 ms after the last change). */
+const savedEditor = (page: Page) =>
+  page.evaluate(() => JSON.parse(sessionStorage.getItem('flux.comfy.editor') ?? 'null'))
+
+/** Node `id`'s input `field` as stored (undefined until the first write). */
+const savedInput = async (page: Page, id: string, field: string) => (await savedEditor(page))?.workflow?.[id]?.inputs?.[field]
+
+/** Loads `workflow` into the editor through the real editor/load, as a `.json` file. */
+async function loadEditorJson(page: Page, workflow: Record<string, unknown>, name = 'editor.json') {
+  await editorCard(page).getByLabel('Workflow file').setInputFiles({
+    name, mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(workflow)),
+  })
+  await expect(editorCard(page).getByText(`Loaded workflow from JSON file: ${Object.keys(workflow).length} nodes.`)).toBeVisible()
+}
+
+/** GET /api/comfy/object_info (also with ?refresh=1) answers `info`; the query strings asked are collected. */
+async function mockObjectInfo(page: Page, info: Record<string, unknown>) {
+  const asked: string[] = []
+  await page.route((url) => url.pathname === '/api/comfy/object_info', (route) => {
+    asked.push(new URL(route.request().url()).search)
+    return route.fulfill({ json: info })
+  })
+  return asked
+}
+
+const OBJECT_INFO = {
+  KSampler: {
+    input: {
+      required: {
+        model: ['MODEL'],
+        seed: ['INT', { default: 0, min: 0, max: 18446744073709551615 }],
+        steps: ['INT', { default: 20, min: 1, max: 10000 }],
+        cfg: ['FLOAT', { default: 8, min: 0, max: 100, step: 0.1 }],
+        sampler_name: [['euler', 'dpmpp_2m'], {}],
+        scheduler: [['simple', 'karras'], {}],
+      },
+    },
+  },
+  LoraLoader: { input: { required: { lora_name: [['first.safetensors', 'dir/second.safetensors'], {}] } } },
+}
+
+test('load workflow shows node cards and links', async ({ page }) => {
+  await page.goto('/comfy?tab=editor')
+  await editorCard(page).getByLabel('Workflow file').setInputFiles(WORKFLOW)
+  await expect(editorCard(page).getByText('Loaded workflow from JSON file: 9 nodes.')).toBeVisible()
+  // ComfyUI is offline: the cards come without dropdowns, and the note says why.
+  await expect(editorCard(page).getByText(
+    'Note: /object_info unavailable (ComfyUI is not reachable from e2e tests.). Start ComfyUI and click ↻ ComfyUI schemas',
+    { exact: false })).toBeVisible()
+
+  // Sorted by numeric id, `#id class_type`.
+  const headers = editorCard(page).locator('section[id^="edn-"] > button')
+  await expect(headers).toHaveText([
+    '#3KSampler', '#4CheckpointLoaderSimple', '#5EmptyLatentImage', '#6CLIPTextEncode', '#7CLIPTextEncode',
+    '#8VAEDecode', '#9SaveImage', '#10LoraLoader', '#11LoraLoader',
+  ])
+  // Literal fields are controls; links are read only, after them.
+  await expect(nodeField(page, '6', 'text')).toHaveValue(WORKFLOW_PROMPT)
+  await expect(nodeField(page, '3', 'seed')).toHaveValue('42')
+  const links = nodeCard(page, '3').getByRole('button', { name: /^→/ })
+  await expect(links).toHaveText([
+    '→ #11 (LoraLoader) · output 0', '→ #6 (CLIPTextEncode) · output 0',
+    '→ #7 (CLIPTextEncode) · output 0', '→ #5 (EmptyLatentImage) · output 0',
+  ])
+
+  // A link expands and shows its source card.
+  await nodeHeader(page, '6').click()
+  await expect(nodeHeader(page, '6')).toHaveAttribute('aria-expanded', 'false')
+  await expect(nodeField(page, '6', 'text')).toBeHidden()
+  await nodeCard(page, '3').getByRole('button', { name: '→ #6 (CLIPTextEncode) · output 0' }).click()
+  await expect(nodeHeader(page, '6')).toHaveAttribute('aria-expanded', 'true')
+  await expect(nodeField(page, '6', 'text')).toBeInViewport()
+
+  // The filter fades what does not match (id or class type), and hides nothing.
+  await editorCard(page).getByPlaceholder('filter nodes (name/type/ID)…').fill('lora')
+  await expect(nodeCard(page, '10')).not.toHaveAttribute('data-dimmed')
+  await expect(nodeCard(page, '3')).toHaveAttribute('data-dimmed', 'true')
+  await expect(nodeCard(page, '3')).toBeVisible()
+  await editorCard(page).getByPlaceholder('filter nodes (name/type/ID)…').fill('3')
+  await expect(nodeCard(page, '3')).not.toHaveAttribute('data-dimmed')
+
+  await editorCard(page).getByRole('button', { name: 'Collapse all' }).click()
+  for (const id of ['3', '10']) await expect(nodeHeader(page, id)).toHaveAttribute('aria-expanded', 'false')
+  await editorCard(page).getByRole('button', { name: 'Expand all' }).click()
+  for (const id of ['3', '10']) await expect(nodeHeader(page, id)).toHaveAttribute('aria-expanded', 'true')
+
+  // The view switch: the graph comes later; the cards stay below it.
+  await editorCard(page).getByRole('button', { name: 'Graph + parameters' }).click()
+  await expect(editorCard(page).getByRole('button', { name: 'Graph + parameters' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(nodeCard(page, '3')).toBeVisible()
+
+  const saved = await savedEditor(page)
+  expect(Object.keys(saved.workflow)).toHaveLength(9)
+  expect(saved.dirty).toBe(false)
+})
+
+test('schema dropdowns from object_info', async ({ page }) => {
+  const asked = await mockObjectInfo(page, OBJECT_INFO)
+  await page.goto('/comfy?tab=editor')
+  await loadEditorJson(page, {
+    '3': { class_type: 'KSampler', inputs: { seed: 1, steps: 20, cfg: 3.5, sampler_name: 'my_sampler', scheduler: 'karras' } },
+    '10': { class_type: 'LoraLoader', inputs: { lora_name: 'dir\\second.safetensors' } },
+    '20': { class_type: 'MyCustomLoader', inputs: { lora: 'first.safetensors', sampler: 'euler' } },
+  })
+  await expect(editorCard(page).getByText('ComfyUI schemas: 2 node types, 3 fields with dropdowns.')).toBeVisible()
+
+  // sampler_name is a select; the workflow's value not on the list stays, marked.
+  const sampler = nodeField(page, '3', 'sampler_name')
+  await expect(sampler).toHaveJSProperty('tagName', 'SELECT')
+  await expect(sampler.locator('option')).toHaveText(['my_sampler (from workflow)', 'euler', 'dpmpp_2m'])
+  await expect(sampler).toHaveValue('my_sampler')
+  await sampler.selectOption('dpmpp_2m')
+  await expect.poll(async () => savedInput(page, '3', 'sampler_name')).toBe('dpmpp_2m')
+  expect((await savedEditor(page)).dirty).toBe(true)
+  await expect(nodeField(page, '3', 'scheduler')).toHaveValue('karras')
+
+  // A Windows path the list has with "/" is shown and saved as listed.
+  await expect(nodeField(page, '10', 'lora_name')).toHaveValue('dir/second.safetensors')
+  await expect(nodeField(page, '10', 'lora_name').locator('option', { hasText: 'from workflow' })).toHaveCount(0)
+  await expect.poll(async () => savedInput(page, '10', 'lora_name')).toBe('dir/second.safetensors')
+
+  // A node type ComfyUI has no schema for: the list guessed from the field name.
+  await expect(nodeField(page, '20', 'lora')).toHaveJSProperty('tagName', 'SELECT')
+  await expect(nodeField(page, '20', 'lora').locator('option')).toHaveText(['dir/second.safetensors', 'first.safetensors'])
+  await expect(nodeField(page, '20', 'sampler')).toHaveValue('euler')
+  // INT bounds from the schema; the seed's 2^64 is no bound.
+  await expect(nodeField(page, '3', 'steps')).toHaveAttribute('min', '1')
+  await expect(nodeField(page, '3', 'steps')).toHaveAttribute('max', '10000')
+  await expect(nodeField(page, '3', 'seed')).not.toHaveAttribute('max')
+
+  expect(asked).toEqual([''])
+  await editorCard(page).getByRole('button', { name: 'ComfyUI schemas' }).click()
+  await expect.poll(() => asked).toEqual(['', '?refresh=1'])
+})
+
+test('number fields keep their type', async ({ page }) => {
+  // No schemas (ComfyUI offline): the number kind comes from the value and the name.
+  await page.goto('/comfy?tab=editor')
+  await loadEditorJson(page, {
+    '3': { class_type: 'KSampler', inputs: { seed: 42, steps: 20, cfg: 1, denoise: 1, sampler_name: 'euler' } },
+  })
+  await nodeField(page, '3', 'cfg').fill('0.5')
+  await expect.poll(async () => savedInput(page, '3', 'cfg')).toBe(0.5)
+  await nodeField(page, '3', 'denoise').fill('0.75')
+  await expect.poll(async () => savedInput(page, '3', 'denoise')).toBe(0.75)
+  // A whole-number field takes no fraction.
+  await nodeField(page, '3', 'seed').fill('1.5')
+  await expect(nodeCard(page, '3').getByText('Enter a whole number', { exact: true })).toBeVisible()
+  await nodeField(page, '3', 'seed').fill('7')
+  await expect.poll(async () => savedInput(page, '3', 'seed')).toBe(7)
+
+  // Empty steps: an error in the store, and the workflow keeps its last valid value.
+  await nodeField(page, '3', 'steps').fill('')
+  await expect(nodeCard(page, '3').getByText('Enter a whole number', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await savedEditor(page))?.invalid['3.steps']).toBe('Enter a whole number')
+  expect(await savedInput(page, '3', 'steps')).toBe(20)
+
+  // Collapsing the card does not clear it.
+  await nodeHeader(page, '3').click()
+  await expect(nodeField(page, '3', 'steps')).toBeHidden()
+  await page.waitForTimeout(400)
+  expect((await savedEditor(page)).invalid).toEqual({ '3.steps': 'Enter a whole number' })
+  await nodeHeader(page, '3').click()
+  await expect(nodeField(page, '3', 'steps')).toHaveValue('')
+  await expect(nodeCard(page, '3').getByText('Enter a whole number', { exact: true })).toBeVisible()
+
+  await nodeField(page, '3', 'steps').fill('25')
+  await expect.poll(async () => (await savedEditor(page)).invalid).toEqual({})
+  expect(await savedInput(page, '3', 'steps')).toBe(25)
+})
+
+test('dict inputs and nested values', async ({ page }) => {
+  await page.goto('/comfy?tab=editor')
+  await loadEditorJson(page, {
+    '1': {
+      class_type: 'Power Lora Loader (rgthree)',
+      inputs: {
+        lora_1: { on: true, lora: 'a.safetensors', strength: 1, extra: { deep: 1 } },
+        empty: {},
+        pairs: [{ a: 1 }, 2],
+        model: ['2', 0],
+      },
+    },
+    '2': { class_type: 'UNETLoader', inputs: { unet_name: 'flux.safetensors', weight_dtype: null } },
+  })
+  const card = nodeCard(page, '1')
+  // Each key of a dict input is its own control.
+  await expect(card.getByLabel('on', { exact: true })).toBeChecked()
+  await card.getByLabel('on', { exact: true }).uncheck()
+  await card.getByLabel('strength', { exact: true }).fill('0.8')
+  await expect.poll(async () => savedInput(page, '1', 'lora_1'))
+    .toEqual({ on: false, lora: 'a.safetensors', strength: 0.8, extra: { deep: 1 } })
+  await expect(card.getByText('(empty object)')).toBeVisible()
+  await expect(card.getByRole('button', { name: '→ #2 (UNETLoader) · output 0' })).toBeVisible()
+
+  // Nested objects and lists (not links) are JSON; invalid JSON is an error and is not taken.
+  const pairs = card.getByLabel('pairs', { exact: true })
+  await expect(pairs).toHaveJSProperty('tagName', 'TEXTAREA')
+  await pairs.fill('[{"a": 2}, 3]')
+  await expect.poll(async () => savedInput(page, '1', 'pairs')).toEqual([{ a: 2 }, 3])
+  await pairs.fill('[{"a": 2}, ')
+  await expect(card.getByText(/^Invalid JSON: /)).toBeVisible()
+  await expect.poll(async () => Object.keys((await savedEditor(page))?.invalid ?? {})).toEqual(['1.pairs'])
+  expect(await savedInput(page, '1', 'pairs')).toEqual([{ a: 2 }, 3])
+  const extra = card.getByLabel('extra', { exact: true })
+  await extra.fill('{"deep": 2}')
+  await expect.poll(async () => (await savedInput(page, '1', 'lora_1'))?.extra).toEqual({ deep: 2 })
+
+  // A null value: empty text, typed text is a string.
+  const dtype = nodeField(page, '2', 'weight_dtype')
+  await expect(dtype).toHaveAttribute('placeholder', '(null)')
+  await dtype.fill('fp8')
+  await expect.poll(async () => savedInput(page, '2', 'weight_dtype')).toBe('fp8')
+})
+
+test('editor edits survive navigation', async ({ page }) => {
+  await page.goto('/comfy?tab=editor')
+  await editorCard(page).getByLabel('Workflow file').setInputFiles(WORKFLOW)
+  await expect(editorCard(page).getByText('Loaded workflow from JSON file: 9 nodes.')).toBeVisible()
+  await nodeField(page, '6', 'text').fill('an edited prompt')
+  await nodeField(page, '3', 'steps').fill('')
+
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  await expect(editorCard(page)).toHaveCount(0)
+  await nav.getByRole('link', { name: 'ComfyUI', exact: true }).click()
+  await page.getByRole('tab', { name: 'Workflow editor' }).click()
+  await expect(nodeField(page, '6', 'text')).toHaveValue('an edited prompt')
+  // The field shows the workflow's value again, so it is no longer invalid.
+  await expect(nodeField(page, '3', 'steps')).toHaveValue('20')
+  await expect.poll(async () => (await savedEditor(page)).invalid).toEqual({})
+
+  // A reload keeps the draft: the server's workflow does not replace it.
+  await page.reload()
+  await expect(nodeField(page, '6', 'text')).toHaveValue('an edited prompt')
+  await page.waitForTimeout(400)
+  await expect(nodeField(page, '6', 'text')).toHaveValue('an edited prompt')
+  expect((await savedEditor(page)).dirty).toBe(true)
+})
+
+test('editor first entry loads the server workflow', async ({ page }) => {
+  await page.route('**/api/comfy/editor/workflow', (route) =>
+    route.fulfill({ json: { workflow: { '5': { class_type: 'EmptyLatentImage', inputs: { width: 512 } } }, node_count: 1 } }))
+  await page.goto('/comfy?tab=editor')
+  await expect(editorCard(page).getByText('Loaded the workflow from the last session: 1 nodes.')).toBeVisible()
+  await expect(nodeField(page, '5', 'width')).toHaveValue('512')
+  expect((await savedEditor(page))?.dirty ?? false).toBe(false)
+})
+
+test('editor state over the storage quota shows a toast', async ({ page }) => {
+  await page.addInitScript(() => {
+    const set = Storage.prototype.setItem
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key === 'flux.comfy.editor') throw new DOMException('Full', 'QuotaExceededError')
+      return set.call(this, key, value)
+    }
+  })
+  await page.goto('/comfy?tab=editor')
+  await editorCard(page).getByLabel('Workflow file').setInputFiles(WORKFLOW)
+  await expect(page.getByText('Could not keep the edited workflow in this tab.')).toBeVisible()
+  // The editor carries on with the draft in memory.
+  await expect(nodeField(page, '6', 'text')).toHaveValue(WORKFLOW_PROMPT)
+})

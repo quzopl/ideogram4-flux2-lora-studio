@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { ensureRunning } from './batchRunner'
 import { BatchTab } from './BatchTab'
 import { ConnectionCard } from './ConnectionCard'
+import { EditorTab } from './editor/EditorTab'
 import { flushComfyForm } from './formStore'
 import { GalleryTab } from './GalleryTab'
 import { JobObservers } from './JobObservers'
@@ -96,7 +97,7 @@ export function ComfyPage() {
           ) : tab === 'gallery' ? (
             <GalleryTab />
           ) : (
-            <p className="text-sm text-text-dim">Not in the new studio yet — use the classic UI for now.</p>
+            <EditorTab />
           )}
         </motion.div>
       </AnimatePresence>

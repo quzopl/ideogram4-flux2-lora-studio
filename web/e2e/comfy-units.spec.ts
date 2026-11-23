@@ -2,6 +2,10 @@
 import { expect, test } from './fixtures.ts'
 import { downloadName, fmtEta, fmtProgress, loraName, promptPreview, sourceLabel } from '../src/pages/comfy/format.ts'
 import { pollJobCore } from '../src/pages/comfy/pollJobCore.ts'
+import {
+  buildKnownEnums, controlSchema, fixEnumValue, getSchema, getSchemaForName, isDictValue, isLinkValue, numberSpec, parseJson,
+  sortNodeIds, type ObjectInfo,
+} from '../src/pages/comfy/editor/schema.ts'
 
 test('fmtEta formats like classic', () => {
   expect(fmtEta(0)).toBe('0s')
@@ -148,4 +152,132 @@ test('pollJob fetches the job URL and is gone on 404', async () => {
   } finally {
     globalThis.fetch = real
   }
+})
+
+// ---- The workflow editor's schema helpers ----
+
+const INFO: ObjectInfo = {
+  KSampler: {
+    input: {
+      required: {
+        model: ['MODEL'],
+        seed: ['INT', { default: 0, min: 0, max: 18446744073709551615 }],
+        steps: ['INT', { default: 20, min: 1, max: 10000 }],
+        cfg: ['FLOAT', { default: 8, min: 0, max: 100, step: 0.1 }],
+        sampler_name: [['euler', 'dpmpp_2m'], {}],
+        scheduler: [['simple', 'karras'], {}],
+      },
+      optional: { denoise: ['FLOAT', {}] },
+    },
+  },
+  KSamplerAdvanced: { input: { required: { sampler_name: [['euler', 'uni_pc'], {}] } } },
+  LoraLoader: { input: { required: { lora_name: [['b.safetensors', 'a.safetensors'], {}] } } },
+  CheckpointLoaderSimple: { input: { required: { ckpt_name: [['flux.safetensors'], {}] } } },
+}
+
+test('isLinkValue and isDictValue', () => {
+  expect(isLinkValue(['4', 0])).toBe(true)
+  expect(isLinkValue([4, 1])).toBe(true)
+  expect(isLinkValue(['4'])).toBe(false)
+  expect(isLinkValue([{ a: 1 }, 2])).toBe(false)
+  expect(isLinkValue([null, 2])).toBe(false)
+  expect(isLinkValue('4')).toBe(false)
+  expect(isLinkValue({ 0: '4', 1: 0 })).toBe(false)
+  expect(isDictValue({ on: true })).toBe(true)
+  expect(isDictValue({})).toBe(true)
+  expect(isDictValue(['4', 0])).toBe(false)
+  expect(isDictValue(null)).toBe(false)
+  expect(isDictValue('x')).toBe(false)
+})
+
+test('buildKnownEnums unions every node type and sorts', () => {
+  const enums = buildKnownEnums(INFO)
+  expect(enums.sampler_name).toEqual(['dpmpp_2m', 'euler', 'uni_pc'])
+  expect(enums.lora_name).toEqual(['a.safetensors', 'b.safetensors'])
+  expect(Object.keys(enums).sort()).toEqual(['ckpt_name', 'lora_name', 'sampler_name', 'scheduler'])
+  expect(buildKnownEnums(null)).toEqual({})
+})
+
+test('getSchema reads required, then optional', () => {
+  expect(getSchema(INFO, 'KSampler', 'steps')).toEqual(['INT', { default: 20, min: 1, max: 10000 }])
+  expect(getSchema(INFO, 'KSampler', 'denoise')).toEqual(['FLOAT', {}])
+  expect(getSchema(INFO, 'KSampler', 'nope')).toBeNull()
+  expect(getSchema(INFO, 'Unknown', 'steps')).toBeNull()
+  expect(getSchema(null, 'KSampler', 'steps')).toBeNull()
+})
+
+test('getSchemaForName guesses lora, ckpt and sampler lists', () => {
+  const enums = buildKnownEnums(INFO)
+  // The exact field name first.
+  expect(getSchemaForName(enums, 'scheduler')).toEqual([enums.scheduler, {}])
+  // lora: any name containing it (e.g. rgthree's `lora`).
+  expect(getSchemaForName(enums, 'lora')).toEqual([enums.lora_name, {}])
+  expect(getSchemaForName(enums, 'LoRA_02')).toEqual([enums.lora_name, {}])
+  // ckpt / checkpoint, and exactly `model` (not any name containing it).
+  expect(getSchemaForName(enums, 'ckpt')).toEqual([enums.ckpt_name, {}])
+  expect(getSchemaForName(enums, 'base_checkpoint')).toEqual([enums.ckpt_name, {}])
+  expect(getSchemaForName(enums, 'model')).toEqual([enums.ckpt_name, {}])
+  expect(getSchemaForName(enums, 'model_type')).toBeNull()
+  // sampler.
+  expect(getSchemaForName(enums, 'sampler')).toEqual([enums.sampler_name, {}])
+  // Not known (no vae list here), or no schemas at all.
+  expect(getSchemaForName(enums, 'vae')).toBeNull()
+  expect(getSchemaForName(enums, 'text')).toBeNull()
+  expect(getSchemaForName(null, 'lora')).toBeNull()
+})
+
+test('controlSchema keeps only specs that pick a control', () => {
+  expect(controlSchema(['INT', {}])).toEqual(['INT', {}])
+  expect(controlSchema([['a'], {}])).toEqual([['a'], {}])
+  expect(controlSchema(['STRING', { multiline: true }])).toEqual(['STRING', { multiline: true }])
+  expect(controlSchema(['MODEL'])).toBeNull()
+  expect(controlSchema(null)).toBeNull()
+})
+
+test('numberSpec: schema bounds, and fractions by value or name', () => {
+  expect(numberSpec(['INT', { min: 1, max: 10000 }], 20, 'steps')).toEqual({ decimal: false, min: 1, max: 10000 })
+  expect(numberSpec(['INT', { min: 8, max: 16384, step: 8 }], 1024, 'width')).toEqual({ decimal: false, min: 8, max: 16384, step: 8 })
+  // A "no limit" maximum (the seed's 2^64) is dropped.
+  expect(numberSpec(['INT', { min: 0, max: 18446744073709551615 }], 42, 'seed')).toEqual({ decimal: false, min: 0 })
+  // FLOAT: fractions, step 0.01 unless the schema has one.
+  expect(numberSpec(['FLOAT', { min: 0, max: 100, step: 0.1 }], 1, 'cfg')).toEqual({ decimal: true, min: 0, max: 100, step: 0.1 })
+  expect(numberSpec(['FLOAT', {}], 1, 'x')).toEqual({ decimal: true, step: 0.01 })
+  // Not a number field.
+  expect(numberSpec(['STRING', {}], 5, 'text')).toBeNull()
+  expect(numberSpec([['a', 'b'], {}], 5, 'x')).toBeNull()
+  expect(numberSpec(null, 'text', 'x')).toBeNull()
+  expect(numberSpec(null, null, 'cfg')).toBeNull()
+  // No schema: a fraction reads fractions, a whole number reads whole numbers…
+  expect(numberSpec(null, 0.75, 'anything')).toEqual({ decimal: true, step: 0.01 })
+  expect(numberSpec(null, 20, 'steps')).toEqual({ decimal: false, step: 1 })
+  expect(numberSpec(null, 42, 'seed')).toEqual({ decimal: false, step: 1 })
+  // …except names that hold fractions (JSON `1.0` arrives as 1).
+  for (const name of ['cfg', 'denoise', 'shift', 'strength', 'strength_model', 'lora_strength', 'CFG']) {
+    expect(numberSpec(null, 1, name), name).toEqual({ decimal: true, step: 0.01 })
+  }
+  for (const name of ['steps', 'cfg_scale_steps', 'width', 'my_shift_count']) {
+    expect(numberSpec(null, 1, name), name).toEqual({ decimal: false, step: 1 })
+  }
+})
+
+test('parseJson gives the value or the error', () => {
+  expect(parseJson('{"a": [1, 2]}')).toEqual({ value: { a: [1, 2] } })
+  expect(parseJson('null')).toEqual({ value: null })
+  const bad = parseJson('{"a": ')
+  expect('error' in bad && bad.error).toMatch(/^Invalid JSON: /)
+})
+
+test('sortNodeIds numeric, else alphabetical', () => {
+  expect(sortNodeIds(['10', '9', '3', '11'])).toEqual(['3', '9', '10', '11'])
+  expect(sortNodeIds(['b', 'a', 'c'])).toEqual(['a', 'b', 'c'])
+})
+
+test('fixEnumValue turns a listed Windows path into the listed one', () => {
+  const choices = ['dir/a.safetensors', 'b.safetensors']
+  expect(fixEnumValue(choices, 'dir\\a.safetensors')).toBe('dir/a.safetensors')
+  expect(fixEnumValue(choices, 'b.safetensors')).toBe('b.safetensors')
+  // Not on the list either way: kept as it is.
+  expect(fixEnumValue(choices, 'other\\c.safetensors')).toBe('other\\c.safetensors')
+  expect(fixEnumValue(choices, null)).toBe('')
+  expect(fixEnumValue([1, 2], 2)).toBe('2')
 })
