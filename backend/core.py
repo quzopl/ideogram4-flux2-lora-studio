@@ -222,7 +222,7 @@ def _busy() -> bool:
     """
     return any(
         j["state"] in BUSY_STATES and j.get("local_model", True)
-        for j in JOBS.values()
+        for j in list(JOBS.values())
     )
 
 

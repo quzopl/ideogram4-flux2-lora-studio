@@ -271,7 +271,7 @@ def api_gpu():
 @router.post("/api/unload")
 def api_unload():
     if core._busy():
-        raise HTTPException(409, "Processing in progress — wait for it to finish.")
+        raise HTTPException(409, core.BUSY_MSG)
     captioner.unload()
     florence.unload()
     upscaler.unload()
@@ -301,7 +301,7 @@ def api_gpu_assign(req: GpuAssignRequest):
     that role's model is released — it sits on the old card; the other roles
     keep theirs loaded."""
     if core._busy():
-        raise HTTPException(409, "Processing in progress — wait for it to finish.")
+        raise HTTPException(409, core.BUSY_MSG)
     if req.role not in settings.ROLES:
         raise HTTPException(400, "Unknown role.")
     if not gpu.assign_value_ok(req.device, gpu.probe()):

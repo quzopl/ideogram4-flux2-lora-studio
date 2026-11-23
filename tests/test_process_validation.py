@@ -1,10 +1,8 @@
-import threading
-
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend import server
+from backend import api_dataset, core, server
 
 
 def post(tmp_path, **extra):
@@ -25,11 +23,8 @@ def test_process_rejects_unknown_fmt(tmp_path):
 def test_process_defaults_still_accepted(tmp_path, monkeypatch):
     Image.new("RGB", (8, 8)).save(tmp_path / "a.png")
 
-    class NoThread:
-        def __init__(self, *a, **k): pass
-        def start(self): pass
-
-    monkeypatch.setattr(threading, "Thread", NoThread)
+    monkeypatch.setattr(core, "JOBS", {})
+    monkeypatch.setattr(api_dataset, "_run_job", lambda *a, **k: None)
     r = post(tmp_path)
     assert r.status_code == 200
     assert r.json()["total"] == 1

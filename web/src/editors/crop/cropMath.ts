@@ -1,4 +1,4 @@
-// Crop box geometry, ported from frontend/crop_editor.js (CropEditor). Boxes are
+// Crop box geometry, ported from the removed classic CropEditor. Boxes are
 // [x, y, w, h] in SOURCE pixels (the true size, after the EXIF fix); `ratio` is
 // the forced w/h, or null for a free box.
 

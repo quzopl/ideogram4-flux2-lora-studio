@@ -1,7 +1,6 @@
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router'
 
-// The classic UI (frontend/app.js) reads the same key; harmless, it never gets one now.
 const KEY = 'flux.bbox.handoff'
 
 /** Opens a v15 JSON prompt in the Bbox editor (/bbox), which takes it from sessionStorage. */

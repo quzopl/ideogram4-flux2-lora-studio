@@ -55,14 +55,14 @@ app.include_router(api_prompts.router)
 app.include_router(api_ideogram.router)
 
 
-# --------------------------------------------------------------------------- #
-# Frontend (mounted last so it doesn't shadow /api routes)
-# --------------------------------------------------------------------------- #
 app.include_router(api_settings.router)
 models_api.configure(core._model_ctx, lambda: hf_auth.load_token(core.HF_TOKEN_PATH))
 app.include_router(models_api.router)
 
 
+# --------------------------------------------------------------------------- #
+# Frontend (mounted last so it doesn't shadow /api routes)
+# --------------------------------------------------------------------------- #
 @app.get("/legacy", include_in_schema=False)
 @app.get("/legacy/{rest:path}", include_in_schema=False)
 def legacy_redirect(rest: str = ""):

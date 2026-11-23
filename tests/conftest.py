@@ -25,6 +25,14 @@ def _isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(crop_store, "PATH", tmp_path / "crop_plans.json")
 
 
+@pytest.fixture(autouse=True)
+def _empty_jobs(monkeypatch):
+    """Each test starts with an empty job table: a job left pending by one test
+    would hold the GPU guard (409) for every later test."""
+    from backend import core
+    monkeypatch.setattr(core, "JOBS", {})
+
+
 @pytest.fixture
 def fake_ml(monkeypatch):
     """Empty ``torch`` (dtypes only) and ``transformers`` modules in sys.modules;

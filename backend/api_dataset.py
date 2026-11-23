@@ -215,12 +215,12 @@ def _run_job(job_id: str, req: ProcessRequest, files: list[Path]) -> None:
     job_dir = core.WORK / job_id
     proc_dir = job_dir / "processed"
     thumb_dir = job_dir / "thumbs"
-    proc_dir.mkdir(parents=True, exist_ok=True)
-    thumb_dir.mkdir(parents=True, exist_ok=True)
 
     ext = "jpg" if req.fmt == "jpg" else "png"
 
     try:
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        thumb_dir.mkdir(parents=True, exist_ok=True)
         lm_id = core._lmstudio_model_id(req.model)
         lm_url = core._lmstudio_url() if lm_id is not None else None
         if req.do_caption and lm_id is None:

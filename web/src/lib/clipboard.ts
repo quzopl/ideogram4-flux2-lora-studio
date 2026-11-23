@@ -1,7 +1,7 @@
 /**
  * Copies `text`. navigator.clipboard needs a secure context (not plain http
  * on the LAN), so it falls back to execCommand("copy") on a temporary
- * textarea, as the classic UI does. Rejects if neither works.
+ * textarea. Rejects if neither works.
  */
 export async function copyText(text: string): Promise<void> {
   if (navigator.clipboard && window.isSecureContext) {

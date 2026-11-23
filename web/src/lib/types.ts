@@ -13,7 +13,7 @@ export interface Settings {
   presets: Record<string, Record<string, Record<string, unknown>>>
 }
 
-/** One row of server.py `_gpu_cards`. VRAM is null when nvidia-smi did not report the card. */
+/** One row of backend/api_system.py `_gpu_cards`. VRAM is null when nvidia-smi did not report the card. */
 export interface GpuCard {
   uuid: string
   /** e.g. "RTX 5080 · 16 GB" (· PCI xx when two cards share a name). */
@@ -38,7 +38,7 @@ export interface GpusResponse {
   roles: Record<Role, string>
 }
 
-/** GET /api/gpu and POST /api/unload (server.py `_gpu_status`). */
+/** GET /api/gpu and POST /api/unload (backend/api_system.py `_gpu_status`). */
 export interface GpuStatus {
   loaded: boolean
   model: string | null
@@ -91,7 +91,7 @@ export interface StoreModelsResponse {
   models: StoreModel[]
 }
 
-/** GET /api/fs/list (server.py `api_fs_list`). `files` only with `files=weights`. */
+/** GET /api/fs/list (backend/api_system.py `api_fs_list`). `files` only with `files=weights`. */
 export interface FsListing {
   /** Resolved absolute path. */
   path: string

@@ -1,4 +1,4 @@
-// Canvas geometry of the Bbox editor, ported from frontend/bbox_editor.js
+// Canvas geometry of the Bbox editor, ported from the removed classic Bbox editor
 // (pxFromBbox, bboxFromPx). A bbox is [y1, x1, y2, x2] on a 0–1000 grid per
 // axis; a rect is in frame pixels (W × H).
 

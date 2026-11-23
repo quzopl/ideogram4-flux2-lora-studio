@@ -1,5 +1,5 @@
 // The Ideogram v15 prompt document edited on the Bbox canvas. Ported from
-// frontend/bbox_editor.js (buildCaption, defBbox); the classic `z` field is
+// the removed classic Bbox editor (buildCaption, defBbox); the classic `z` field is
 // gone: array order is the z-order, the last element is on top.
 
 /** [y1, x1, y2, x2] on a 0–1000 grid per axis, origin top-left. */

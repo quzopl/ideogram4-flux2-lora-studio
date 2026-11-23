@@ -235,7 +235,8 @@ job (or left at the role default). Results show a before/after preview and
 export to a folder or a `.zip`. Built-in models: Real-ESRGAN x2/x4 and
 4x-UltraSharp; **Add custom model…** takes an HF repo id + filename or a local
 weights file (its folder is scanned for `.pth` / `.safetensors`), and
-**Remove custom model** removes the entry (never the file). Autosaved form and
+**Remove custom model** removes a custom Hugging Face entry only (never a
+file); models found by scanning a local folder get no remove button. Autosaved form and
 named presets.
 
 ### Models and Settings

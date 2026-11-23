@@ -127,10 +127,10 @@ def _run_upscale_job(job_id: str, req: UpscaleRunRequest, files: list[Path],
     job = core.JOBS[job_id]
     out_dir = core.WORK / job_id / "upscaled"
     thumb_dir = core.WORK / job_id / "thumbs"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    thumb_dir.mkdir(parents=True, exist_ok=True)
     ext = "jpg" if req.fmt == "jpg" else "png"
     try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        thumb_dir.mkdir(parents=True, exist_ok=True)
         device, device_label = resolved or _resolve_device(req.device)
         cfg = upscaler.load_config(core.UPSCALER_CONFIG_PATH)
         entry = upscaler.resolve(req.model_id, cfg)

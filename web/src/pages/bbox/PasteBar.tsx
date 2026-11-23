@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { errorText, normalizePrompt, type Normalized } from './normalize'
 
 interface PasteBarProps {
-  /** Kept by the page, so it survives closing the bar (as in the classic UI). */
+  /** Kept by the page, so it survives closing the bar. */
   text: string
   onText: (text: string) => void
   /** The server normalised the text; the page puts it on the canvas (and closes the bar). */

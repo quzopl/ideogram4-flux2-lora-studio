@@ -1,5 +1,6 @@
 """One GPU-busy guard for every job that uses a model loaded in this process."""
 import types
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -110,7 +111,8 @@ class Boom(BaseException):
 
 
 @pytest.mark.parametrize("runner", ["_run_job", "_run_crop_auto", "_run_upscale_job"])
-def test_runners_catch_base_exception(tmp_path, monkeypatch, runner):
+@pytest.mark.parametrize("failure", ["model", "mkdir"])
+def test_runners_catch_base_exception(tmp_path, monkeypatch, runner, failure):
     # The conftest-free fixture above stubs the runners; use the real ones here.
     src = tmp_path / "a.png"
     Image.new("RGB", (10, 10)).save(src)
@@ -118,6 +120,14 @@ def test_runners_catch_base_exception(tmp_path, monkeypatch, runner):
     def boom(*a, **kw):
         raise Boom()
 
+    if failure == "mkdir":
+        if runner == "_run_crop_auto":
+            pytest.skip("the crop runner creates no directories")
+
+        def full_disk(self, *a, **kw):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(Path, "mkdir", full_disk)
     monkeypatch.setattr(core, "JOBS", {})
     monkeypatch.setattr(core, "_ensure_model", boom)
     monkeypatch.setattr(upscaler, "resolve", lambda *a, **kw: {"id": "x"})
@@ -133,3 +143,4 @@ def test_runners_catch_base_exception(tmp_path, monkeypatch, runner):
     kw = {"resolved": ("cpu", "CPU")} if runner == "_run_upscale_job" else {}
     getattr(RUNNERS[runner], runner)("j", args[0], [src], **kw)
     assert job["state"] == "error"
+    assert not core._busy()
