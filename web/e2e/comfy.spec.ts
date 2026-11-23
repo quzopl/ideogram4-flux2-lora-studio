@@ -217,3 +217,61 @@ test('mapping library save, load activates, delete asks', async ({ page }) => {
   expect(Object.keys(items)).not.toContain(name)
   expect(Object.keys(items)).toContain(`${name}-b`)
 })
+
+test('mapping edit survives a tab switch and navigation', async ({ page }) => {
+  await page.goto('/comfy')
+  await uploadWorkflow(page)
+  await mappingJson(page).fill('{"edited": true}')
+
+  await page.getByRole('tab', { name: 'Reference batch' }).click()
+  await expect(mappingJson(page)).toHaveCount(0)
+  await page.getByRole('tab', { name: 'LoRA test' }).click()
+  await expect(mappingJson(page)).toHaveValue('{"edited": true}')
+
+  const nav = page.getByRole('navigation', { name: 'Main' })
+  await nav.getByRole('link', { name: 'Models', exact: true }).click()
+  await expect(page).toHaveURL(/\/models$/)
+  await expect(mappingJson(page)).toHaveCount(0)
+  await nav.getByRole('link', { name: 'ComfyUI', exact: true }).click()
+  await expect(mappingJson(page)).toHaveValue('{"edited": true}')
+
+  // Activating it ends the draft: the field follows the active mapping again.
+  await page.getByRole('button', { name: 'Save mapping (active)' }).click()
+  await expect(page.getByText('Mapping saved.')).toBeVisible()
+  await expect.poll(async () => (await savedForm(page))?.mapping).toBeUndefined()
+})
+
+test('url typed back to the saved one is not a draft', async ({ page }) => {
+  await page.request.post('/api/comfy/url', { data: { url: 'http://127.0.0.1:9/a' } })
+  await page.goto('/comfy')
+  await expect(urlField(page)).toHaveValue('http://127.0.0.1:9/a')
+  await urlField(page).fill('http://127.0.0.1:9/b')
+  await expect.poll(async () => (await savedForm(page))?.url).toBe('http://127.0.0.1:9/b')
+  await urlField(page).fill('http://127.0.0.1:9/a')
+  await expect.poll(async () => (await savedForm(page))?.url).toBeUndefined()
+
+  // Changed elsewhere (e.g. Settings): the field follows it.
+  await page.request.post('/api/comfy/url', { data: { url: 'http://127.0.0.1:9/c' } })
+  await page.reload()
+  await expect(urlField(page)).toHaveValue('http://127.0.0.1:9/c')
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+})
+
+test('url field is locked while saving', async ({ page }) => {
+  await page.request.post('/api/comfy/url', { data: { url: 'http://127.0.0.1:9/a' } })
+  let release!: () => void
+  const held = new Promise<void>((r) => { release = r })
+  await page.route('**/api/comfy/url', async (route) => {
+    await held
+    await route.continue()
+  })
+  await page.goto('/comfy')
+  await expect(urlField(page)).toHaveValue('http://127.0.0.1:9/a')
+  await urlField(page).fill('http://127.0.0.1:9/d')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(urlField(page)).toBeDisabled()
+  release()
+  await expect(page.getByText('Saved: http://127.0.0.1:9/d')).toBeVisible()
+  await expect(urlField(page)).toBeEnabled()
+  await expect(urlField(page)).toHaveValue('http://127.0.0.1:9/d')
+})

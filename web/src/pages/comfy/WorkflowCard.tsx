@@ -4,7 +4,7 @@ import { useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { getComfyForm, setLoraForm } from './formStore'
+import { getComfyForm, setLoraForm, setMappingDraft, useComfyForm } from './formStore'
 import { NamedLibrary } from './NamedLibrary'
 import {
   activateMapping,
@@ -80,13 +80,13 @@ export function WorkflowCard() {
   const id = useId()
   const [uploading, setUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState<Status | null>(null)
-  /** The mapping text as edited; null follows the active mapping. */
-  const [draft, setDraft] = useState<string | null>(null)
   const [jsonError, setJsonError] = useState('')
   const [mappingStatus, setMappingStatus] = useState<Status | null>(null)
 
   const c = config.data
   const active = c?.has_workflow && c.mapping ? c.mapping : null
+  // The mapping text as edited (kept in formStore); none follows the active mapping.
+  const draft = useComfyForm().mapping
   const text = draft ?? pretty(active)
 
   const status: Status | null =
@@ -108,7 +108,7 @@ export function WorkflowCard() {
     try {
       const r = await api<WorkflowUpload>('/api/comfy/workflow', { method: 'POST', body })
       void patchConfig(qc, { has_workflow: true, workflow_node_count: r.node_count, mapping: r.mapping })
-      setDraft(null)
+      setMappingDraft(undefined)
       setJsonError('')
       setMappingStatus(null)
       if (r.current_prompt && !getComfyForm().lora.prompt.trim()) setLoraForm({ prompt: r.current_prompt })
@@ -134,7 +134,7 @@ export function WorkflowCard() {
   const activate = async (mapping: Mapping, done: string) => {
     try {
       await activateMapping(qc, mapping)
-      setDraft(null)
+      setMappingDraft(undefined)
       setMappingStatus({ tone: 'ok', text: done })
     } catch (e) {
       setMappingStatus({ tone: 'err', text: `Save error: ${errorText(e)}` })
@@ -170,7 +170,7 @@ export function WorkflowCard() {
   }
 
   const load = (name: string, mapping: Mapping) => {
-    setDraft(pretty(mapping))
+    setMappingDraft(pretty(mapping))
     setJsonError('')
     void activate(mapping, `Loaded "${name}".`)
   }
@@ -205,7 +205,7 @@ export function WorkflowCard() {
               spellCheck={false}
               value={text}
               onChange={(e) => {
-                setDraft(e.target.value)
+                setMappingDraft(e.target.value)
                 setJsonError('')
               }}
               aria-invalid={jsonError ? true : undefined}

@@ -10,11 +10,14 @@ export type BatchForm = Record<string, never>
 
 /**
  * This tab's ComfyUI page form. `url` is the server URL typed but not saved
- * yet (absent: the field shows the saved one). Kept in sessionStorage (the
- * only owner of `flux.comfy.form`), so leaving the view or a reload keeps it.
+ * yet (absent: the field shows the saved one); `mapping` likewise is the
+ * mapping JSON as edited but not activated. Kept in sessionStorage (the only
+ * owner of `flux.comfy.form`), so a tab switch, leaving the view or a reload
+ * keeps it.
  */
 export interface ComfyForm {
   url?: string
+  mapping?: string
   lora: LoraForm
   batch: BatchForm
 }
@@ -32,6 +35,7 @@ function load(): ComfyForm {
     const lora = obj(r.lora)
     return {
       ...(typeof r.url === 'string' ? { url: r.url } : {}),
+      ...(typeof r.mapping === 'string' ? { mapping: r.mapping } : {}),
       lora: { ...DEFAULTS.lora, ...(typeof lora.prompt === 'string' ? { prompt: lora.prompt } : {}) },
       batch: { ...DEFAULTS.batch },
     }
@@ -72,13 +76,19 @@ if (typeof window !== 'undefined') window.addEventListener('pagehide', flushComf
 
 export const getComfyForm = () => form
 
-/** The typed server URL; `undefined` drops it (the field follows the saved one again). */
-export function setUrlDraft(url: string | undefined) {
-  if (url === form.url) return
-  const next = { ...form, url }
-  if (url === undefined) delete next.url
+/** Sets an optional draft; `undefined` drops it (the field follows the saved value again). */
+function setDraft(key: 'url' | 'mapping', value: string | undefined) {
+  if (value === form[key]) return
+  const next = { ...form, [key]: value }
+  if (value === undefined) delete next[key]
   update(next)
 }
+
+/** The typed server URL. */
+export const setUrlDraft = (url: string | undefined) => setDraft('url', url)
+
+/** The edited mapping JSON. */
+export const setMappingDraft = (mapping: string | undefined) => setDraft('mapping', mapping)
 
 export function setLoraForm(patch: Partial<LoraForm>) {
   update({ ...form, lora: { ...form.lora, ...patch } })

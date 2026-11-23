@@ -75,8 +75,10 @@ export function ConnectionCard() {
             id={`${id}-url`}
             placeholder="http://127.0.0.1:8188"
             value={value}
-            disabled={config.isPending}
-            onChange={(e) => setUrlDraft(e.target.value)}
+            // Locked while saving: the saved URL replaces the draft when the save ends.
+            disabled={config.isPending || busy}
+            // Typed back to the saved URL is no draft (it would hide a later change made in Settings).
+            onChange={(e) => setUrlDraft(e.target.value.trim() === saved ? undefined : e.target.value)}
             className="min-w-60 flex-1 font-mono"
           />
           <Button type="submit" size="sm" variant="outline" disabled={busy || !dirty}>
