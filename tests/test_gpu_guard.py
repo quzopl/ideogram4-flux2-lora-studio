@@ -110,8 +110,11 @@ class Boom(BaseException):
     pass
 
 
-@pytest.mark.parametrize("runner", ["_run_job", "_run_crop_auto", "_run_upscale_job"])
-@pytest.mark.parametrize("failure", ["model", "mkdir"])
+@pytest.mark.parametrize("runner,failure", [
+    ("_run_job", "model"), ("_run_crop_auto", "model"), ("_run_upscale_job", "model"),
+    # The crop runner creates no directories, so it has no mkdir case.
+    ("_run_job", "mkdir"), ("_run_upscale_job", "mkdir"),
+])
 def test_runners_catch_base_exception(tmp_path, monkeypatch, runner, failure):
     # The conftest-free fixture above stubs the runners; use the real ones here.
     src = tmp_path / "a.png"
@@ -121,9 +124,6 @@ def test_runners_catch_base_exception(tmp_path, monkeypatch, runner, failure):
         raise Boom()
 
     if failure == "mkdir":
-        if runner == "_run_crop_auto":
-            pytest.skip("the crop runner creates no directories")
-
         def full_disk(self, *a, **kw):
             raise OSError(28, "No space left on device")
 
